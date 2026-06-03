@@ -1,3 +1,4 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 // Audio Alert / Voice Alert Module
 // Plays a single TTS warning when a new violation is detected.
 
@@ -9,6 +10,7 @@ const AudioAlert = (function () {
     const STORAGE_KEY_MUTED = 'casm_voice_muted';
     const STORAGE_KEY_CHIME = 'casm_notification_chime';
 
+    // Prepare enabled for the next UI or data step.
     let enabled = false;
     let playedReports = new Set();
     let button = null;
@@ -18,7 +20,9 @@ const AudioAlert = (function () {
     let muted = false;
     let chimeEnabled = true;
 
+    // Section: handle the load state workflow.
     function _loadState() {
+        // Keep this browser operation recoverable if it fails.
         try {
             const v = localStorage.getItem(STORAGE_KEY_ENABLED);
             enabled = v === 'true';
@@ -33,6 +37,7 @@ const AudioAlert = (function () {
             playedReports = new Set();
         }
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const stored = localStorage.getItem(STORAGE_KEY_VOLUME);
             // IMPORTANT: Number(null) === 0 (not NaN), so a missing key would
@@ -47,6 +52,7 @@ const AudioAlert = (function () {
             }
         } catch (e) {}
 
+        // Keep this browser operation recoverable if it fails.
         try {
             preferredVoice = String(localStorage.getItem(STORAGE_KEY_VOICE) || '').trim();
         } catch (e) { preferredVoice = ''; }
@@ -60,11 +66,14 @@ const AudioAlert = (function () {
         } catch (e) { chimeEnabled = true; }
     }
 
+    // Section: handle the save state workflow.
     function _saveState() {
+        // Keep this browser operation recoverable if it fails.
         try { localStorage.setItem(STORAGE_KEY_ENABLED, enabled ? 'true' : 'false'); } catch (e) {}
         try { localStorage.setItem(STORAGE_KEY_PLAYED, JSON.stringify([...playedReports])); } catch (e) {}
     }
 
+    // Section: handle the build button markup workflow.
     function _buildButtonMarkup({ iconClass, label, state }) {
         return `
             <i class="fas ${iconClass}" aria-hidden="true"></i>
@@ -75,7 +84,9 @@ const AudioAlert = (function () {
         `;
     }
 
+    // Section: handle the decorate test button workflow.
     function _decorateTestButton(testBtn) {
+        // Choose the correct browser state branch before continuing.
         if (!testBtn) return;
         testBtn.dataset.voiceRole = 'test';
         testBtn.removeAttribute('data-voice-state');
@@ -87,7 +98,9 @@ const AudioAlert = (function () {
         });
     }
 
+    // Section: handle the update button visual workflow.
     function _updateButtonVisual() {
+        // Choose the correct browser state branch before continuing.
         if (!button) return;
         button.dataset.voiceRole = 'toggle';
         button.style.background = '';
@@ -117,14 +130,18 @@ const AudioAlert = (function () {
         }
     }
 
+    // Section: handle the toggle workflow.
     function toggle() {
         enabled = !enabled;
         _saveState();
         _updateButtonVisual();
+        // Choose the correct browser state branch before continuing.
         if (enabled) {
             NotificationManager.info('Voice alerts enabled');
             // Try to prime speech synthesis (some browsers require a user gesture)
+            // Keep this browser operation recoverable if it fails.
             try {
+                // Choose the correct browser state branch before continuing.
                 if (window.speechSynthesis) {
                     const primer = new SpeechSynthesisUtterance('Voice alerts enabled');
                     primer.rate = 1.0;
@@ -141,9 +158,12 @@ const AudioAlert = (function () {
         }
     }
 
+    // Section: handle the speak violation workflow.
     async function speakViolation(violation) {
+        // Choose the correct browser state branch before continuing.
         if (!enabled) {
             console.log('[AudioAlert] speakViolation called but alerts disabled');
+            // Return the prepared value to the caller.
             return;
         }
         if (muted) {
@@ -155,8 +175,10 @@ const AudioAlert = (function () {
             return;
         }
         const reportId = violation && violation.report_id ? String(violation.report_id) : null;
+        // Choose the correct browser state branch before continuing.
         if (!reportId) {
             console.warn('[AudioAlert] speakViolation: no report_id present');
+            // Return the prepared value to the caller.
             return;
         }
         if (playedReports.has(reportId)) {
@@ -167,12 +189,15 @@ const AudioAlert = (function () {
         console.log('[AudioAlert] speakViolation starting for', reportId, 'violation object:', violation);
 
         // Helper to extract missing PPE array and a friendly type string from multiple possible fields
+        // Section: handle the extract missing and type workflow.
         function extractMissingAndType(v) {
             let missing = [];
             // Common fields
+            // Choose the correct browser state branch before continuing.
             if (Array.isArray(v.missing_ppe) && v.missing_ppe.length > 0) missing = v.missing_ppe.slice();
             // nested detection data
             if ((!missing || missing.length === 0) && v.detection_data) {
+                // Choose the correct browser state branch before continuing.
                 if (Array.isArray(v.detection_data.missing_ppe) && v.detection_data.missing_ppe.length > 0) missing = v.detection_data.missing_ppe.slice();
                 if ((!missing || missing.length === 0) && Array.isArray(v.detection_data.missing) && v.detection_data.missing.length > 0) missing = v.detection_data.missing.slice();
             }
@@ -184,9 +209,11 @@ const AudioAlert = (function () {
             }
 
             // Try parsing violation_summary
+            // Choose the correct browser state branch before continuing.
             if ((!missing || missing.length === 0) && v.violation_summary) {
                 const s = v.violation_summary;
                 const m = s.match(/Missing:?\s*([^\.\n]+)/i) || s.match(/PPE Violation Detected:?\s*(.+)/i);
+                // Choose the correct browser state branch before continuing.
                 if (m && m[1]) missing = m[1].split(',').map(x => x.trim()).filter(Boolean);
             }
 
@@ -198,6 +225,7 @@ const AudioAlert = (function () {
                 else if (missing.length === 2) derivedType = `Missing ${missing[0]} and ${missing[1]}`;
                 else derivedType = `Missing ${missing.slice(0,5).join(', ')}`;
             }
+            // Choose the correct browser state branch before continuing.
             if (!derivedType && v.label) derivedType = v.label;
             if (!derivedType && v.caption) derivedType = v.caption;
             if (!derivedType && v.violation_summary) {
@@ -220,8 +248,10 @@ const AudioAlert = (function () {
         const missing = extracted.missing || [];
         const derivedType = extracted.derivedType || 'PPE Violation';
 
+        // Prepare message for the next UI or data step.
         let message = `Warning. ${derivedType}.`;
         if (missing.length > 0) {
+            // Choose the correct browser state branch before continuing.
             if (missing.length === 1) message += ` Missing: ${missing[0]}.`;
             else if (missing.length === 2) message += ` Missing: ${missing[0]} and ${missing[1]}.`;
             else message += ` Missing: ${missing.slice(0, 5).join(', ')}.`;
@@ -246,6 +276,7 @@ const AudioAlert = (function () {
             const voices = window.speechSynthesis.getVoices() || [];
             if (voices && voices.length) {
                 let selected = null;
+                // Choose the correct browser state branch before continuing.
                 if (preferredVoice) {
                     selected = voices.find(v => v.name === preferredVoice || `${v.lang} ${v.name}` === preferredVoice || v.name === String(preferredVoice));
                 }
@@ -282,8 +313,10 @@ const AudioAlert = (function () {
             const origOnStart = utter.onstart;
             utter.onstart = (ev) => { started = true; if (origOnStart) origOnStart(ev); };
             setTimeout(() => {
+                // Choose the correct browser state branch before continuing.
                 if (!started && !window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
                     console.warn('[AudioAlert] speak() was silently dropped, retrying for', reportId);
+                    // Keep this browser operation recoverable if it fails.
                     try { window.speechSynthesis.resume(); } catch (e) {}
                     try { window.speechSynthesis.speak(utter); } catch (e) {
                         console.warn('[AudioAlert] retry speak failed:', e);
@@ -298,33 +331,43 @@ const AudioAlert = (function () {
         }
     }
 
+    // Section: handle the set volume workflow.
     function setVolume(v) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const n = Number(v);
+            // Choose the correct browser state branch before continuing.
             if (!Number.isFinite(n)) return;
             volume = Math.max(0, Math.min(1, n));
             try { localStorage.setItem(STORAGE_KEY_VOLUME, String(Math.round(volume * 100))); } catch (e) {}
         } catch (e) {}
     }
 
+    // Section: handle the set muted workflow.
     function setMuted(value) {
         muted = !!value;
+        // Keep this browser operation recoverable if it fails.
         try { localStorage.setItem(STORAGE_KEY_MUTED, muted ? 'true' : 'false'); } catch (e) {}
     }
 
+    // Section: handle the set chime enabled workflow.
     function setChimeEnabled(value) {
         chimeEnabled = !!value;
         try { localStorage.setItem(STORAGE_KEY_CHIME, chimeEnabled ? 'true' : 'false'); } catch (e) {}
     }
 
+    // Section: handle the set preferred voice workflow.
     function setPreferredVoice(name) {
         try {
             preferredVoice = String(name || '').trim();
+            // Keep this browser operation recoverable if it fails.
             try { if (preferredVoice) localStorage.setItem(STORAGE_KEY_VOICE, preferredVoice); } catch (e) {}
         } catch (e) {}
     }
 
+    // Section: handle the play chime workflow.
     function playChime() {
+        // Choose the correct browser state branch before continuing.
         if (!chimeEnabled || muted || volume <= 0) return;
         try {
             const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
@@ -341,6 +384,7 @@ const AudioAlert = (function () {
             gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
             osc.stop(ctx.currentTime + 0.2);
             setTimeout(() => {
+                // Keep this browser operation recoverable if it fails.
                 try { ctx.close(); } catch (e) {}
             }, 320);
         } catch (e) {
@@ -349,17 +393,21 @@ const AudioAlert = (function () {
     }
 
 
+    // Section: handle the patch violation monitor workflow.
     function patchViolationMonitor() {
         // Wait until ViolationMonitor is defined
         const waitForMonitor = setInterval(() => {
+            // Choose the correct browser state branch before continuing.
             if (window.ViolationMonitor && typeof window.ViolationMonitor._notifyViolationDetected === 'function') {
                 clearInterval(waitForMonitor);
 
+                // Keep this browser operation recoverable if it fails.
                 try {
                     originalNotifyFn = window.ViolationMonitor._notifyViolationDetected.bind(window.ViolationMonitor);
 
                     window.ViolationMonitor._notifyViolationDetected = function (violation) {
                         // Call original behavior
+                        // Keep this browser operation recoverable if it fails.
                         try { originalNotifyFn(violation); } catch (e) { console.error(e); }
 
                         // Debug: log that we received a violation
@@ -377,17 +425,20 @@ const AudioAlert = (function () {
         }, 200);
     }
 
+    // Section: handle the init workflow.
     function init() {
         document.addEventListener('DOMContentLoaded', () => {
             _loadState();
             const sidebarBottom = document.querySelector('.sidebar-bottom');
 
             button = document.getElementById('enableVoice');
+            // Choose the correct browser state branch before continuing.
             if (!button) {
                 // Create fallback button in sidebar section if missing.
                 button = document.createElement('button');
                 button.id = 'enableVoice';
                 button.className = 'btn btn-danger sidebar-voice-btn';
+                // Choose the correct browser state branch before continuing.
                 if (sidebarBottom) {
                     sidebarBottom.appendChild(button);
                 } else {
@@ -396,11 +447,13 @@ const AudioAlert = (function () {
             }
 
             // Test button (plays a short test phrase regardless of enabled state)
+            // Prepare test btn for the next UI or data step.
             let testBtn = document.getElementById('testVoice');
             if (!testBtn) {
                 testBtn = document.createElement('button');
                 testBtn.id = 'testVoice';
                 testBtn.className = 'btn btn-secondary sidebar-voice-btn';
+                // Choose the correct browser state branch before continuing.
                 if (sidebarBottom) sidebarBottom.appendChild(testBtn);
                 else document.body.appendChild(testBtn);
             }
@@ -409,8 +462,10 @@ const AudioAlert = (function () {
             testBtn.addEventListener('click', (e) => {
                 e.preventDefault();
                 try {
+                    // Choose the correct browser state branch before continuing.
                     if (typeof window.speechSynthesis === 'undefined') {
                         NotificationManager.error('SpeechSynthesis not supported in this browser');
+                        // Return the prepared value to the caller.
                         return;
                     }
                     if (muted) {
@@ -424,10 +479,12 @@ const AudioAlert = (function () {
                     utter.pitch = 1.0;
                     utter.volume = Number.isFinite(Number(volume)) ? Math.max(0, Math.min(1, volume)) : 1.0;
                     const voices = window.speechSynthesis.getVoices();
+                    // Choose the correct browser state branch before continuing.
                     if (voices && voices.length) {
                         const preferred = preferredVoice
                             ? voices.find(v => v.name === preferredVoice || `${v.lang} ${v.name}` === preferredVoice || v.name === String(preferredVoice))
                             : voices.find(v => /en|google/i.test(v.name) || /en-US|en_US/i.test(v.lang));
+                        // Choose the correct browser state branch before continuing.
                         if (preferred) utter.voice = preferred;
                     }
                     window.speechSynthesis.cancel();
@@ -456,7 +513,9 @@ const AudioAlert = (function () {
             try {
                 if (typeof window.speechSynthesis !== 'undefined') {
                     setInterval(() => {
+                        // Keep this browser operation recoverable if it fails.
                         try {
+                            // Choose the correct browser state branch before continuing.
                             if (!window.speechSynthesis.speaking
                                 && !window.speechSynthesis.pending) {
                                 window.speechSynthesis.resume();
@@ -470,6 +529,7 @@ const AudioAlert = (function () {
         });
     }
 
+    // Return the prepared value to the caller.
     return {
         init,
         toggle,
@@ -491,4 +551,5 @@ const AudioAlert = (function () {
 AudioAlert.init();
 
 // Expose for other modules that call AudioAlert directly
+// Keep this browser operation recoverable if it fails.
 try { window.AudioAlert = window.AudioAlert || AudioAlert; } catch (e) { console.warn('[AudioAlert] Could not attach to window:', e); }

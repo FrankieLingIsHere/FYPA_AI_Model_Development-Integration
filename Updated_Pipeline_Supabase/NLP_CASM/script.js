@@ -1,3 +1,4 @@
+// Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 document.addEventListener('DOMContentLoaded', () => {
     const sceneInput = document.getElementById('scene-input');
     const analyzeBtn = document.getElementById('analyze-btn');
@@ -7,8 +8,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     analyzeBtn.addEventListener('click', async () => {
         const sceneDescription = sceneInput.value.trim();
+        // Choose the correct browser state branch before continuing.
         if (!sceneDescription) {
             alert('Please enter a scene description.');
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -18,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
         resultsContainer.style.display = 'none';
         analyzeBtn.disabled = true;
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const response = await callOllamaAPI(sceneDescription);
             displayResults(response);
@@ -32,6 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Section: handle the build prompt workflow.
     function buildPrompt(description) {
         return `
         You are an expert AI safety inspector. Your task is to analyze a workplace scene description and identify safety issues.
@@ -72,6 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
     }
 
+    // Section: handle the call ollama api workflow.
     async function callOllamaAPI(description) {
         const prompt = buildPrompt(description);
         console.log('Sending prompt to Ollama API:', prompt);
@@ -88,6 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         console.log('Received response status:', response.status);
+        // Choose the correct browser state branch before continuing.
         if (!response.ok) {
             throw new Error(`API request failed with status ${response.status}`);
         }
@@ -98,6 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const parsedResponse = JSON.parse(data.response);
             console.log('Parsed response:', parsedResponse);
+            // Return the prepared value to the caller.
             return parsedResponse;
         } catch (parseError) {
             console.error('Error parsing JSON from model response:', parseError);
@@ -106,11 +114,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Section: handle the display results workflow.
     function displayResults(data) {
         // Populate Summary Card
         const summaryEl = document.querySelector('#summary-card .card-content');
         const confidenceEl = document.querySelector('#confidence-score .score');
 
+        // Choose the correct browser state branch before continuing.
         if (summaryEl) {
             summaryEl.textContent = data.summary || 'No summary provided.';
         }
@@ -118,6 +128,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const score = parseInt(data.confidence_score, 10) || 0;
             confidenceEl.textContent = `${score}%`;
             confidenceEl.className = 'score'; // Reset
+            // Choose the correct browser state branch before continuing.
             if (score < 50) {
                 confidenceEl.classList.add('low');
             } else if (score < 85) {
@@ -142,6 +153,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             </div>`;
                 }).join('');
 
+                // Prepare create list for the next UI or data step.
                 const createList = (items) => items && items.length > 0 ?
                     `<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul>` : '<p>None specified.</p>';
 
@@ -181,6 +193,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const createList = (items) => items && items.length > 0 ?
             `<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul>` : '<p>None specified.</p>';
 
+        // Choose the correct browser state branch before continuing.
         if (hazardsCard) {
             hazardsCard.innerHTML = createList(data.hazards_detected);
         }

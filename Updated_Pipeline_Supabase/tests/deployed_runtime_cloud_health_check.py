@@ -1,3 +1,4 @@
+# Readability: Test setup: document the contract this file protects.
 import os
 import sys
 from typing import Any, Dict, List, Optional
@@ -5,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 
+# Prepare base url for the next step.
 BASE_URL = os.environ.get(
     "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
@@ -18,6 +20,7 @@ STRICT_RUNTIME = str(os.environ.get("CASM_RUNTIME_HEALTH_STRICT", "1")).strip().
     "yes",
     "on",
 }
+# Prepare disallow fallback provider for the next step.
 DISALLOW_FALLBACK_PROVIDER = str(os.environ.get("CASM_RUNTIME_DISALLOW_FALLBACK", "1")).strip().lower() in {
     "1",
     "true",
@@ -32,28 +35,36 @@ OUTAGE_MARKERS = (
 )
 
 
+# Section: run the as text workflow with clear inputs and outputs.
 def _as_text(value: Any) -> str:
+    # Return the prepared result to the caller.
     return str(value or "").strip()
 
 
+# Section: run the contains outage marker workflow with clear inputs and outputs.
 def _contains_outage_marker(value: Any) -> bool:
     text = _as_text(value).lower()
     return any(marker in text for marker in OUTAGE_MARKERS)
 
 
+# Section: run the request json workflow with clear inputs and outputs.
 def _request_json(path: str, timeout: int = 30) -> Dict[str, Any]:
+    # Prepare response for the next step.
     response = requests.get(f"{BASE_URL}{path}", timeout=timeout)
     response.raise_for_status()
     return response.json() if response.content else {}
 
 
+# Section: run the extract runtime fields workflow with clear inputs and outputs.
 def _extract_runtime_fields(runtime_payload: Dict[str, Any], routing_payload: Dict[str, Any]) -> Dict[str, Any]:
     settings = runtime_payload.get("settings") if isinstance(runtime_payload, dict) else {}
     runtime = runtime_payload.get("runtime") if isinstance(runtime_payload, dict) else {}
     nlp_runtime = runtime.get("nlp") if isinstance(runtime, dict) else {}
 
+    # Prepare routing profile for the next step.
     routing_profile = _as_text(settings.get("routing_profile")).lower()
     if not routing_profile:
+        # Prepare routing profile for the next step.
         routing_profile = _as_text((routing_payload or {}).get("routing_profile")).lower()
 
     nlp_provider_order = settings.get("nlp_provider_order")
@@ -62,6 +73,7 @@ def _extract_runtime_fields(runtime_payload: Dict[str, Any], routing_payload: Di
     if not isinstance(nlp_provider_order, list):
         nlp_provider_order = []
 
+    # Prepare nlp provider order for the next step.
     nlp_provider_order = [
         _as_text(item).lower() for item in nlp_provider_order if _as_text(item)
     ]
@@ -75,8 +87,11 @@ def _extract_runtime_fields(runtime_payload: Dict[str, Any], routing_payload: Di
     }
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main() -> int:
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare runtime payload for the next step.
         runtime_payload = _request_json("/api/providers/runtime-status")
         routing_payload = _request_json("/api/settings/provider-routing")
         fields = _extract_runtime_fields(runtime_payload, routing_payload)
@@ -84,41 +99,51 @@ def main() -> int:
         issues: List[str] = []
 
         if fields["routing_profile"] != EXPECTED_ROUTING_PROFILE:
+            # Trigger the side effect required for this stage.
             issues.append(
                 f"routing_profile={fields['routing_profile'] or 'missing'} expected={EXPECTED_ROUTING_PROFILE}"
             )
 
+        # Choose the correct branch before the workflow continues.
         if EXPECTED_NLP_PROVIDER not in fields["nlp_provider_order"]:
             issues.append(
                 f"nlp_provider_order={fields['nlp_provider_order']} missing={EXPECTED_NLP_PROVIDER}"
             )
 
         if fields["last_provider"] and fields["last_provider"] not in {EXPECTED_NLP_PROVIDER, "fallback"}:
+            # Trigger the side effect required for this stage.
             issues.append(f"last_provider={fields['last_provider']} unexpected")
 
         if DISALLOW_FALLBACK_PROVIDER and fields["last_provider"] == "fallback":
             issues.append("last_provider=fallback is disallowed by runtime contract")
 
+        # Choose the correct branch before the workflow continues.
         if EXPECTED_ROUTING_PROFILE == "cloud":
             conflicting = [
                 provider for provider in fields["nlp_provider_order"]
                 if provider in {"ollama", "local"}
             ]
+            # Choose the correct branch before the workflow continues.
             if conflicting:
+                # Trigger the side effect required for this stage.
                 issues.append(
                     f"cloud profile contains local providers: {conflicting} in nlp_provider_order={fields['nlp_provider_order']}"
                 )
 
+        # Choose the correct branch before the workflow continues.
         if STRICT_RUNTIME:
             if _contains_outage_marker(fields["last_error"]):
                 issues.append(f"last_error contains outage marker: {fields['last_error']}")
 
+            # Choose the correct branch before the workflow continues.
             if _contains_outage_marker(fields["last_fallback_reason"]):
+                # Trigger the side effect required for this stage.
                 issues.append(
                     "last_fallback_reason contains outage marker: "
                     f"{fields['last_fallback_reason']}"
                 )
 
+        # Prepare status for the next step.
         status = "PASS" if not issues else "FAIL"
         summary = (
             f"{status}: profile={fields['routing_profile'] or 'missing'} "
@@ -129,9 +154,11 @@ def main() -> int:
 
         if issues:
             summary += " errors=" + " | ".join(issues)
+            # Trigger the side effect required for this stage.
             print(summary)
             return 2
 
+        # Trigger the side effect required for this stage.
         print(summary)
         return 0
     except Exception as exc:
@@ -139,5 +166,7 @@ def main() -> int:
         return 3
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
+    # Surface the failure with enough context for the caller.
     raise SystemExit(main())

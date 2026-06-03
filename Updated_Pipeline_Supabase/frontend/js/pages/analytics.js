@@ -1,3 +1,4 @@
+// Readability: Page module: organise rendering, user events, and API updates for this view.
 // Analytics Page Component
 const AnalyticsPage = {
     _realtimeHandler: null,
@@ -125,12 +126,14 @@ const AnalyticsPage = {
 
     async mount() {
         const cachedRendered = await this.renderCachedDataIfAvailable();
+        // Choose the correct browser state branch before continuing.
         if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
             API.warmDashboardCaches({ reason: 'analytics-mount', timeoutMs: 10000, minIntervalMs: 90000 });
         }
         await this.refreshData({ skipInitialCache: cachedRendered });
 
         this._realtimeHandler = () => {
+            // Choose the correct browser state branch before continuing.
             if (this._realtimeRefreshTimer) return;
             this._realtimeRefreshTimer = setTimeout(async () => {
                 this._realtimeRefreshTimer = null;
@@ -147,6 +150,7 @@ const AnalyticsPage = {
         this._assistantIntentHandler = (event) => this.applyAssistantIntent((event && event.detail) || {});
         window.addEventListener('casm-analytics:intent', this._assistantIntentHandler);
         this.bindAssistantBanner();
+        // Choose the correct browser state branch before continuing.
         if (window.__CASM_ANALYTICS_ASSISTANT_INTENT) {
             this.applyAssistantIntent(window.__CASM_ANALYTICS_ASSISTANT_INTENT);
             delete window.__CASM_ANALYTICS_ASSISTANT_INTENT;
@@ -157,6 +161,7 @@ const AnalyticsPage = {
     },
 
     unmount() {
+        // Choose the correct browser state branch before continuing.
         if (this._realtimeHandler) {
             window.removeEventListener('ppe-realtime:update', this._realtimeHandler);
             this._realtimeHandler = null;
@@ -169,6 +174,7 @@ const AnalyticsPage = {
             window.removeEventListener('ppe-realtime:connection', this._connectionHandler);
             this._connectionHandler = null;
         }
+        // Choose the correct browser state branch before continuing.
         if (this._timezoneChangeHandler) {
             window.removeEventListener('ppe-timezone:changed', this._timezoneChangeHandler);
             this._timezoneChangeHandler = null;
@@ -181,6 +187,7 @@ const AnalyticsPage = {
             clearInterval(this._fallbackInterval);
             this._fallbackInterval = null;
         }
+        // Choose the correct browser state branch before continuing.
         if (window.analyticsChart) {
             window.analyticsChart.destroy();
             window.analyticsChart = null;
@@ -196,6 +203,7 @@ const AnalyticsPage = {
     },
 
     async renderCachedDataIfAvailable() {
+        // Choose the correct browser state branch before continuing.
         if (typeof API === 'undefined' || typeof API.readJsonCache !== 'function') return false;
         try {
             const [cachedStats, cachedViolations] = await Promise.all([
@@ -208,6 +216,7 @@ const AnalyticsPage = {
             const stats = cachedStats && cachedStats.data && typeof cachedStats.data === 'object'
                 ? cachedStats.data
                 : (violations.length ? this.buildStatsFromViolations(violations) : null);
+            // Choose the correct browser state branch before continuing.
             if (!stats) return false;
             this.renderAnalyticsDataset(stats, violations);
             return true;
@@ -218,6 +227,7 @@ const AnalyticsPage = {
 
     bindAssistantBanner() {
         const clearBtn = document.getElementById('analyticsClearAssistantFilterBtn');
+        // Choose the correct browser state branch before continuing.
         if (clearBtn) {
             clearBtn.onclick = () => {
                 this.assistantFilterState = null;
@@ -229,10 +239,12 @@ const AnalyticsPage = {
 
     applyAssistantIntent(detail = {}) {
         const filters = this.sanitizeAssistantFilters(detail && typeof detail.filters === 'object' ? detail.filters : {});
+        // Choose the correct browser state branch before continuing.
         if (!this.hasActiveAssistantFilters(filters)) {
             this.assistantFilterState = null;
             this.renderAssistantBanner();
             this.refreshData();
+            // Return the prepared value to the caller.
             return;
         }
         this.assistantFilterState = {
@@ -247,9 +259,11 @@ const AnalyticsPage = {
         const banner = document.getElementById('analyticsAssistantFilterBanner');
         const summary = document.getElementById('analyticsAssistantFilterSummary');
         const hint = document.getElementById('analyticsAssistantFilterHint');
+        // Choose the correct browser state branch before continuing.
         if (!banner || !summary || !hint) return;
         if (!this.assistantFilterState) {
             banner.style.display = 'none';
+            // Return the prepared value to the caller.
             return;
         }
         banner.style.display = 'block';
@@ -266,6 +280,7 @@ const AnalyticsPage = {
             ],
             ['cloud', 'local', 'synced_local']
         );
+        // Choose the correct browser state branch before continuing.
         if (sources.length === 1) {
             cleaned.source = sources[0];
         } else if (sources.length > 1) {
@@ -279,6 +294,7 @@ const AnalyticsPage = {
             ],
             ['high', 'medium', 'low']
         );
+        // Choose the correct browser state branch before continuing.
         if (severities.length === 1) {
             cleaned.severity = severities[0];
         } else if (severities.length > 1) {
@@ -293,10 +309,12 @@ const AnalyticsPage = {
         const dateExact = this.normalizeAssistantDateKey(filters.dateExact);
         const dateFrom = this.normalizeAssistantDateKey(filters.dateFrom);
         const dateTo = this.normalizeAssistantDateKey(filters.dateTo);
+        // Choose the correct browser state branch before continuing.
         if (dateExact) {
             cleaned.dateExact = dateExact;
             delete cleaned.dateRange;
         } else {
+            // Choose the correct browser state branch before continuing.
             if (dateFrom) {
                 cleaned.dateFrom = dateFrom;
                 delete cleaned.dateRange;
@@ -320,6 +338,7 @@ const AnalyticsPage = {
                 .map((label) => this.normalizePpeFilterLabel(label))
                 .filter((label) => validPpe.has(label))
         ));
+        // Choose the correct browser state branch before continuing.
         if (normalizedPpe.length) {
             cleaned.ppeTypes = normalizedPpe;
         }
@@ -348,6 +367,7 @@ const AnalyticsPage = {
     normalizeAssistantFilterValues(values, allowedValues = []) {
         const allowed = new Set(allowedValues);
         const rawValues = Array.isArray(values) ? values : [values];
+        // Return the prepared value to the caller.
         return Array.from(new Set(
             rawValues
                 .map((value) => String(value || '').trim().toLowerCase().replace(/-/g, '_'))
@@ -358,6 +378,7 @@ const AnalyticsPage = {
     normalizeAssistantDateKey(value) {
         const raw = String(value || '').trim();
         const match = raw.match(/^(20\d{2})-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/);
+        // Choose the correct browser state branch before continuing.
         if (!match) return '';
         const [, year, month, day] = match;
         const parsed = new Date(Number(year), Number(month) - 1, Number(day));
@@ -366,8 +387,10 @@ const AnalyticsPage = {
             || parsed.getMonth() !== Number(month) - 1
             || parsed.getDate() !== Number(day)
         ) {
+            // Return the prepared value to the caller.
             return '';
         }
+        // Return the prepared value to the caller.
         return `${year}-${month}-${day}`;
     },
 
@@ -384,6 +407,7 @@ const AnalyticsPage = {
             .replace(/-/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
+        // Choose the correct browser state branch before continuing.
         if (/\b(no )?(hardhat|hard hat|helmet|helmets)\b/.test(normalized)) return 'NO-Hardhat';
         if (/\b(no )?(safety )?vests?\b/.test(normalized)) return 'NO-Safety Vest';
         if (/\b(no )?gloves?\b/.test(normalized)) return 'NO-Gloves';
@@ -394,7 +418,9 @@ const AnalyticsPage = {
 
     syncFallbackPolling() {
         const connected = typeof RealtimeSync !== 'undefined' && RealtimeSync.isConnected;
+        // Choose the correct browser state branch before continuing.
         if (connected) {
+            // Choose the correct browser state branch before continuing.
             if (this._fallbackInterval) {
                 clearInterval(this._fallbackInterval);
                 this._fallbackInterval = null;
@@ -418,6 +444,7 @@ const AnalyticsPage = {
             medium: Number(severity.medium) || 0,
             low: Number(severity.low) || 0
         };
+        // Prepare severity has data for the next UI or data step.
         const severityHasData = (severityFromStats.high + severityFromStats.medium + severityFromStats.low) > 0;
         const breakdownFromStats = stats.breakdown && typeof stats.breakdown === 'object'
             ? stats.breakdown
@@ -425,6 +452,7 @@ const AnalyticsPage = {
         const breakdownHasData = Object.values(breakdownFromStats).some((value) => Number(value) > 0);
         const completedFromList = list.filter((v) => {
             const status = String((v && (v.status || (v.has_report ? 'completed' : ''))) || '').toLowerCase();
+            // Return the prepared value to the caller.
             return status === 'completed' || status === 'ready';
         }).length;
         const pendingFromList = list.filter((v) => {
@@ -440,6 +468,7 @@ const AnalyticsPage = {
             || completedFromList
             || 0;
 
+        // Return the prepared value to the caller.
         return {
             ...stats,
             total: Number(stats.total) || list.length || 0,
@@ -454,6 +483,7 @@ const AnalyticsPage = {
 
     normalizeSourceScope(record) {
         const explicit = String(record?.source_scope || record?.report_scope || record?.scope || '').trim().toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (explicit === 'synced-local') return 'synced_local';
         if (explicit) return explicit;
 
@@ -471,12 +501,14 @@ const AnalyticsPage = {
         const breakdown = {};
         const todayFloor = new Date();
         todayFloor.setHours(0, 0, 0, 0);
+        // Prepare today for the next UI or data step.
         let today = 0;
         let reportsGenerated = 0;
         let pending = 0;
 
         list.forEach((item) => {
             const severityKey = String(item?.severity || '').trim().toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (Object.prototype.hasOwnProperty.call(severity, severityKey)) {
                 severity[severityKey] += 1;
             }
@@ -490,12 +522,14 @@ const AnalyticsPage = {
                 });
             } else if (Array.isArray(item?.missing_ppe)) {
                 item.missing_ppe.forEach((label) => {
+                    // Choose the correct browser state branch before continuing.
                     if (!label) return;
                     breakdown[label] = (Number(breakdown[label]) || 0) + 1;
                 });
             }
 
             const status = String(item?.status || (item?.has_report ? 'completed' : 'pending')).trim().toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (status === 'completed' || status === 'ready') {
                 reportsGenerated += 1;
             }
@@ -509,6 +543,7 @@ const AnalyticsPage = {
             }
         });
 
+        // Return the prepared value to the caller.
         return {
             total: list.length,
             today,
@@ -522,6 +557,7 @@ const AnalyticsPage = {
 
     matchesAssistantFilters(row, filters = {}) {
         const safeFilters = this.sanitizeAssistantFilters(filters);
+        // Choose the correct browser state branch before continuing.
         if (!this.hasActiveAssistantFilters(safeFilters)) return true;
         const sourceValues = this.normalizeAssistantFilterValues(
             [
@@ -532,6 +568,7 @@ const AnalyticsPage = {
         );
         if (sourceValues.length) {
             const scope = this.normalizeSourceScope(row);
+            // Choose the correct browser state branch before continuing.
             if (!sourceValues.includes(scope)) return false;
         }
 
@@ -542,8 +579,10 @@ const AnalyticsPage = {
             ],
             ['high', 'medium', 'low']
         );
+        // Choose the correct browser state branch before continuing.
         if (severityValues.length) {
             const severity = String(row?.severity || '').trim().toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (!severityValues.includes(severity)) return false;
         }
 
@@ -555,8 +594,10 @@ const AnalyticsPage = {
             if (safeFilters.dateRange === 'yesterday') {
                 const yesterday = new Date(today);
                 yesterday.setDate(yesterday.getDate() - 1);
+                // Choose the correct browser state branch before continuing.
                 if (rowDate < yesterday || rowDate >= today) return false;
             }
+            // Choose the correct browser state branch before continuing.
             if (safeFilters.dateRange === 'week') {
                 const weekAgo = new Date(today);
                 weekAgo.setDate(weekAgo.getDate() - 7);
@@ -565,12 +606,15 @@ const AnalyticsPage = {
             if (safeFilters.dateRange === 'month') {
                 const monthAgo = new Date(today);
                 monthAgo.setMonth(monthAgo.getMonth() - 1);
+                // Choose the correct browser state branch before continuing.
                 if (rowDate < monthAgo) return false;
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (safeFilters.dateExact || safeFilters.dateFrom || safeFilters.dateTo) {
             const rowDateKey = this.getAssistantRowDateKey(row);
+            // Choose the correct browser state branch before continuing.
             if (!rowDateKey) return false;
             if (safeFilters.dateExact && rowDateKey !== safeFilters.dateExact) return false;
             if (safeFilters.dateFrom && rowDateKey < safeFilters.dateFrom) return false;
@@ -585,9 +629,11 @@ const AnalyticsPage = {
                     .map(([label]) => label)
                 : [];
             const normalizedLabels = new Set([...missing, ...breakdownLabels].map((label) => this.normalizePpeFilterLabel(label)));
+            // Choose the correct browser state branch before continuing.
             if (!safeFilters.ppeTypes.some((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
         }
 
+        // Return the prepared value to the caller.
         return true;
     },
 
@@ -610,6 +656,7 @@ const AnalyticsPage = {
         const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
         const recentWeekCount = list.filter((item) => {
             const ts = Date.parse(item?.timestamp || '');
+            // Return the prepared value to the caller.
             return Number.isFinite(ts) && ts >= sevenDaysAgo;
         }).length;
         const dailyAverage = recentWeekCount > 0 ? (recentWeekCount / 7) : 0;
@@ -630,6 +677,7 @@ const AnalyticsPage = {
 
         list.forEach((item) => {
             const scope = this.normalizeSourceScope(item);
+            // Choose the correct browser state branch before continuing.
             if (Object.prototype.hasOwnProperty.call(sourceMix, scope)) {
                 sourceMix[scope] += 1;
             } else {
@@ -639,6 +687,7 @@ const AnalyticsPage = {
             const date = new Date(item?.timestamp || 0);
             const hour = date.getHours();
             if (!Number.isNaN(hour)) {
+                // Choose the correct browser state branch before continuing.
                 if (hour >= 6 && hour < 12) timeDistribution['Morning (6AM-12PM)'] += 1;
                 else if (hour >= 12 && hour < 18) timeDistribution['Afternoon (12PM-6PM)'] += 1;
                 else if (hour >= 18 && hour < 24) timeDistribution['Evening (6PM-12AM)'] += 1;
@@ -665,6 +714,7 @@ const AnalyticsPage = {
                 : lastViolation.toLocaleString())
             : 'No data';
 
+        // Return the prepared value to the caller.
         return {
             total,
             reportsReady,
@@ -688,6 +738,7 @@ const AnalyticsPage = {
 
     renderOverviewControl(stats = {}, derivedMetrics = {}, violations = []) {
         const container = document.getElementById('analytics-overview-control');
+        // Choose the correct browser state branch before continuing.
         if (!container) return;
 
         const mode = ['risk', 'source', 'queue', 'timing'].includes(this._overviewMode) ? this._overviewMode : 'risk';
@@ -702,6 +753,7 @@ const AnalyticsPage = {
         const timeRows = timeEntries.map(([label, value]) => {
             const normalizedLabel = String(label || '').trim();
             const match = normalizedLabel.match(/^([^()]+)\s*\(([^)]+)\)$/);
+            // Return the prepared value to the caller.
             return {
                 label: match ? match[1].trim() : normalizedLabel,
                 range: match ? match[2].trim() : '',
@@ -720,6 +772,7 @@ const AnalyticsPage = {
         const rowCount = Array.isArray(violations) ? violations.length : 0;
         const riskTone = derivedMetrics.highShare >= 40 ? 'danger' : derivedMetrics.highShare >= 18 ? 'warning' : 'stable';
         const readyTone = derivedMetrics.readyRate >= 80 ? 'stable' : derivedMetrics.readyRate >= 50 ? 'warning' : 'danger';
+        // Prepare safe percent for the next UI or data step.
         const safePercent = (value, total) => Math.max(0, Math.min(100, (Number(value) || 0) / Math.max(1, Number(total) || 1) * 100));
         const displayPercent = (value, total) => `${Math.round(safePercent(value, total))}%`;
         const modeModels = {
@@ -881,6 +934,7 @@ const AnalyticsPage = {
         container.querySelectorAll('[data-analytics-route]').forEach((button) => {
             button.addEventListener('click', () => {
                 const route = button.dataset.analyticsRoute || 'reports';
+                // Choose the correct browser state branch before continuing.
                 if (typeof Router !== 'undefined' && Router && typeof Router.navigate === 'function') {
                     Router.navigate(route);
                 }
@@ -888,6 +942,7 @@ const AnalyticsPage = {
         });
 
         const exportBtn = container.querySelector('[data-analytics-export]');
+        // Choose the correct browser state branch before continuing.
         if (exportBtn) {
             exportBtn.addEventListener('click', async () => {
                 if (window.CASMAssistant && typeof window.CASMAssistant.exportAnalyticsCsv === 'function') {
@@ -918,7 +973,9 @@ const AnalyticsPage = {
     },
 
     async refreshData(options = {}) {
+        // Keep this browser operation recoverable if it fails.
         try {
+            // Choose the correct browser state branch before continuing.
             if (!options.skipInitialCache) {
                 await this.renderCachedDataIfAvailable();
             }
@@ -930,6 +987,7 @@ const AnalyticsPage = {
         } catch (e) {
             console.error('Error loading analytics:', e);
             const statsEl = document.getElementById('analytics-stats');
+            // Choose the correct browser state branch before continuing.
             if (statsEl) {
                 statsEl.innerHTML = '<div class="alert alert-danger">Failed to load analytics data.</div>';
             }
@@ -938,6 +996,7 @@ const AnalyticsPage = {
 
     renderStats(stats, derivedMetrics) {
         const container = document.getElementById('analytics-stats');
+        // Choose the correct browser state branch before continuing.
         if (!container) return;
         const cards = [
             {
@@ -1010,6 +1069,7 @@ const AnalyticsPage = {
 
     renderInsights(derivedMetrics) {
         const container = document.getElementById('analytics-insights');
+        // Choose the correct browser state branch before continuing.
         if (!container) return;
 
         container.innerHTML = `
@@ -1034,16 +1094,19 @@ const AnalyticsPage = {
 
     renderTrendsChart(violations) {
         const canvas = document.getElementById('trendChart');
+        // Choose the correct browser state branch before continuing.
         if (!canvas) return;
 
         if (typeof Chart === 'undefined') {
             canvas.parentElement.innerHTML = '<div class="alert alert-warning">Trend chart is unavailable because Chart.js failed to load.</div>';
+            // Return the prepared value to the caller.
             return;
         }
 
         const ctx = canvas.getContext('2d');
 
         // Destroy existing chart if any
+        // Choose the correct browser state branch before continuing.
         if (window.analyticsChart) {
             window.analyticsChart.destroy();
         }
@@ -1060,6 +1123,7 @@ const AnalyticsPage = {
         }
 
         (violations || []).forEach((v) => {
+            // Choose the correct browser state branch before continuing.
             if (!v?.timestamp) return;
             const ts = new Date(v.timestamp);
             if (Number.isNaN(ts.getTime())) return;
@@ -1073,6 +1137,7 @@ const AnalyticsPage = {
         const isoDates = Array.from(dayBuckets.keys());
         const labels = isoDates.map((isoDate) => {
             const date = new Date(`${isoDate}T00:00:00`);
+            // Return the prepared value to the caller.
             return `${date.getDate()}/${date.getMonth() + 1}`;
         });
         const counts = Array.from(dayBuckets.values());
@@ -1107,6 +1172,7 @@ const AnalyticsPage = {
                         intersect: false,
                         callbacks: {
                             title(context) {
+                                // Choose the correct browser state branch before continuing.
                                 if (!context || context.length === 0) return '';
                                 const idx = context[0].dataIndex;
                                 const isoDate = isoDates[idx];
@@ -1120,6 +1186,7 @@ const AnalyticsPage = {
                             },
                             label(context) {
                                 const value = Number(context.raw || 0);
+                                // Return the prepared value to the caller.
                                 return `Violations: ${value}`;
                             }
                         }
@@ -1143,6 +1210,7 @@ const AnalyticsPage = {
 
     renderViolationTypes(stats) {
         const container = document.getElementById('analytics-violation-types');
+        // Choose the correct browser state branch before continuing.
         if (!container) return;
         const breakdown = stats.breakdown || {};
         const types = [
@@ -1185,12 +1253,15 @@ const AnalyticsPage = {
         `;
 
         const toggleBtn = document.getElementById('violationToggleBtn');
+        // Choose the correct browser state branch before continuing.
         if (toggleBtn) {
             toggleBtn.addEventListener('click', () => {
                 const orig = document.getElementById('analytics-violation-types-original');
                 const pie = document.getElementById('analytics-violation-types-pie');
                 const showingPie = pie && pie.style.display !== 'none';
+                // Choose the correct browser state branch before continuing.
                 if (showingPie) {
+                    // Choose the correct browser state branch before continuing.
                     if (pie) pie.style.display = 'none';
                     if (orig) orig.style.display = 'block';
                     toggleBtn.textContent = 'Show Pie';
@@ -1207,6 +1278,7 @@ const AnalyticsPage = {
 
     initViolationPieChart(types) {
         const canvas = document.getElementById('violationTypesPie');
+        // Choose the correct browser state branch before continuing.
         if (!canvas || typeof Chart === 'undefined') return;
         const ctx = canvas.getContext('2d');
         if (window.violationPieChart) { window.violationPieChart.destroy(); window.violationPieChart = null; }
@@ -1243,6 +1315,7 @@ const AnalyticsPage = {
                                 const value = Number(context.parsed || 0);
                                 const total = context.dataset.data.reduce((sum, item) => sum + Number(item || 0), 0);
                                 const percent = total > 0 ? Math.round((value / total) * 100) : 0;
+                                // Return the prepared value to the caller.
                                 return ` ${label}: ${value} (${percent}%)`;
                             }
                         }
@@ -1254,6 +1327,7 @@ const AnalyticsPage = {
 
     renderTimeDistribution(violations) {
         const container = document.getElementById('analytics-time-distribution');
+        // Choose the correct browser state branch before continuing.
         if (!container) return;
 
         // Calculate time distribution
@@ -1265,6 +1339,7 @@ const AnalyticsPage = {
         };
 
         (violations || []).forEach(v => {
+            // Choose the correct browser state branch before continuing.
             if (!v?.timestamp) return;
             const hour = new Date(v.timestamp).getHours();
             if (Number.isNaN(hour)) return;
@@ -1309,12 +1384,15 @@ const AnalyticsPage = {
         `;
 
         const toggleBtn = document.getElementById('timeToggleBtn');
+        // Choose the correct browser state branch before continuing.
         if (toggleBtn) {
             toggleBtn.addEventListener('click', () => {
                 const orig = document.getElementById('analytics-time-distribution-original');
                 const pie = document.getElementById('analytics-time-distribution-pie');
                 const showingPie = pie && pie.style.display !== 'none';
+                // Choose the correct browser state branch before continuing.
                 if (showingPie) {
+                    // Choose the correct browser state branch before continuing.
                     if (pie) pie.style.display = 'none';
                     if (orig) orig.style.display = 'block';
                     toggleBtn.textContent = 'Show Pie';
@@ -1331,6 +1409,7 @@ const AnalyticsPage = {
 
     initTimePieChart(entries) {
         const canvas = document.getElementById('timeDistributionPie');
+        // Choose the correct browser state branch before continuing.
         if (!canvas || typeof Chart === 'undefined') return;
         const ctx = canvas.getContext('2d');
         if (window.timePieChart) { window.timePieChart.destroy(); window.timePieChart = null; }
@@ -1352,6 +1431,7 @@ const AnalyticsPage = {
         const barElement = document.getElementById('safety-bar');
         const benchmarkEl = document.getElementById('analytics-safety-benchmark-note');
 
+        // Choose the correct browser state branch before continuing.
         if (!scoreElement || !barElement) return;
 
         scoreElement.textContent = `${score}%`;

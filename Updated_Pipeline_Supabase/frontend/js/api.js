@@ -1,3 +1,4 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 // API Functions
 const API = {
     imagePrefetchState: {
@@ -39,7 +40,9 @@ const API = {
             e.name = 'InvalidContextError';
             throw e;
         }
+        // Choose the correct browser state branch before continuing.
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            // Prepare is local target for the next UI or data step.
             let isLocalTarget = false;
             try {
                 isLocalTarget = this.isLocalBackendBase ? this.isLocalBackendBase(url) : false;
@@ -54,7 +57,9 @@ const API = {
 
         const controller = new AbortController();
         const externalSignal = init && init.signal;
+        // Choose the correct browser state branch before continuing.
         if (externalSignal) {
+            // Choose the correct browser state branch before continuing.
             if (externalSignal.aborted) {
                 controller.abort();
             } else {
@@ -65,6 +70,7 @@ const API = {
         try {
             return await fetch(url, { ...init, signal: controller.signal });
         } catch (err) {
+            // Choose the correct browser state branch before continuing.
             if (controller.signal.aborted) {
                 const e = new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
                 e.name = 'TimeoutError';
@@ -79,7 +85,9 @@ const API = {
 
     _normalizeBaseUrl(value) {
         const raw = String(value || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!raw || (typeof window !== 'undefined' && raw === window.location.origin)) {
+            // Return the prepared value to the caller.
             return '';
         }
         return raw.replace(/\/+$/, '');
@@ -96,6 +104,7 @@ const API = {
             || ''
         );
 
+        // Choose the correct browser state branch before continuing.
         if (explicitBase && !this.isLocalBackendBase(explicitBase)) return explicitBase;
         if (configuredBase && !this.isLocalBackendBase(configuredBase)) return configuredBase;
         return explicitBase || configuredBase || '';
@@ -106,12 +115,14 @@ const API = {
     },
 
     isLocalBackendBase(baseUrl) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const resolved = new URL(
                 this._normalizeBaseUrl(baseUrl) || window.location.origin,
                 window.location.origin
             );
             const host = String(resolved.hostname || '').toLowerCase();
+            // Return the prepared value to the caller.
             return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0';
         } catch (error) {
             return false;
@@ -119,6 +130,7 @@ const API = {
     },
 
     isPageServedFromLocalHost() {
+        // Keep this browser operation recoverable if it fails.
         try {
             const host = String((window.location && window.location.hostname) || '').toLowerCase();
             return host === 'localhost'
@@ -126,12 +138,14 @@ const API = {
                 || host === '0.0.0.0'
                 || host.endsWith('.local');
         } catch (error) {
+            // Return the prepared value to the caller.
             return false;
         }
     },
 
     canUseLocalBackendFromPage(baseUrl = null) {
         const target = this._normalizeBaseUrl(baseUrl || this.getLocalBackendBaseUrl());
+        // Choose the correct browser state branch before continuing.
         if (!this.isLocalBackendBase(target)) return true;
         if (this.isPageServedFromLocalHost()) return true;
 
@@ -143,6 +157,7 @@ const API = {
 
     canUseRemoteCloudBackendFromPage(baseUrl) {
         const normalized = this._normalizeBaseUrl(baseUrl);
+        // Choose the correct browser state branch before continuing.
         if (!normalized) return false;
         const explicitOverride = String((typeof window !== 'undefined' && window.PPE_API_URL) || '').trim();
         if (explicitOverride) return true;
@@ -153,7 +168,9 @@ const API = {
             || ''
         );
         if (configuredCloudBase && configuredCloudBase === normalized) return true;
+        // Choose the correct browser state branch before continuing.
         if (this.isPageServedFromLocalHost() && !this.isLocalBackendBase(normalized)) {
+            // Return the prepared value to the caller.
             return false;
         }
         return true;
@@ -163,7 +180,9 @@ const API = {
         if (!result || typeof result !== 'object') return false;
         if (result.report_queued === false) return false;
 
+        // Choose the correct browser state branch before continuing.
         if (result.local_draft_required === true || result.requires_local_draft === true) {
+            // Return the prepared value to the caller.
             return true;
         }
         if (result.local_draft_required === false || result.requires_local_draft === false) {
@@ -173,9 +192,11 @@ const API = {
         const explicitScope = this.inferReportSourceScope(result)
             || String(result.source_scope || result.report_scope || result.scope || '').trim().toLowerCase();
         if (explicitScope === 'local') return true;
+        // Choose the correct browser state branch before continuing.
         if (['cloud', 'synced_local', 'shared'].includes(explicitScope)) return false;
 
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            // Return the prepared value to the caller.
             return true;
         }
 
@@ -193,6 +214,7 @@ const API = {
         const message = String(
             (error && (error.message || error.name || error.toString && error.toString())) || error || ''
         ).toLowerCase();
+        // Return the prepared value to the caller.
         return (
             message.includes('failed to fetch')
             || message.includes('err_connection_refused')
@@ -207,8 +229,10 @@ const API = {
 
     logFetchFailure(context, error) {
         const message = error && error.message ? error.message : error;
+        // Choose the correct browser state branch before continuing.
         if (this.isExpectedOfflineFetchError(error)) {
             console.warn(`${context}:`, message);
+            // Return the prepared value to the caller.
             return;
         }
         console.warn(`${context}:`, error);
@@ -219,6 +243,7 @@ const API = {
     },
 
     getReportSourceMarkers(record = {}) {
+        // Return the prepared value to the caller.
         return [
             record && record.origin,
             record && record.sync_source,
@@ -233,6 +258,7 @@ const API = {
 
     hasLocalArtifactOriginDevice(deviceId = '') {
         const normalized = String(deviceId || '').trim().toLowerCase();
+        // Return the prepared value to the caller.
         return (
             normalized === 'local_cache'
             || normalized === 'offline_local_cache'
@@ -246,6 +272,7 @@ const API = {
     },
 
     hasStrictLocalArtifactOrigin(record = {}) {
+        // Choose the correct browser state branch before continuing.
         if (!record || typeof record !== 'object') return false;
         if (this.hasLocalReportIdPrefix(record.report_id || record.id)) return true;
         if (this.hasLocalArtifactOriginDevice(this.getReportDeviceKey(record))) return true;
@@ -257,10 +284,12 @@ const API = {
                 report_id: record.report_id || detectionData.report_id,
                 device_id: detectionData.device_id || record.device_id
             };
+            // Choose the correct browser state branch before continuing.
             if (this.hasLocalReportIdPrefix(nested.report_id || nested.id)) return true;
             if (this.hasLocalArtifactOriginDevice(this.getReportDeviceKey(nested))) return true;
         }
 
+        // Return the prepared value to the caller.
         return false;
     },
 
@@ -283,6 +312,7 @@ const API = {
     },
 
     hasCloudReportArtifactEvidence(record = {}) {
+        // Return the prepared value to the caller.
         return !!(
             record
             && (
@@ -296,6 +326,7 @@ const API = {
     },
 
     hasLocalOriginMarkers(record = {}) {
+        // Choose the correct browser state branch before continuing.
         if (!record || typeof record !== 'object') return false;
         if (this.hasLocalReportIdPrefix(record.report_id || record.id)) return true;
 
@@ -315,7 +346,9 @@ const API = {
             'offline_local_cache_sync',
             'local_synced'
         ]);
+        // Choose the correct browser state branch before continuing.
         if (handoffOnlyMarker) {
+            // Return the prepared value to the caller.
             return this.hasStrictLocalArtifactOrigin(record);
         }
         if (
@@ -328,6 +361,7 @@ const API = {
         }
 
         const deviceId = this.getReportDeviceKey(record);
+        // Return the prepared value to the caller.
         return (
             deviceId === 'local_cache'
             || deviceId === 'offline_local_cache'
@@ -341,6 +375,7 @@ const API = {
     },
 
     hasDurableLocalOriginEvidence(record = {}) {
+        // Choose the correct browser state branch before continuing.
         if (!record || typeof record !== 'object') return false;
         if (this.hasStrictLocalArtifactOrigin(record)) return true;
         if (this.hasLocalOriginMarkers(record)) return true;
@@ -355,6 +390,7 @@ const API = {
     },
 
     hasConfirmedSyncedLocalReport(record = {}) {
+        // Choose the correct browser state branch before continuing.
         if (!record || typeof record !== 'object') return false;
         const sourceMarkers = this.getReportSourceMarkers(record);
         const hasMarker = (marker) => sourceMarkers.includes(marker);
@@ -368,7 +404,9 @@ const API = {
             || deviceId === 'local_cache_sync'
             || deviceId === 'sync_local_cache'
         );
+        // Choose the correct browser state branch before continuing.
         if (syncMarker) {
+            // Return the prepared value to the caller.
             return this.hasCloudReportArtifactEvidence(record);
         }
 
@@ -380,6 +418,7 @@ const API = {
             return strictLocalOrigin && this.hasCloudReportArtifactEvidence(record);
         }
 
+        // Prepare sync state confirmed for the next UI or data step.
         const syncStateConfirmed = (
             syncState === 'synced'
             || syncState === 'cloud_completed'
@@ -388,9 +427,11 @@ const API = {
             || syncState.startsWith('sync_')
         );
         if (syncStateConfirmed && strictLocalOrigin && this.hasCloudReportArtifactEvidence(record)) {
+            // Return the prepared value to the caller.
             return true;
         }
 
+        // Return the prepared value to the caller.
         return false;
     },
 
@@ -398,8 +439,10 @@ const API = {
         if (typeof sourceHint === 'string') {
             const normalized = sourceHint.trim().toLowerCase();
             if (['local', 'cloud', 'shared', 'synced_local'].includes(normalized)) {
+                // Return the prepared value to the caller.
                 return normalized;
             }
+            // Choose the correct browser state branch before continuing.
             if (normalized.includes('local synced')) return 'synced_local';
             if (normalized.includes('cloud')) return 'cloud';
             if (normalized.includes('local')) return 'local';
@@ -408,8 +451,10 @@ const API = {
 
         const record = sourceHint && typeof sourceHint === 'object' ? sourceHint : {};
         const explicit = String(record.source_scope || record.report_scope || record.scope || '').trim().toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (explicit === 'synced_local') {
             if (this.hasConfirmedSyncedLocalReport(record)) return 'synced_local';
+            // Return the prepared value to the caller.
             return this.hasStrictLocalArtifactOrigin(record) ? 'local' : 'cloud';
         }
         if (explicit === 'local' && this.hasCloudReportArtifacts(record) && !this.hasDurableLocalOriginEvidence(record)) {
@@ -418,6 +463,7 @@ const API = {
         if (['local', 'cloud', 'shared'].includes(explicit)) {
             return explicit;
         }
+        // Choose the correct browser state branch before continuing.
         if (explicit === 'local_synced') return 'synced_local';
 
         const sourceMarker = this.getReportSourceMarker(record);
@@ -426,9 +472,11 @@ const API = {
             || sourceMarker === 'local_cache_sync'
             || sourceMarker === 'offline_local_cache_sync'
         ) {
+            // Choose the correct browser state branch before continuing.
             if (this.hasConfirmedSyncedLocalReport(record)) return 'synced_local';
             return this.hasStrictLocalArtifactOrigin(record) ? 'local' : 'cloud';
         }
+        // Choose the correct browser state branch before continuing.
         if (sourceMarker === 'local_synced') {
             if (this.hasConfirmedSyncedLocalReport(record)) return 'synced_local';
             return this.hasStrictLocalArtifactOrigin(record) ? 'local' : 'cloud';
@@ -439,7 +487,9 @@ const API = {
         }
 
         const label = String(record.source_label || '').trim().toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (label.includes('local synced')) {
+            // Choose the correct browser state branch before continuing.
             if (this.hasConfirmedSyncedLocalReport(record)) return 'synced_local';
             return this.hasStrictLocalArtifactOrigin(record) ? 'local' : 'cloud';
         }
@@ -451,6 +501,7 @@ const API = {
             if (this.hasConfirmedSyncedLocalReport(record)) return 'synced_local';
             return this.hasStrictLocalArtifactOrigin(record) ? 'local' : 'cloud';
         }
+        // Choose the correct browser state branch before continuing.
         if (this.hasLocalOriginMarkers(record)) return 'local';
         return '';
     },
@@ -467,6 +518,7 @@ const API = {
             record.local_cache_available
         ].some((value) => value === true || value === 1 || String(value || '').toLowerCase() === 'true');
 
+        // Choose the correct browser state branch before continuing.
         if (truthyLocalFlag) return true;
         if (record.local_image_url || record.local_report_url) return true;
 
@@ -486,6 +538,7 @@ const API = {
         const deviceId = this.getReportDeviceKey(record);
         const localDevice = this.hasLocalArtifactOriginDevice(deviceId);
 
+        // Return the prepared value to the caller.
         return scope === 'synced_local' && (localSyncMarker || localDevice);
     },
 
@@ -498,6 +551,7 @@ const API = {
             record.local_cache_available
         ].some((value) => value === true || value === 1 || String(value || '').toLowerCase() === 'true');
 
+        // Return the prepared value to the caller.
         return !!(
             truthyLocalFlag
             || record.local_image_url
@@ -511,6 +565,7 @@ const API = {
 
     hasLocalReportIdPrefix(reportId) {
         const id = String(reportId || '').trim().toLowerCase();
+        // Return the prepared value to the caller.
         return /^(local|offline|browser_local|local-cache|offline-cache)[_-]/.test(id);
     },
 
@@ -519,20 +574,24 @@ const API = {
         if (!record || typeof record !== 'object') return false;
 
         if (this.hasLocalReportIdPrefix(record.report_id || record.id)) {
+            // Return the prepared value to the caller.
             return true;
         }
 
         const detectionData = this.parseObjectMaybeJson(record.detection_data);
+        // Choose the correct browser state branch before continuing.
         if (detectionData && Object.keys(detectionData).length > 0) {
             const nested = {
                 ...detectionData,
                 report_id: record.report_id || detectionData.report_id,
                 device_id: detectionData.device_id || record.device_id
             };
+            // Choose the correct browser state branch before continuing.
             if (this.isStrictLocalOriginReport(nested)) return true;
         }
 
         const scope = String(record.source_scope || record.report_scope || record.scope || '').trim().toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (scope === 'local') return true;
 
         const sourceMarker = this.getReportSourceMarker(record);
@@ -551,7 +610,9 @@ const API = {
             'offline_local_cache_sync',
             'local_synced'
         ]);
+        // Choose the correct browser state branch before continuing.
         if (handoffOnlyMarker) {
+            // Return the prepared value to the caller.
             return this.hasStrictLocalArtifactOrigin(record);
         }
         if (
@@ -564,6 +625,7 @@ const API = {
         }
 
         const deviceId = this.getReportDeviceKey(record);
+        // Choose the correct browser state branch before continuing.
         if (
             deviceId === 'local_cache'
             || deviceId === 'offline_local_cache'
@@ -574,10 +636,12 @@ const API = {
             || deviceId.startsWith('offline_')
             || deviceId.startsWith('browser_local')
         ) {
+            // Return the prepared value to the caller.
             return true;
         }
 
         const label = String(record.source_label || '').trim().toLowerCase();
+        // Return the prepared value to the caller.
         return label === 'local';
     },
 
@@ -588,10 +652,13 @@ const API = {
     async getLocalSyncCandidateSummary(options = {}) {
         const includeSynced = !!(options && options.includeSynced);
         const candidateIds = new Set();
+        // Prepare inspect list for the next UI or data step.
         const inspectList = (list) => {
+            // Choose the correct browser state branch before continuing.
             if (!Array.isArray(list)) return;
             list.forEach((item) => {
                 const reportId = String((item && item.report_id) || '').trim();
+                // Choose the correct browser state branch before continuing.
                 if (!reportId || (!includeSynced && this.isAlreadyCloudSyncedLocal(item))) return;
                 if (this.isStrictLocalOriginReport(item)) {
                     candidateIds.add(reportId);
@@ -599,6 +666,7 @@ const API = {
             });
         };
 
+        // Keep this browser operation recoverable if it fails.
         try {
             inspectList(await this.readLocalReportDrafts());
         } catch (error) {
@@ -612,8 +680,10 @@ const API = {
             'violations:limit:5000'
         ];
         await Promise.all(cacheScopes.map(async (scope) => {
+            // Keep this browser operation recoverable if it fails.
             try {
                 const cached = await this.readJsonCache(scope);
+                // Choose the correct browser state branch before continuing.
                 if (cached && Array.isArray(cached.data)) {
                     inspectList(cached.data);
                 }
@@ -622,6 +692,7 @@ const API = {
             }
         }));
 
+        // Return the prepared value to the caller.
         return {
             count: candidateIds.size,
             report_ids: Array.from(candidateIds)
@@ -634,6 +705,7 @@ const API = {
                 .map((id) => String(id || '').trim())
                 .filter(Boolean)
         ));
+        // Choose the correct browser state branch before continuing.
         if (!ids.length) return [];
 
         const summary = await this.getLocalSyncCandidateSummary({ includeSynced: true });
@@ -647,12 +719,14 @@ const API = {
         const cloudBase = this.getCloudBackendBaseUrl();
         const localBase = this.getLocalBackendBaseUrl();
 
+        // Choose the correct browser state branch before continuing.
         if (
             scope === 'synced_local'
             && typeof navigator !== 'undefined'
             && navigator.onLine === false
             && this.hasConcreteLocalReportArtifacts(sourceHint)
         ) {
+            // Return the prepared value to the caller.
             return localBase || currentBase;
         }
 
@@ -664,7 +738,9 @@ const API = {
             return localBase || currentBase;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (scope === 'cloud' || scope === 'synced_local' || scope === 'shared') {
+            // Choose the correct browser state branch before continuing.
             if (cloudBase && this.canUseRemoteCloudBackendFromPage(cloudBase)) return cloudBase;
             return this.isLocalBackendBase(currentBase) ? '' : currentBase;
         }
@@ -678,6 +754,7 @@ const API = {
 
     buildReportScopedUrl(path, sourceHint = null) {
         const base = this.getReportBackendBase(sourceHint);
+        // Return the prepared value to the caller.
         return `${base || ''}${path}`;
     },
 
@@ -685,21 +762,25 @@ const API = {
         const raw = String(url || '').trim();
         if (!raw) return '';
         if (/^(blob:|data:|https?:\/\/)/i.test(raw)) {
+            // Return the prepared value to the caller.
             return raw;
         }
         if (raw.startsWith('/')) {
             return this.buildReportScopedUrl(raw, sourceHint);
         }
+        // Return the prepared value to the caller.
         return raw;
     },
 
     getCloudReportScopedUrl(path) {
         const cloudBase = this.getCloudBackendBaseUrl();
         if (cloudBase && this.canUseRemoteCloudBackendFromPage(cloudBase)) {
+            // Return the prepared value to the caller.
             return `${cloudBase}${path}`;
         }
 
         const currentBase = this._normalizeBaseUrl(API_CONFIG.BASE_URL || '');
+        // Choose the correct browser state branch before continuing.
         if (!this.isLocalBackendBase(currentBase)) {
             return `${currentBase || ''}${path}`;
         }
@@ -713,6 +794,7 @@ const API = {
     },
 
     isCloudReportUnavailableOffline(sourceHint = null) {
+        // Choose the correct browser state branch before continuing.
         if (typeof navigator === 'undefined' || navigator.onLine !== false) return false;
         const scope = this.inferReportSourceScope(sourceHint);
         if (scope === 'synced_local' && this.hasConcreteLocalReportArtifacts(sourceHint)) return false;
@@ -721,8 +803,10 @@ const API = {
 
     parseObjectMaybeJson(value) {
         if (value && typeof value === 'object' && !Array.isArray(value)) {
+            // Return the prepared value to the caller.
             return value;
         }
+        // Choose the correct browser state branch before continuing.
         if (typeof value !== 'string') return {};
         try {
             const parsed = JSON.parse(value);
@@ -733,6 +817,7 @@ const API = {
     },
 
     canonicalViolationKey(rawKey) {
+        // Choose the correct browser state branch before continuing.
         if (!rawKey) return null;
 
         const normalized = rawKey
@@ -749,6 +834,7 @@ const API = {
             .replace(/[\s_-]+/g, ' ')
             .trim();
 
+        // Choose the correct browser state branch before continuing.
         if (/HARD ?HAT|HELMET/.test(simplified)) return 'NO-Hardhat';
         if (/SAFETY ?VEST|HI ?VIS|HIGH ?VIS|VEST/.test(simplified)) return 'NO-Safety Vest';
         if (/GLOVE/.test(simplified)) return 'NO-Gloves';
@@ -763,8 +849,10 @@ const API = {
         const record = violation && typeof violation === 'object' ? violation : {};
         const detectionData = this.parseObjectMaybeJson(record.detection_data);
 
+        // Prepare append canonical for the next UI or data step.
         const appendCanonical = (rawValue) => {
             const key = this.canonicalViolationKey(rawValue);
+            // Choose the correct browser state branch before continuing.
             if (key) keys.push(key);
         };
 
@@ -776,6 +864,7 @@ const API = {
             record.violations.forEach(appendCanonical);
         }
 
+        // Choose the correct browser state branch before continuing.
         if (keys.length === 0 && Array.isArray(record.violation_types) && record.violation_types.length > 0) {
             record.violation_types.forEach(appendCanonical);
         }
@@ -788,6 +877,7 @@ const API = {
             detectionData.ppe_tags.forEach(appendCanonical);
         }
 
+        // Choose the correct browser state branch before continuing.
         if (keys.length === 0 && Array.isArray(detectionData.violations)) {
             detectionData.violations.forEach(appendCanonical);
         }
@@ -800,8 +890,10 @@ const API = {
             detectionData.violation_types.forEach(appendCanonical);
         }
 
+        // Choose the correct browser state branch before continuing.
         if (keys.length === 0 && Array.isArray(detectionData.detections)) {
             detectionData.detections.forEach((detection) => {
+                // Choose the correct browser state branch before continuing.
                 if (!detection || typeof detection !== 'object') return;
                 appendCanonical(detection.class_name || detection.label || detection.name || detection.class);
             });
@@ -816,6 +908,7 @@ const API = {
             missingMatches.forEach((m) => appendCanonical(m.trim()));
         }
 
+        // Return the prepared value to the caller.
         return [...new Set(keys)];
     },
 
@@ -826,6 +919,7 @@ const API = {
         if (canonical === 'NO-Gloves') return 'Gloves';
         if (canonical === 'NO-Mask') return 'Mask';
         if (canonical === 'NO-Safety Shoes') return 'Safety Shoes';
+        // Return the prepared value to the caller.
         return '';
     },
 
@@ -834,10 +928,12 @@ const API = {
             .map((key) => this.violationKeyToMissingPpeLabel(key))
             .filter(Boolean);
         if (labels.length > 0) {
+            // Return the prepared value to the caller.
             return [...new Set(labels)];
         }
 
         const raw = Array.isArray(violation?.missing_ppe) ? violation.missing_ppe : [];
+        // Return the prepared value to the caller.
         return [...new Set(raw
             .map((item) => String(item || '').replace(/^NO[-\s]+/i, '').trim())
             .filter((item) => !/^(goggles?|eye protection|safety glasses|eyewear)$/i.test(item))
@@ -859,6 +955,7 @@ const API = {
         const frequencyPenalty = Math.min(30, today * 2.5);
         const complianceScore = Math.round(Math.max(0, Math.min(100, 100 - severityPenalty - frequencyPenalty)));
 
+        // Prepare benchmark band for the next UI or data step.
         let benchmarkBand = 'critical';
         if (complianceScore >= 95) benchmarkBand = 'best-practice';
         else if (complianceScore >= 85) benchmarkBand = 'acceptable';
@@ -882,15 +979,18 @@ const API = {
 
         violations.forEach((violation) => {
             const keys = this.extractViolationKeys(violation);
+            // Choose the correct browser state branch before continuing.
             if (keys.length === 0) return;
             keys.forEach((key) => {
                 const canonical = this.canonicalViolationKey(key);
+                // Choose the correct browser state branch before continuing.
                 if (canonical && Object.prototype.hasOwnProperty.call(breakdown, canonical)) {
                     breakdown[canonical] += 1;
                 }
             });
         });
 
+        // Return the prepared value to the caller.
         return breakdown;
     },
 
@@ -906,12 +1006,14 @@ const API = {
         const startLastWeek = new Date(startThisWeek);
         startLastWeek.setDate(startLastWeek.getDate() - 7);
 
+        // Prepare today count for the next UI or data step.
         let todayCount = 0;
         let yesterdayCount = 0;
         let thisWeekCount = 0;
         let lastWeekCount = 0;
 
         violations.forEach((v) => {
+            // Choose the correct browser state branch before continuing.
             if (!v?.timestamp) return;
             const ts = new Date(v.timestamp);
             if (Number.isNaN(ts.getTime())) return;
@@ -923,6 +1025,7 @@ const API = {
             else if (ts >= startLastWeek) lastWeekCount += 1;
         });
 
+        // Return the prepared value to the caller.
         return {
             todayDelta: todayCount - yesterdayCount,
             weekDelta: thisWeekCount - lastWeekCount
@@ -932,6 +1035,7 @@ const API = {
     countGeneratedReportsFromViolations(violations = []) {
         const list = Array.isArray(violations) ? violations : [];
         return list.filter((item) => {
+            // Choose the correct browser state branch before continuing.
             if (!item || typeof item !== 'object') return false;
             const status = String(item.status || '').trim().toLowerCase();
             return (
@@ -949,6 +1053,7 @@ const API = {
         const sortedViolations = [...violations].sort((a, b) => {
             const aTs = new Date(a.timestamp || 0).getTime();
             const bTs = new Date(b.timestamp || 0).getTime();
+            // Return the prepared value to the caller.
             return bTs - aTs;
         });
 
@@ -964,6 +1069,7 @@ const API = {
         );
         const totalReportCount = Math.max(backendReportCount, generatedReports);
 
+        // Return the prepared value to the caller.
         return {
             ...baseStats,
             total: sortedViolations.length,
@@ -999,7 +1105,9 @@ const API = {
 
         list.forEach((v) => {
             const vDate = new Date(v && v.timestamp ? v.timestamp : 0);
+            // Choose the correct browser state branch before continuing.
             if (!Number.isNaN(vDate.getTime())) {
+                // Choose the correct browser state branch before continuing.
                 if (vDate >= today) stats.today += 1;
                 if (vDate >= weekAgo) stats.thisWeek += 1;
             }
@@ -1010,11 +1118,13 @@ const API = {
             else stats.pending += 1;
 
             const severity = String((v && v.severity) || 'HIGH').toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (severity === 'high' || severity === 'critical') stats.severity.high += 1;
             else if (severity === 'medium') stats.severity.medium += 1;
             else stats.severity.low += 1;
         });
 
+        // Return the prepared value to the caller.
         return this.enrichStatsWithViolations(stats, list);
     },
 
@@ -1030,7 +1140,9 @@ const API = {
     isDashboardWarm(dataset, maxAgeMs = 90000) {
         const state = this.dashboardWarmupState || {};
         const completedAt = Number(state.completedAt || 0);
+        // Choose the correct browser state branch before continuing.
         if (!completedAt || (Date.now() - completedAt) > Math.max(1000, Number(maxAgeMs) || 90000)) {
+            // Return the prepared value to the caller.
             return false;
         }
         return !!(state.results && state.results[dataset]);
@@ -1042,6 +1154,7 @@ const API = {
         if (allWarm()) return true;
 
         const state = this.dashboardWarmupState || {};
+        // Choose the correct browser state branch before continuing.
         if (!state.promise || timeoutMs <= 0) return false;
 
         try {
@@ -1052,6 +1165,7 @@ const API = {
         } catch (_) {
             // Warmup is an optimization path; page loads still have their normal fetch path.
         }
+        // Return the prepared value to the caller.
         return allWarm();
     },
 
@@ -1061,6 +1175,7 @@ const API = {
         const force = !!options.force;
         const minIntervalMs = Math.max(5000, Number(options.minIntervalMs || 90000));
         if (state.promise) {
+            // Choose the correct browser state branch before continuing.
             if (!force) return state.promise;
             if (state.forceQueued) return state.promise;
             state.forceQueued = true;
@@ -1068,6 +1183,7 @@ const API = {
                 .catch(() => null)
                 .then(() => {
                     state.forceQueued = false;
+                    // Return the prepared value to the caller.
                     return this.warmDashboardCaches({
                         ...options,
                         force: true,
@@ -1075,7 +1191,9 @@ const API = {
                     });
                 });
         }
+        // Choose the correct browser state branch before continuing.
         if (!force && state.completedAt && (now - state.completedAt) < minIntervalMs) {
+            // Return the prepared value to the caller.
             return Promise.resolve(state.results || {});
         }
 
@@ -1088,9 +1206,11 @@ const API = {
             if (data && typeof data === 'object' && !data.error) {
                 state.results.stats = true;
             }
+            // Return the prepared value to the caller.
             return data;
         };
 
+        // Prepare warm violations for the next UI or data step.
         const warmViolations = async () => {
             const safeLimit = 1000;
             const list = await this.getViolations({
@@ -1099,9 +1219,11 @@ const API = {
                 timeoutMs
             });
             state.results.violations = true;
+            // Return the prepared value to the caller.
             return list;
         };
 
+        // Prepare warm pending for the next UI or data step.
         const warmPending = async () => {
             const list = await this.getPendingReports({
                 noCache: true,
@@ -1131,7 +1253,9 @@ const API = {
                             : String(item.result.reason || 'unknown')
                     }))
             };
+            // Keep this browser operation recoverable if it fails.
             try {
+                // Choose the correct browser state branch before continuing.
                 if (typeof window !== 'undefined') {
                     window.dispatchEvent(new CustomEvent('ppe-dashboard:warmup', { detail: summary }));
                 }
@@ -1144,6 +1268,7 @@ const API = {
             state.promise = null;
         });
 
+        // Return the prepared value to the caller.
         return state.promise;
     },
 
@@ -1155,6 +1280,7 @@ const API = {
         const key = this.getCacheStorageKey(scope);
 
         // 1. Always try IndexedDB first (primary)
+        // Choose the correct browser state branch before continuing.
         if (typeof IndexedDBManager !== 'undefined') {
             const success = await IndexedDBManager.setItem(key, envelope);
             if (success) return;
@@ -1172,6 +1298,7 @@ const API = {
         const key = this.getCacheStorageKey(scope);
 
         // 1. Try IndexedDB first
+        // Choose the correct browser state branch before continuing.
         if (typeof IndexedDBManager !== 'undefined') {
             const cached = await IndexedDBManager.getItem(key);
             if (cached) return cached;
@@ -1182,6 +1309,7 @@ const API = {
             const raw = localStorage.getItem(key);
             if (!raw) return null;
             const parsed = JSON.parse(raw);
+            // Choose the correct browser state branch before continuing.
             if (!parsed || typeof parsed !== 'object') return null;
 
             // Migration: Move to IndexedDB for next time if possible
@@ -1197,6 +1325,7 @@ const API = {
 
     async removeJsonCache(scope) {
         const key = this.getCacheStorageKey(scope);
+        // Choose the correct browser state branch before continuing.
         if (typeof IndexedDBManager !== 'undefined' && typeof IndexedDBManager.removeItem === 'function') {
             await IndexedDBManager.removeItem(key);
         }
@@ -1209,6 +1338,7 @@ const API = {
 
     async cacheReportHtml(reportId, sourceHint = null, options = {}) {
         const rid = String(reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!rid) return false;
         if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
         const inlineImages = !!(
@@ -1224,11 +1354,13 @@ const API = {
 
         const sourceScope = this.inferReportSourceScope(sourceHint);
         const cloudBase = this.getCloudBackendBaseUrl();
+        // Choose the correct browser state branch before continuing.
         if (
             (sourceScope === 'cloud' || sourceScope === 'synced_local' || sourceScope === 'shared')
             && !this.canUseRemoteCloudBackendFromPage(cloudBase)
             && !this.hasLocalReportArtifacts(sourceHint)
         ) {
+            // Return the prepared value to the caller.
             return false;
         }
 
@@ -1240,10 +1372,12 @@ const API = {
                 cache: 'no-store'
             }, 8000);
 
+            // Choose the correct browser state branch before continuing.
             if (!response || !response.ok) return false;
             const contentType = String(response.headers.get('content-type') || '').toLowerCase();
             const html = await response.text();
             if (!html || (!contentType.includes('text/html') && !/<html[\s>]/i.test(html))) {
+                // Return the prepared value to the caller.
                 return false;
             }
             if (/Cloud report details are unavailable while offline/i.test(html)) {
@@ -1262,6 +1396,7 @@ const API = {
                 html: cachedHtml,
                 cached_at: new Date().toISOString()
             });
+            // Return the prepared value to the caller.
             return true;
         } catch (error) {
             return false;
@@ -1271,17 +1406,20 @@ const API = {
     async inlineCachedReportImages(html, reportId, sourceHint = null, sourceUrl = '') {
         const raw = String(html || '');
         const rid = String(reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!raw || !rid || typeof DOMParser === 'undefined') return raw;
 
         let documentRef = null;
         try {
             documentRef = new DOMParser().parseFromString(raw, 'text/html');
         } catch (error) {
+            // Return the prepared value to the caller.
             return raw;
         }
         if (!documentRef || !documentRef.documentElement) return raw;
 
         const imageCache = new Map();
+        // Prepare resolve filename for the next UI or data step.
         const resolveFilename = (src) => {
             const rawSrc = String(src || '').trim();
             if (!rawSrc || /^data:/i.test(rawSrc)) return '';
@@ -1293,16 +1431,19 @@ const API = {
                 const idFromImageRoute = parts.length >= 3 && parts[0] === 'image'
                     ? String(parts[1] || '')
                     : '';
+                // Choose the correct browser state branch before continuing.
                 if (
                     (filename === 'original.jpg' || filename === 'annotated.jpg')
                     && (!idFromImageRoute || idFromImageRoute === rid)
                 ) {
+                    // Return the prepared value to the caller.
                     return filename;
                 }
             } catch (error) {
                 const match = rawSrc.match(/(?:^|\/)(original|annotated)\.jpg(?:[?#].*)?$/i);
                 if (match && match[1]) return `${match[1].toLowerCase()}.jpg`;
             }
+            // Return the prepared value to the caller.
             return '';
         };
 
@@ -1316,12 +1457,14 @@ const API = {
                 imageCache.set(filename, await this.fetchReportImageDataUrl(rid, filename, sourceHint));
             }
             const dataUrl = imageCache.get(filename);
+            // Choose the correct browser state branch before continuing.
             if (!dataUrl) return;
 
             img.setAttribute('data-casm-cached-src', originalSrc);
             img.setAttribute('src', dataUrl);
         }));
 
+        // Return the prepared value to the caller.
         return `<!DOCTYPE html>\n${documentRef.documentElement.outerHTML}`;
     },
 
@@ -1335,6 +1478,7 @@ const API = {
                 method: 'GET',
                 cache: 'no-store'
             }, 8000);
+            // Choose the correct browser state branch before continuing.
             if (!response || !response.ok) return '';
 
             const blob = await response.blob();
@@ -1346,7 +1490,9 @@ const API = {
     },
 
     blobToDataUrl(blob) {
+        // Return the prepared value to the caller.
         return new Promise((resolve) => {
+            // Keep this browser operation recoverable if it fails.
             try {
                 const reader = new FileReader();
                 reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
@@ -1360,6 +1506,7 @@ const API = {
 
     prepareCachedReportHtml(html, sourceUrl) {
         const raw = String(html || '');
+        // Choose the correct browser state branch before continuing.
         if (!raw) return raw;
         if (/<base\s/i.test(raw)) return raw;
 
@@ -1368,10 +1515,12 @@ const API = {
             const resolved = new URL(sourceUrl, window.location.origin);
             safeHref = `${resolved.origin}/`;
         } catch (error) {
+            // Return the prepared value to the caller.
             return raw;
         }
 
         const baseTag = `<base href="${safeHref}">`;
+        // Choose the correct browser state branch before continuing.
         if (/<head[^>]*>/i.test(raw)) {
             return raw.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
         }
@@ -1383,6 +1532,7 @@ const API = {
 
     reportNeedsEmbeddedImagesForOffline(sourceHint = null) {
         const scope = this.inferReportSourceScope(sourceHint);
+        // Return the prepared value to the caller.
         return scope === 'cloud'
             || scope === 'shared'
             || (
@@ -1393,11 +1543,14 @@ const API = {
 
     async getCachedReportHtml(reportId, sourceHint = null, options = {}) {
         const rid = String(reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!rid) return null;
         const cached = await this.readJsonCache(this.reportHtmlCacheScope(rid, sourceHint));
         if (cached && cached.data && typeof cached.data.html === 'string' && cached.data.html.trim()) {
+            // Choose the correct browser state branch before continuing.
             if (this.isCachedReportHtmlStaleForSource(cached.data, sourceHint)) {
                 await this.removeJsonCache(this.reportHtmlCacheScope(rid, sourceHint));
+                // Return the prepared value to the caller.
                 return null;
             }
             if (
@@ -1408,8 +1561,10 @@ const API = {
             ) {
                 return null;
             }
+            // Return the prepared value to the caller.
             return cached.data;
         }
+        // Return the prepared value to the caller.
         return null;
     },
 
@@ -1420,6 +1575,7 @@ const API = {
         if (!needsCloudAssets) return false;
 
         const cloudBase = this.getCloudBackendBaseUrl();
+        // Choose the correct browser state branch before continuing.
         if (!cloudBase || this.isLocalBackendBase(cloudBase)) return false;
 
         const cachedUrl = String((cachedReport && cachedReport.url) || '').trim();
@@ -1428,6 +1584,7 @@ const API = {
         try {
             const resolved = new URL(cachedUrl, window.location.origin);
             const cachedBase = this._normalizeBaseUrl(resolved.origin);
+            // Return the prepared value to the caller.
             return this.isLocalBackendBase(cachedBase);
         } catch (error) {
             return false;
@@ -1436,11 +1593,13 @@ const API = {
 
     async getCachedReportUrl(reportId, sourceHint = null, options = {}) {
         const cached = await this.getCachedReportHtml(reportId, sourceHint, options);
+        // Choose the correct browser state branch before continuing.
         if (!cached || !cached.html) return null;
 
         const rid = String(reportId || '').trim();
         const existing = this.reportHtmlObjectUrls.get(rid);
         if (existing) {
+            // Keep this browser operation recoverable if it fails.
             try { URL.revokeObjectURL(existing); } catch (error) {}
             this.reportHtmlObjectUrls.delete(rid);
         }
@@ -1448,6 +1607,7 @@ const API = {
         const blob = new Blob([cached.html], { type: 'text/html;charset=utf-8' });
         const objectUrl = URL.createObjectURL(blob);
         this.reportHtmlObjectUrls.set(rid, objectUrl);
+        // Return the prepared value to the caller.
         return objectUrl;
     },
 
@@ -1458,6 +1618,7 @@ const API = {
     },
 
     prefetchReportHtmlFromList(list = [], options = {}) {
+        // Choose the correct browser state branch before continuing.
         if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
         if (!Array.isArray(list) || !list.length) return;
 
@@ -1467,6 +1628,7 @@ const API = {
         const candidates = list
             .filter((item) => {
                 const reportId = String((item && item.report_id) || '').trim();
+                // Choose the correct browser state branch before continuing.
                 if (!reportId || seen.has(reportId)) return false;
                 seen.add(reportId);
                 if (state.completed.has(reportId) || state.inFlight.has(reportId)) return false;
@@ -1481,8 +1643,10 @@ const API = {
                     && !this.canUseRemoteCloudBackendFromPage(this.getCloudBackendBaseUrl())
                     && !this.hasLocalReportArtifacts(item)
                 ) {
+                    // Return the prepared value to the caller.
                     return false;
                 }
+                // Return the prepared value to the caller.
                 return scope === 'cloud' || scope === 'synced_local' || scope === 'shared';
             })
             .slice(0, limit);
@@ -1493,6 +1657,7 @@ const API = {
             setTimeout(() => {
                 this.cacheReportHtml(reportId, item)
                     .then((cached) => {
+                        // Choose the correct browser state branch before continuing.
                         if (cached) state.completed.add(reportId);
                     })
                     .catch(() => {
@@ -1506,7 +1671,9 @@ const API = {
     },
 
     dispatchLocalReportSyncUpdate(detail = {}) {
+        // Keep this browser operation recoverable if it fails.
         try {
+            // Choose the correct browser state branch before continuing.
             if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
                 window.dispatchEvent(new CustomEvent('ppe-local-report-sync:update', {
                     detail: {
@@ -1524,7 +1691,9 @@ const API = {
     },
 
     dispatchReportQueueUpdate(detail = {}) {
+        // Keep this browser operation recoverable if it fails.
         try {
+            // Choose the correct browser state branch before continuing.
             if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
                 window.dispatchEvent(new CustomEvent('ppe-report-queue:update', {
                     detail: {
@@ -1540,6 +1709,7 @@ const API = {
 
     async upsertPendingReportCache(record = {}) {
         const reportId = String((record && record.report_id) || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!reportId) return null;
 
         const sourceScope = this.inferReportSourceScope(record) || String(record.source_scope || '').trim().toLowerCase() || 'cloud';
@@ -1570,6 +1740,7 @@ const API = {
             const cached = await this.readJsonCache(cacheScope);
             const rows = cached && Array.isArray(cached.data) ? cached.data.slice() : [];
             const index = rows.findIndex((item) => String((item && item.report_id) || '').trim() === reportId);
+            // Choose the correct browser state branch before continuing.
             if (index >= 0) {
                 rows[index] = this.mergeOptimisticReportRecord(rows[index], pendingRow);
             } else {
@@ -1583,6 +1754,7 @@ const API = {
             report_id: reportId,
             report: pendingRow
         });
+        // Return the prepared value to the caller.
         return pendingRow;
     },
 
@@ -1593,13 +1765,16 @@ const API = {
     },
 
     async registerLocalReportBackgroundSync(reason = 'local-report-sync') {
+        // Keep this browser operation recoverable if it fails.
         try {
+            // Choose the correct browser state branch before continuing.
             if (
                 typeof navigator === 'undefined'
                 || typeof window === 'undefined'
                 || !navigator.serviceWorker
                 || !('SyncManager' in window)
             ) {
+                // Return the prepared value to the caller.
                 return false;
             }
             const registration = await navigator.serviceWorker.ready;
@@ -1607,6 +1782,7 @@ const API = {
                 return false;
             }
             await registration.sync.register(this.LOCAL_REPORT_SYNC_TAG);
+            // Return the prepared value to the caller.
             return true;
         } catch (error) {
             console.debug('Background Sync registration skipped:', reason, error);
@@ -1621,6 +1797,7 @@ const API = {
                 .filter(Boolean)
         ));
         const ids = await this.filterStrictLocalSyncReportIds(requestedIds);
+        // Choose the correct browser state branch before continuing.
         if (!ids.length) return [];
 
         const completedDetailIds = new Set([
@@ -1631,6 +1808,7 @@ const API = {
         const detailSyncState = String(detail.sync_state || '').trim();
         const detailSyncStateQueued = /queued|pending|retry/i.test(detailSyncState);
         const updateReport = (item) => {
+            // Choose the correct browser state branch before continuing.
             if (!item || !ids.includes(String(item.report_id || '').trim())) return item;
             if (!this.isStrictLocalOriginReport(item)) return item;
             const reportId = String(item.report_id || '').trim();
@@ -1653,8 +1831,10 @@ const API = {
             };
         };
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const drafts = await this.readLocalReportDrafts();
+            // Choose the correct browser state branch before continuing.
             if (drafts.length) {
                 await this.writeLocalReportDrafts(drafts.map(updateReport));
             }
@@ -1670,6 +1850,7 @@ const API = {
         ];
         await Promise.all(cacheScopes.map(async (scope) => {
             const cached = await this.readJsonCache(scope);
+            // Choose the correct browser state branch before continuing.
             if (!cached || !Array.isArray(cached.data)) return;
             await this.writeJsonCache(scope, cached.data.map(updateReport));
         }));
@@ -1684,6 +1865,7 @@ const API = {
             completed_report_ids: detail.completed_report_ids || (marksCompleted ? ids : []),
             synced_report_ids: detail.synced_report_ids || (marksCompleted ? ids : [])
         });
+        // Return the prepared value to the caller.
         return ids;
     },
 
@@ -1697,7 +1879,9 @@ const API = {
         ];
         await Promise.all(scopes.map((scope) => this.removeJsonCache(scope)));
 
+        // Keep this browser operation recoverable if it fails.
         try {
+            // Choose the correct browser state branch before continuing.
             if (
                 typeof navigator !== 'undefined'
                 && navigator.serviceWorker
@@ -1716,6 +1900,7 @@ const API = {
 
     async repairReportSourceCaches(reportId, patch = {}) {
         const rid = String(reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!rid) return;
 
         const scope = this.inferReportSourceScope({
@@ -1731,7 +1916,9 @@ const API = {
                         : 'Shared'
         );
 
+        // Prepare update record for the next UI or data step.
         const updateRecord = (item) => {
+            // Choose the correct browser state branch before continuing.
             if (!item || String(item.report_id || '').trim() !== rid) return item;
             const next = {
                 ...item,
@@ -1752,9 +1939,11 @@ const API = {
                 next.source_reason = patch.source_reason || 'manual_cloud_reprocess_fallback';
                 next.force_cloud_runtime = true;
             }
+            // Return the prepared value to the caller.
             return next;
         };
 
+        // Choose the correct browser state branch before continuing.
         if (scope === 'cloud') {
             try {
                 await this.removeLocalReportDraft(rid);
@@ -1771,6 +1960,7 @@ const API = {
         ];
         await Promise.all(cacheScopes.map(async (cacheScope) => {
             const cached = await this.readJsonCache(cacheScope);
+            // Choose the correct browser state branch before continuing.
             if (!cached || !Array.isArray(cached.data)) return;
             await this.writeJsonCache(cacheScope, cached.data.map(updateRecord));
         }));
@@ -1790,6 +1980,7 @@ const API = {
     async readLocalReportDrafts() {
         const cached = await this.readJsonCache(this.LOCAL_REPORT_DRAFTS_SCOPE);
         const drafts = cached && Array.isArray(cached.data) ? cached.data : [];
+        // Return the prepared value to the caller.
         return drafts
             .filter((draft) => draft && draft.report_id)
             .map((draft) => this.normalizeLocalReportDraft(draft))
@@ -1801,6 +1992,7 @@ const API = {
             ? drafts.map((draft) => this.normalizeLocalReportDraft(draft)).filter(Boolean)
             : [];
         await this.writeJsonCache(this.LOCAL_REPORT_DRAFTS_SCOPE, normalized);
+        // Return the prepared value to the caller.
         return normalized;
     },
 
@@ -1815,6 +2007,7 @@ const API = {
             || normalizedSyncState === 'cloud_completed'
             || normalizedSyncState === 'completed_synced'
         );
+        // Prepare final source scope for the next UI or data step.
         const finalSourceScope = (sourceScope === 'synced_local' || (syncFinished && this.hasCloudReportArtifactEvidence(draft)))
             ? 'synced_local'
             : sourceScope;
@@ -1845,6 +2038,7 @@ const API = {
     },
 
     isCompletedLocalReportDraftForCloudSync(draft = {}) {
+        // Choose the correct browser state branch before continuing.
         if (!draft || typeof draft !== 'object') return false;
         const status = String(draft.status || '').trim().toLowerCase();
         const syncState = String(draft.sync_state || '').trim().toLowerCase();
@@ -1864,6 +2058,7 @@ const API = {
             || draft.report_html_blob
             || draft.report_blob
         );
+        // Return the prepared value to the caller.
         return completed && hasReportArtifact;
     },
 
@@ -1886,6 +2081,7 @@ const API = {
 
         await this.writeLocalReportDrafts(Array.from(byId.values()));
         void this.registerLocalReportBackgroundSync('local draft upsert');
+        // Return the prepared value to the caller.
         return byId.get(normalized.report_id);
     },
 
@@ -1900,6 +2096,7 @@ const API = {
 
     revokeLocalDraftObjectUrl(reportId) {
         const rid = String(reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!rid || !this.localDraftObjectUrls.has(rid)) return;
         try {
             URL.revokeObjectURL(this.localDraftObjectUrls.get(rid));
@@ -1911,6 +2108,7 @@ const API = {
 
     scheduleLocalDraftObjectUrlRevoke(reportId, delayMs = 60000) {
         const rid = String(reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!rid || !this.localDraftObjectUrls.has(rid)) return;
         const timeoutMs = Math.max(5000, Math.min(Number(delayMs) || 60000, 180000));
         setTimeout(() => this.revokeLocalDraftObjectUrl(rid), timeoutMs);
@@ -1918,9 +2116,11 @@ const API = {
 
     attachLocalDraftImageUrls(drafts = []) {
         return drafts.map((draft) => {
+            // Choose the correct browser state branch before continuing.
             if (!draft || !draft.report_id) return draft;
             const blob = draft.annotated_blob || draft.original_blob || null;
             if (!blob || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+                // Return the prepared value to the caller.
                 return draft;
             }
 
@@ -1928,10 +2128,12 @@ const API = {
                 try {
                     this.localDraftObjectUrls.set(draft.report_id, URL.createObjectURL(blob));
                 } catch (e) {
+                    // Return the prepared value to the caller.
                     return draft;
                 }
             }
 
+            // Return the prepared value to the caller.
             return {
                 ...draft,
                 local_image_url: this.localDraftObjectUrls.get(draft.report_id),
@@ -1943,6 +2145,7 @@ const API = {
 
     async mergeLocalReportDrafts(list, maxLimit = 1000) {
         const drafts = this.attachLocalDraftImageUrls(await this.readLocalReportDrafts());
+        // Choose the correct browser state branch before continuing.
         if (!drafts.length) return Array.isArray(list) ? list : [];
         return this._mergeOptimistically(Array.isArray(list) ? list : [], drafts, maxLimit);
     },
@@ -1953,11 +2156,13 @@ const API = {
 
         const byId = new Map(list.map((item) => [String((item && item.report_id) || '').trim(), item]));
         const retained = [];
+        // Walk through the active items and update each one consistently.
         for (const draft of drafts) {
             const current = byId.get(draft.report_id);
             const sourceScope = String((current && current.source_scope) || '').trim().toLowerCase();
             const syncSource = String((current && (current.sync_source || current.source)) || '').trim().toLowerCase();
             const status = String((current && current.status) || '').trim().toLowerCase();
+            // Prepare synced for the next UI or data step.
             const synced = (
                 this.hasConfirmedSyncedLocalReport(current || {})
                 || (current && current.has_report && status === 'completed' && sourceScope !== 'local')
@@ -1968,6 +2173,7 @@ const API = {
                     && this.hasCloudReportArtifactEvidence(current)
                 )
             );
+            // Choose the correct browser state branch before continuing.
             if (synced) {
                 this.scheduleLocalDraftObjectUrlRevoke(draft.report_id);
                 continue;
@@ -1975,6 +2181,7 @@ const API = {
             retained.push(draft);
         }
 
+        // Choose the correct browser state branch before continuing.
         if (retained.length !== drafts.length) {
             await this.writeLocalReportDrafts(retained);
         }
@@ -1983,6 +2190,7 @@ const API = {
     stripLocalDraftRuntimeFields(list = []) {
         if (!Array.isArray(list)) return [];
         return list.map((item) => {
+            // Choose the correct browser state branch before continuing.
             if (!item || typeof item !== 'object') return item;
             const {
                 original_blob,
@@ -1998,9 +2206,12 @@ const API = {
         const scope = options.cacheScope || url;
         const cached = await this.readJsonCache(scope);
 
+        // Choose the correct browser state branch before continuing.
         if (cached && !options.noCache) {
             const age = Date.now() - cached.ts;
+            // Choose the correct browser state branch before continuing.
             if (age < (options.ttl || 300000)) {
+                // Return the prepared value to the caller.
                 return cached.data;
             }
         }
@@ -2012,15 +2223,18 @@ const API = {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || 8000);
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const response = await fetch(url, {
                 signal: controller.signal,
                 cache: options.preferFresh ? 'no-store' : 'default'
             });
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) throw new Error(`Request failed: ${response.status}`);
             const data = await response.json();
             if (data && !data.error) {
                 this.writeJsonCache(scope, data);
+                // Return the prepared value to the caller.
                 return data;
             }
             return data;
@@ -2039,11 +2253,13 @@ const API = {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || 12000);
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const response = await fetch(url, {
                 signal: controller.signal,
                 cache: 'no-store'
             });
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) throw new Error(`Request failed: ${response.status}`);
             const data = await response.json();
             if (options.cacheScope) {
@@ -2056,6 +2272,7 @@ const API = {
     },
 
     prefetchViolationImages(violations = []) {
+        // Choose the correct browser state branch before continuing.
         if (!Array.isArray(violations) || violations.length === 0) return;
         if (navigator.onLine === false) return;
 
@@ -2070,6 +2287,7 @@ const API = {
 
         const candidates = [];
         violations.slice(0, 12).forEach((violation) => {
+            // Choose the correct browser state branch before continuing.
             if (!violation || !violation.report_id) return;
             if (violation.local_image_url || String(violation.source_scope || '').toLowerCase() === 'local') return;
             if (
@@ -2077,6 +2295,7 @@ const API = {
                 && !this.canUseRemoteCloudBackendFromPage(this.getCloudBackendBaseUrl())
                 && !this.hasLocalReportArtifacts(violation)
             ) {
+                // Return the prepared value to the caller.
                 return;
             }
             if (violation.has_original) {
@@ -2085,6 +2304,7 @@ const API = {
                     url: this.getImageUrl(violation.report_id, 'original.jpg', violation)
                 });
             }
+            // Choose the correct browser state branch before continuing.
             if (violation.has_annotated) {
                 candidates.push({
                     key: `${violation.report_id}:annotated.jpg`,
@@ -2102,6 +2322,7 @@ const API = {
             setTimeout(() => {
                 fetch(item.url, { cache: 'force-cache' })
                     .then((response) => {
+                        // Choose the correct browser state branch before continuing.
                         if (response && response.ok) {
                             state.completed.add(item.key);
                         }
@@ -2117,6 +2338,7 @@ const API = {
     },
 
     mergeOptimisticReportRecord(existing = null, incoming = null) {
+        // Choose the correct browser state branch before continuing.
         if (!existing || typeof existing !== 'object') return incoming;
         if (!incoming || typeof incoming !== 'object') return existing;
 
@@ -2126,6 +2348,7 @@ const API = {
         };
 
         ['has_original', 'has_annotated', 'has_report', 'has_local_artifacts', 'has_local_report'].forEach((key) => {
+            // Choose the correct browser state branch before continuing.
             if (existing[key] === true || incoming[key] === true) {
                 merged[key] = true;
             }
@@ -2140,11 +2363,13 @@ const API = {
             'cloud_image_url',
             'cloud_report_url'
         ].forEach((key) => {
+            // Choose the correct browser state branch before continuing.
             if ((merged[key] === undefined || merged[key] === null || merged[key] === '') && existing[key]) {
                 merged[key] = existing[key];
             }
         });
 
+        // Prepare normalize status for the next UI or data step.
         const normalizeStatus = (record) => String(record && record.status || '').trim().toLowerCase();
         const hasReportEvidence = (record) => !!(
             record
@@ -2172,6 +2397,7 @@ const API = {
         );
         const existingUpdatedAt = new Date(existing.updated_at || existing.timestamp || 0).getTime() || 0;
         const incomingUpdatedAt = new Date(incoming.updated_at || incoming.timestamp || 0).getTime() || 0;
+        // Choose the correct browser state branch before continuing.
         if (
             existingTerminalNoReport
             && incomingInFlightNoReport
@@ -2226,6 +2452,7 @@ const API = {
             && !incomingStrongLocalDraft
             && !this.hasConfirmedSyncedLocalReport(incoming)
         );
+        // Prepare synced local for the next UI or data step.
         const syncedLocal = (
             existingScope === 'synced_local'
             || incomingScope === 'synced_local'
@@ -2237,6 +2464,7 @@ const API = {
             || this.hasConfirmedSyncedLocalReport(merged)
         );
 
+        // Choose the correct browser state branch before continuing.
         if (syncedLocal) {
             const existingStrictLocal = this.isStrictLocalOriginReport(existing);
             const incomingStrictLocal = this.isStrictLocalOriginReport(incoming);
@@ -2247,20 +2475,24 @@ const API = {
                 || (incomingConfirmedSynced && (incomingScope === 'synced_local' || incomingStrictLocal || incomingLabel.includes('local synced')))
             );
 
+            // Choose the correct browser state branch before continuing.
             if (!confirmedLocalSyncAnchor) {
                 const existingCloudAuthoritative = existingScope === 'cloud' && !existingStrictLocal;
                 const incomingCloudAuthoritative = incomingScope === 'cloud' && !incomingStrictLocal;
 
+                // Choose the correct browser state branch before continuing.
                 if (incomingCloudAuthoritative || existingCloudAuthoritative) {
                     const cloudSource = incomingCloudAuthoritative ? incoming : existing;
                     const cloudStatus = String(cloudSource.status || '').trim().toLowerCase();
                     const cloudInFlight = ['pending', 'queued', 'processing', 'generating'].includes(cloudStatus);
+                    // Choose the correct browser state branch before continuing.
                     if (cloudInFlight || !this.hasLocalReportArtifacts(cloudSource)) {
                         merged.source_scope = 'cloud';
                         merged.source_label = 'Cloud';
                         merged.origin = '';
                         merged.sync_source = '';
                         merged.source = '';
+                        // Return the prepared value to the caller.
                         return merged;
                     }
                 }
@@ -2270,10 +2502,12 @@ const API = {
             merged.source_label = 'Local Synced';
             merged.origin = merged.origin || existing.origin || incoming.origin || 'local_synced';
             merged.sync_source = merged.sync_source || existing.sync_source || incoming.sync_source || 'sync_local_cache';
+            // Return the prepared value to the caller.
             return merged;
         }
 
         const localAnchored = existingLocalAnchor || incomingLocalAnchor;
+        // Choose the correct browser state branch before continuing.
         if (!forceCloudRuntime && (existingScope === 'shared' || incomingScope === 'shared')) {
             merged.source_scope = 'shared';
             merged.source_label = 'Shared';
@@ -2290,9 +2524,11 @@ const API = {
             merged.source_label = existingProtectedScope === 'synced_local'
                 ? 'Local Synced'
                 : existingProtectedScope === 'shared' ? 'Shared' : 'Cloud';
+            // Return the prepared value to the caller.
             return merged;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (!forceCloudRuntime && existingScope === 'local' && !existingLocalAnchor && incomingProtectedScope) {
             merged.source_scope = incomingProtectedScope;
             merged.source_label = incomingProtectedScope === 'synced_local'
@@ -2304,9 +2540,11 @@ const API = {
         if (!forceCloudRuntime && localAnchored && (existingScope === 'local' || incomingScope === 'local')) {
             merged.source_scope = 'local';
             merged.source_label = 'Local';
+            // Return the prepared value to the caller.
             return merged;
         }
 
+        // Return the prepared value to the caller.
         return merged;
     },
 
@@ -2316,6 +2554,7 @@ const API = {
         const byId = new Map();
 
         listA.forEach(v => {
+            // Choose the correct browser state branch before continuing.
             if (v && v.report_id) byId.set(v.report_id, v);
         });
         listB.forEach(v => {
@@ -2328,8 +2567,10 @@ const API = {
         merged.sort((a, b) => {
             const aTime = new Date(a.timestamp || 0).getTime();
             const bTime = new Date(b.timestamp || 0).getTime();
+            // Return the prepared value to the caller.
             return bTime - aTime;
         });
+        // Return the prepared value to the caller.
         return merged.slice(0, maxLimit);
     },
 
@@ -2347,11 +2588,14 @@ const API = {
         const skipRemoteMerge = !!options.skipRemoteMerge;
         const cacheScope = `violations:limit:${safeLimit}`;
 
+        // Choose the correct browser state branch before continuing.
         if (!noCache) {
             const cached = await this.readJsonCache(cacheScope);
+            // Choose the correct browser state branch before continuing.
             if (cached && Array.isArray(cached.data)) {
                 const merged = await this.mergeLocalReportDrafts(cached.data, safeLimit);
                 this.prefetchReportHtmlFromList(merged, { limit: 24 });
+                // Return the prepared value to the caller.
                 return merged;
             }
         }
@@ -2367,6 +2611,7 @@ const API = {
                 try {
                     const cloudUrl = `${cloudUrlBase}${API_CONFIG.ENDPOINTS.VIOLATIONS}?limit=${safeLimit}`;
                     const cloudData = await this.fetchJsonNoCache(cloudUrl, { timeoutMs: 5000 });
+                    // Choose the correct browser state branch before continuing.
                     if (Array.isArray(cloudData)) {
                         list = this._mergeOptimistically(cloudData, list, safeLimit);
                     }
@@ -2386,6 +2631,7 @@ const API = {
             this.writeJsonCache(cacheScope, this.stripLocalDraftRuntimeFields(list));
             this.prefetchViolationImages(list);
             this.prefetchReportHtmlFromList(list, { limit: 40 });
+            // Return the prepared value to the caller.
             return list;
         } catch (error) {
             this.logFetchFailure('Error fetching violations', error);
@@ -2393,10 +2639,12 @@ const API = {
             if (cached && Array.isArray(cached.data)) {
                 const merged = await this.mergeLocalReportDrafts(cached.data, safeLimit);
                 this.prefetchReportHtmlFromList(merged, { limit: 24 });
+                // Return the prepared value to the caller.
                 return merged;
             }
             const merged = await this.mergeLocalReportDrafts([], safeLimit);
             this.prefetchReportHtmlFromList(merged, { limit: 24 });
+            // Return the prepared value to the caller.
             return merged;
         }
     },
@@ -2408,6 +2656,7 @@ const API = {
             const base = this.getReportBackendBase(sourceHint);
             const baseKey = base || 'same-origin';
             const url = this.buildReportScopedUrl(`/api/violation/${reportId}`, sourceHint);
+            // Return the prepared value to the caller.
             return await this.fetchJsonWithCache(url, {
                 cacheScope: `violation:${baseKey}:${reportId}`
             });
@@ -2429,8 +2678,10 @@ const API = {
         const baseKey = base || 'same-origin';
         const cacheScope = `report-status:${baseKey}:${reportId}`;
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const url = this.buildReportScopedUrl(`/api/report/${reportId}/status`, sourceHint);
+            // Return the prepared value to the caller.
             return noCache
                 ? await this.fetchJsonNoCache(url, { cacheScope, timeoutMs })
                 : await this.fetchJsonWithCache(url, { cacheScope, timeoutMs });
@@ -2438,10 +2689,13 @@ const API = {
             this.logFetchFailure('Error fetching report status', error);
             if (noCache) {
                 const cached = await this.readJsonCache(cacheScope);
+                // Choose the correct browser state branch before continuing.
                 if (cached && cached.data && typeof cached.data === 'object') {
+                    // Return the prepared value to the caller.
                     return cached.data;
                 }
             }
+            // Return the prepared value to the caller.
             return { status: 'unknown', message: 'Unable to check status' };
         }
     },
@@ -2456,9 +2710,12 @@ const API = {
         const skipRemoteMerge = !!options.skipRemoteMerge;
         const cacheScope = 'reports:pending';
 
+        // Choose the correct browser state branch before continuing.
         if (!noCache) {
             const cached = await this.readJsonCache(cacheScope);
+            // Choose the correct browser state branch before continuing.
             if (cached && Array.isArray(cached.data)) {
+                // Return the prepared value to the caller.
                 return await this.mergeLocalReportDrafts(cached.data, 100);
             }
         }
@@ -2474,6 +2731,7 @@ const API = {
                 try {
                     const cloudUrl = `${cloudUrlBase}/api/reports/pending`;
                     const cloudData = await this.fetchJsonNoCache(cloudUrl, { timeoutMs: 5000 });
+                    // Choose the correct browser state branch before continuing.
                     if (Array.isArray(cloudData)) {
                         list = this._mergeOptimistically(cloudData, list, 100);
                     }
@@ -2483,6 +2741,7 @@ const API = {
             }
 
             const cached = await this.readJsonCache(cacheScope);
+            // Choose the correct browser state branch before continuing.
             if (cached && Array.isArray(cached.data)) {
                 list = this._mergeOptimistically(cached.data, list, 100);
             }
@@ -2493,7 +2752,9 @@ const API = {
         } catch (error) {
             this.logFetchFailure('Error fetching pending reports', error);
             const cached = await this.readJsonCache(cacheScope);
+            // Choose the correct browser state branch before continuing.
             if (cached && Array.isArray(cached.data)) {
+                // Return the prepared value to the caller.
                 return await this.mergeLocalReportDrafts(cached.data, 100);
             }
             return await this.mergeLocalReportDrafts([], 100);
@@ -2505,7 +2766,9 @@ const API = {
         const currentBase = this._normalizeBaseUrl(API_CONFIG.BASE_URL || '');
         const cloudBase = this.getCloudBackendBaseUrl();
         const localBase = this.getLocalBackendBaseUrl();
+        // Choose the correct browser state branch before continuing.
         if (cloudBase && this.isLocalBackendBase(currentBase)) {
+            // Keep this browser operation recoverable if it fails.
             try {
                 const safeLimit = 5000;
                 const urls = [
@@ -2518,9 +2781,11 @@ const API = {
                     urls.map((url) => this.fetchJsonNoCache(url, { timeoutMs: 9000 }))
                 );
 
+                // Prepare merged for the next UI or data step.
                 let merged = [];
                 let cachedCloudRows = [];
                 results.forEach((result) => {
+                    // Choose the correct browser state branch before continuing.
                     if (result.status === 'fulfilled' && Array.isArray(result.value)) {
                         merged = this._mergeOptimistically(merged, result.value, safeLimit);
                     }
@@ -2530,8 +2795,10 @@ const API = {
                     'violations:limit:1000',
                     'violations:limit:100'
                 ];
+                // Walk through the active items and update each one consistently.
                 for (const scope of cachedScopes) {
                     const cached = await this.readJsonCache(scope);
+                    // Choose the correct browser state branch before continuing.
                     if (cached && Array.isArray(cached.data)) {
                         merged = this._mergeOptimistically(merged, cached.data, safeLimit);
                         cachedCloudRows = this._mergeOptimistically(cachedCloudRows, cached.data, safeLimit);
@@ -2551,12 +2818,15 @@ const API = {
                             })
                         }, 9000);
                         const mergedStats = await mergeResponse.json().catch(() => null);
+                        // Choose the correct browser state branch before continuing.
                         if (mergeResponse.ok && mergedStats && typeof mergedStats === 'object' && !mergedStats.error) {
+                            // Return the prepared value to the caller.
                             return this.enrichStatsWithViolations(mergedStats, merged);
                         }
                     } catch (backendMergeError) {
                         console.warn('Local backend cached stats merge unavailable, using browser aggregate:', backendMergeError && backendMergeError.message ? backendMergeError.message : backendMergeError);
                     }
+                    // Return the prepared value to the caller.
                     return this.calculateStatsFromViolations(merged);
                 }
             } catch (unifiedError) {
@@ -2564,12 +2834,14 @@ const API = {
             }
         }
 
+        // Keep this browser operation recoverable if it fails.
         try {
             // Try fetching pre-calculated stats from backend first (includes breakdown & deltas)
             const data = await this.fetchJsonWithCache(`${API_CONFIG.BASE_URL}/api/stats`, {
                 cacheScope: 'stats:summary',
                 timeoutMs: 9000
             });
+            // Choose the correct browser state branch before continuing.
             if (data && typeof data === 'object') {
                 const needsEnrichment =
                     data.todayDelta === undefined ||
@@ -2577,7 +2849,9 @@ const API = {
                     !data.breakdown ||
                     !data.recentViolations;
 
+                // Choose the correct browser state branch before continuing.
                 if (!needsEnrichment) {
+                    // Return the prepared value to the caller.
                     return data;
                 }
 
@@ -2589,8 +2863,10 @@ const API = {
             console.warn('Backend stats endpoint failed, falling back to client-side calc:', e);
         }
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const violations = await this.getViolations({ limit: 1000 });
+            // Return the prepared value to the caller.
             return this.calculateStatsFromViolations(violations);
         } catch (error) {
             this.logFetchFailure('Error calculating stats', error);
@@ -2626,7 +2902,9 @@ const API = {
         const currentBase = this._normalizeBaseUrl(API_CONFIG.BASE_URL || '');
         const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
 
+        // Choose the correct browser state branch before continuing.
         if (scope === 'cloud' && this.isCloudReportUnavailableOffline(sourceHint)) {
+            // Return the prepared value to the caller.
             return cloudBase ? `${cloudBase}${path}` : this.getReportUrl(reportId, sourceHint);
         }
 
@@ -2638,11 +2916,13 @@ const API = {
             return `${localBase || currentBase || ''}${path}`;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (
             scope === 'synced_local'
             && this.isPageServedFromLocalHost()
             && this.hasConcreteLocalReportArtifacts(sourceHint)
         ) {
+            // Return the prepared value to the caller.
             return `${localBase || currentBase || ''}${path}`;
         }
 
@@ -2650,6 +2930,7 @@ const API = {
             return `${cloudBase}${path}`;
         }
 
+        // Return the prepared value to the caller.
         return this.getReportUrl(reportId, sourceHint);
     },
 
@@ -2659,8 +2940,10 @@ const API = {
         const sourceScope = this.inferReportSourceScope(sourceHint);
         const cloudBase = this.getCloudBackendBaseUrl();
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            // Return the prepared value to the caller.
             return { success: false, skipped_offline: true, html_cached: false };
         }
+        // Choose the correct browser state branch before continuing.
         if (
             (sourceScope === 'cloud' || sourceScope === 'synced_local' || sourceScope === 'shared')
             && !this.canUseRemoteCloudBackendFromPage(cloudBase)
@@ -2678,7 +2961,9 @@ const API = {
                 offlineComplete: options.offlineComplete === true,
                 inlineImages: options.inlineImages === true
             });
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) {
+                // Return the prepared value to the caller.
                 return { success: htmlCached, html_cached: htmlCached, error: `Prefetch failed: ${response.status}` };
             }
             const data = await response.json().catch(() => ({}));
@@ -2690,6 +2975,7 @@ const API = {
                 offlineComplete: options.offlineComplete === true,
                 inlineImages: options.inlineImages === true
             });
+            // Return the prepared value to the caller.
             return {
                 success: htmlCached,
                 html_cached: htmlCached,
@@ -2702,6 +2988,7 @@ const API = {
     async getLogs(limit = 50, eventType = null) {
         try {
             let url = `${API_CONFIG.BASE_URL}/api/logs?limit=${limit}`;
+            // Choose the correct browser state branch before continuing.
             if (eventType) url += `&event_type=${eventType}`;
             const data = await this.fetchJsonWithCache(url, {
                 cacheScope: `logs:${limit}:${eventType || 'all'}`,
@@ -2715,12 +3002,14 @@ const API = {
     },
 
     async getDeviceStats(deviceId) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const url = `${API_CONFIG.BASE_URL}/api/device/${deviceId}/stats`;
             const data = await this.fetchJsonWithCache(url, {
                 cacheScope: `device-stats:${deviceId}`,
                 timeoutMs: 9000
             });
+            // Return the prepared value to the caller.
             return data && typeof data === 'object' ? data : {};
         } catch (error) {
             this.logFetchFailure('Error fetching device stats', error);
@@ -2735,6 +3024,7 @@ const API = {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }
             });
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) throw new Error('Failed to trigger reprocess');
             return await response.json();
         } catch (error) {
@@ -2744,6 +3034,7 @@ const API = {
     },
 
     async generateReportNow(reportId, options = {}) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const sourceHint = options.source || options.violation || options.sourceHint || null;
             const sourceScope = sourceHint ? this.inferReportSourceScope(sourceHint) : '';
@@ -2752,6 +3043,7 @@ const API = {
                 ? this.buildReportScopedUrl(requestPath, sourceHint)
                 : `${API_CONFIG.BASE_URL}${requestPath}`;
             const cloudUrl = this.getCloudReportScopedUrl(requestPath);
+            // Prepare local route unavailable for the next UI or data step.
             const localRouteUnavailable = (
                 this.isLocalBackendBase(primaryUrl)
                 && !this.canUseLocalBackendFromPage(primaryUrl)
@@ -2770,6 +3062,7 @@ const API = {
                         || sourceExplicitScope === 'synced_local'
                         || sourceLabelText.includes('local synced')
                     );
+                // Return the prepared value to the caller.
                 return JSON.stringify({
                     force: !!options.force,
                     source_scope: effectiveScope || undefined,
@@ -2781,6 +3074,7 @@ const API = {
                         : (sourceHint && (sourceHint.sync_source || sourceHint.source) ? (sourceHint.sync_source || sourceHint.source) : undefined)
                 });
             };
+            // Prepare submit for the next UI or data step.
             const submit = async (url, scopeOverride = '') => fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -2793,9 +3087,11 @@ const API = {
                 response = await submit(cloudUrl, 'cloud');
                 usedCloudFallback = true;
             } else {
+                // Keep this browser operation recoverable if it fails.
                 try {
                     response = await submit(primaryUrl);
                 } catch (primaryError) {
+                    // Choose the correct browser state branch before continuing.
                     if (
                         this.isExpectedOfflineFetchError(primaryError)
                         && this.isLocalBackendBase(primaryUrl)
@@ -2810,7 +3106,9 @@ const API = {
                 }
             }
             const data = await response.json().catch(() => ({}));
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) {
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     error: data.error || 'Failed to trigger priority generation',
@@ -2826,6 +3124,7 @@ const API = {
                 ...data,
                 routed_via_cloud_fallback: !!(usedCloudFallback || data.routed_via_cloud_fallback)
             };
+            // Choose the correct browser state branch before continuing.
             if (result.source_scope === 'cloud' || result.routed_via_cloud_fallback) {
                 await this.repairReportSourceCaches(reportId, {
                     ...(sourceHint && typeof sourceHint === 'object' ? sourceHint : {}),
@@ -2838,6 +3137,7 @@ const API = {
                     force_cloud_runtime: true
                 });
             }
+            // Return the prepared value to the caller.
             return result;
         } catch (error) {
             this.logFetchFailure('Error triggering priority generation', error);
@@ -2846,8 +3146,10 @@ const API = {
     },
 
     async getProviderRoutingSettings() {
+        // Keep this browser operation recoverable if it fails.
         try {
             const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/provider-routing`);
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) throw new Error('Failed to fetch provider routing settings');
             return await response.json();
         } catch (error) {
@@ -2857,12 +3159,14 @@ const API = {
     },
 
     async updateProviderRoutingSettings(settings) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/provider-routing`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(settings)
             });
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) throw new Error('Failed to update provider routing settings');
             return await response.json();
         } catch (error) {
@@ -2872,8 +3176,10 @@ const API = {
     },
 
     async getDiskSpaceStatus() {
+        // Keep this browser operation recoverable if it fails.
         try {
             const response = await fetch(`${API_CONFIG.BASE_URL}/api/settings/disk-space-status`);
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) throw new Error('Failed to fetch disk space status');
             return await response.json();
         } catch (error) {
@@ -2883,9 +3189,11 @@ const API = {
     },
 
     async getReliabilityStats(windowSize = 50) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const safeWindow = Number.isFinite(Number(windowSize)) ? Number(windowSize) : 50;
             const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.RELIABILITY_STATS}?window=${safeWindow}`);
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) throw new Error('Failed to fetch reliability stats');
             return await response.json();
         } catch (error) {
@@ -2895,10 +3203,12 @@ const API = {
     },
 
     async getProviderRuntimeStatus() {
+        // Keep this browser operation recoverable if it fails.
         try {
             const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.PROVIDER_RUNTIME_STATUS}`, {
                 cache: 'no-store'
             });
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) throw new Error('Failed to fetch provider runtime status');
             return await response.json();
         } catch (error) {
@@ -2908,11 +3218,13 @@ const API = {
     },
 
     async getReportRecoveryOptions(options = {}) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const machineId = String(
                 (options && (options.machineId || options.machine_id)) || ''
             ).trim();
             const query = new URLSearchParams();
+            // Choose the correct browser state branch before continuing.
             if (machineId) {
                 query.set('machine_id', machineId);
             }
@@ -2926,6 +3238,7 @@ const API = {
             const response = await this._fetchWithTimeout(endpoint, {
                 cache: 'no-store'
             }, 12000);
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) throw new Error('Failed to fetch recovery options');
             return await response.json();
         } catch (error) {
@@ -2935,8 +3248,10 @@ const API = {
     },
 
     async executeReportRecovery(mode, reportIds = null) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const payload = { mode };
+            // Choose the correct browser state branch before continuing.
             if (Array.isArray(reportIds) && reportIds.length > 0) {
                 payload.report_ids = reportIds;
             }
@@ -2948,6 +3263,7 @@ const API = {
             });
 
             const data = await response.json().catch(() => ({}));
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) {
                 throw new Error(data.error || 'Failed to execute report recovery');
             }
@@ -2959,6 +3275,7 @@ const API = {
     },
 
     async prepareLocalMode(options = {}) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const payload = {
                 auto_pull: options.autoPull !== false,
@@ -2974,7 +3291,9 @@ const API = {
             }, Math.max(15000, (Number(payload.pull_timeout_seconds) || 60) * 1000 + 5000));
 
             const data = await response.json().catch(() => ({}));
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) {
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     ...data,
@@ -2984,16 +3303,19 @@ const API = {
             return data;
         } catch (error) {
             this.logFetchFailure('Error preparing local mode', error);
+            // Return the prepared value to the caller.
             return { success: false, error: error.message };
         }
     },
 
     async autoProvisionLocalModeCredentials(options = {}) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const payload = {};
             if (options.cloudUrl) {
                 payload.cloud_url = String(options.cloudUrl).trim();
             }
+            // Choose the correct browser state branch before continuing.
             if (options.provision_secret) {
                 payload.provision_secret = String(options.provision_secret).trim();
             }
@@ -3005,7 +3327,9 @@ const API = {
             }, 45000);
 
             const data = await response.json().catch(() => ({}));
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) {
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     ...data,
@@ -3016,16 +3340,19 @@ const API = {
             return data;
         } catch (error) {
             this.logFetchFailure('Error auto-provisioning local mode credentials', error);
+            // Return the prepared value to the caller.
             return { success: false, error: error.message };
         }
     },
 
     async requestCloudProvisioningApproval(options = {}) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const machineId = String(
                 (options && (options.machineId || options.machine_id)) || ''
             ).trim();
             if (!machineId) {
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     error: 'machine_id is required to request provisioning approval'
@@ -3042,6 +3369,7 @@ const API = {
             ).trim();
 
             const body = { machine_id: machineId };
+            // Choose the correct browser state branch before continuing.
             if (currentSecret) {
                 body.current_provision_secret = currentSecret;
             }
@@ -3053,7 +3381,9 @@ const API = {
             }, 35000);
 
             const data = await response.json().catch(() => ({}));
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) {
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     ...data,
@@ -3066,7 +3396,9 @@ const API = {
             const rawDeviceStatus = String(
                 (data && (data.device_status || data.provisioning_status)) || rawRequestStatus || ''
             ).trim().toLowerCase();
+            // Prepare normalized device status for the next UI or data step.
             const normalizedDeviceStatus = (() => {
+                // Choose the correct browser state branch before continuing.
                 if (rawDeviceStatus === 'pending' || rawDeviceStatus === 'pending_approval') return 'pending_approval';
                 if (rawDeviceStatus === 'approved') return 'approved';
                 if (rawDeviceStatus === 'provisioned') return 'provisioned';
@@ -3076,6 +3408,7 @@ const API = {
                 return rawDeviceStatus || 'idle';
             })();
 
+            // Return the prepared value to the caller.
             return {
                 success: true,
                 ...data,
@@ -3090,6 +3423,7 @@ const API = {
     },
 
     async getCloudProvisioningStatus(options = {}) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const machineId = String(
                 (options && (options.machineId || options.machine_id)) || ''
@@ -3098,7 +3432,9 @@ const API = {
                 (options && (options.provisionSecret || options.provision_secret)) || ''
             ).trim();
 
+            // Choose the correct browser state branch before continuing.
             if (!machineId) {
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     error: 'machine_id is required to fetch cloud provisioning status'
@@ -3113,9 +3449,11 @@ const API = {
                 };
             }
 
+            // Prepare build status url for the next UI or data step.
             const buildStatusUrl = (includeSecretInQuery = false) => {
                 const query = new URLSearchParams();
                 query.set('machine_id', machineId);
+                // Choose the correct browser state branch before continuing.
                 if (includeSecretInQuery) {
                     query.set('provision_secret', provisionSecret);
                 }
@@ -3123,6 +3461,7 @@ const API = {
             };
 
             let response;
+            // Keep this browser operation recoverable if it fails.
             try {
                 response = await this._fetchWithTimeout(buildStatusUrl(false), {
                     cache: 'no-store',
@@ -3140,7 +3479,9 @@ const API = {
             const data = await response.json().catch(() => ({}));
             const status = String((data && data.status) || '').trim().toLowerCase();
 
+            // Choose the correct browser state branch before continuing.
             if (response.status === 403 && status === 'rejected') {
+                // Return the prepared value to the caller.
                 return {
                     success: true,
                     ...data,
@@ -3159,6 +3500,7 @@ const API = {
                 };
             }
 
+            // Return the prepared value to the caller.
             return {
                 success: true,
                 ...data,
@@ -3172,11 +3514,13 @@ const API = {
     },
 
     async getLocalModeProvisioningStatus(options = {}) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const machineId = String(
                 (options && (options.machineId || options.machine_id)) || ''
             ).trim();
             const query = new URLSearchParams();
+            // Choose the correct browser state branch before continuing.
             if (machineId) {
                 query.set('machine_id', machineId);
             }
@@ -3188,7 +3532,9 @@ const API = {
                 cache: 'no-store'
             }, 12000);
             const data = await response.json().catch(() => ({}));
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) {
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     ...data,
@@ -3198,12 +3544,14 @@ const API = {
             return data;
         } catch (error) {
             this.logFetchFailure('Error fetching local provisioning status', error);
+            // Return the prepared value to the caller.
             return { success: false, error: error.message };
         }
     },
 
     async switchPipelineMode(mode) {
         const normalized = String(mode || '').trim().toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (normalized !== 'local' && normalized !== 'cloud') {
             return { success: false, error: 'Mode must be either local or cloud' };
         }
@@ -3228,7 +3576,9 @@ const API = {
             const localLoopbackBlocked = this.isLocalBackendBase(syncBase)
                 && !this.canUseLocalBackendFromPage(syncBase)
                 && options.allowBrowserLoopback !== true;
+            // Choose the correct browser state branch before continuing.
             if (localLoopbackBlocked) {
+                // Return the prepared value to the caller.
                 return {
                     success: true,
                     skipped_browser_loopback_blocked: true,
@@ -3242,7 +3592,9 @@ const API = {
                     queued_report_ids: []
                 };
             }
+            // Choose the correct browser state branch before continuing.
             if (typeof navigator !== 'undefined' && navigator.onLine === false && !dryRun) {
+                // Return the prepared value to the caller.
                 return {
                     success: true,
                     skipped_offline: true,
@@ -3257,12 +3609,16 @@ const API = {
                 };
             }
 
+            // Choose the correct browser state branch before continuing.
             if (!dryRun && options.skipCandidateCheck !== true) {
                 const candidates = await this.getLocalSyncCandidateSummary();
+                // Choose the correct browser state branch before continuing.
                 if (!candidates.count) {
+                    // Prepare backend candidates for the next UI or data step.
                     let backendCandidates = 0;
                     let backendCandidateProbe = null;
                     if (options.backendCandidateCheck !== false) {
+                        // Keep this browser operation recoverable if it fails.
                         try {
                             const probeResponse = await this._fetchWithTimeout(`${syncBase}/api/reports/sync-local-cache`, {
                                 method: 'POST',
@@ -3278,6 +3634,7 @@ const API = {
                                 })
                             }, Number(options.candidateTimeoutMs || 12000));
                             backendCandidateProbe = await probeResponse.json().catch(() => ({}));
+                            // Choose the correct browser state branch before continuing.
                             if (probeResponse.ok && backendCandidateProbe && backendCandidateProbe.success !== false) {
                                 backendCandidates = Number(backendCandidateProbe.candidates || 0);
                             }
@@ -3286,7 +3643,9 @@ const API = {
                         }
                     }
 
+                    // Choose the correct browser state branch before continuing.
                     if (backendCandidates <= 0) {
+                        // Return the prepared value to the caller.
                         return {
                             success: true,
                             skipped_no_local_candidates: true,
@@ -3318,7 +3677,9 @@ const API = {
             }, Number(options.timeoutMs || 30000));
 
             const data = await response.json().catch(() => ({}));
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) {
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     ...data,
@@ -3330,6 +3691,7 @@ const API = {
                 ...(Array.isArray(data.completed_report_ids) ? data.completed_report_ids : [])
             ];
             const strictReportIds = await this.filterStrictLocalSyncReportIds(reportIds);
+            // Choose the correct browser state branch before continuing.
             if (strictReportIds.length) {
                 await this.markReportsAsLocalSynced(strictReportIds, {
                     ...data,
@@ -3340,6 +3702,7 @@ const API = {
                     sync_state: 'cloud_completed'
                 });
             }
+            // Return the prepared value to the caller.
             return data;
         } catch (error) {
             console.warn('Local cache sync skipped or failed:', error && error.message ? error.message : error);
@@ -3353,6 +3716,7 @@ const API = {
         const reason = String(options.reason || '').trim() || 'browser_reconnect';
         const force = !!options.force;
         const retryWindowMs = Math.max(15000, Number(options.retryWindowMs || 120000));
+        // Prepare drafts for the next UI or data step.
         const drafts = (await this.readLocalReportDrafts())
             .filter((draft) => this.isStrictLocalOriginReport(draft));
         const now = Date.now();
@@ -3364,7 +3728,9 @@ const API = {
         const completedReportIds = [];
         const errors = [];
 
+        // Walk through the active items and update each one consistently.
         for (const draft of drafts) {
+            // Choose the correct browser state branch before continuing.
             if (attempted >= limit) break;
             if (!draft || !draft.report_id || !draft.original_blob) {
                 skipped += 1;
@@ -3377,6 +3743,7 @@ const API = {
             }
 
             const syncState = String(draft.sync_state || '').toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (['synced', 'cloud_completed'].includes(syncState)) {
                 skipped += 1;
                 continue;
@@ -3408,6 +3775,7 @@ const API = {
             form.append('metadata', JSON.stringify(metadata));
             form.append('image', draft.original_blob, `${draft.report_id}.jpg`);
 
+            // Keep this browser operation recoverable if it fails.
             try {
                 const response = await this._fetchWithTimeout(
                     `${API_CONFIG.BASE_URL}/api/reports/local-draft-handoff`,
@@ -3418,6 +3786,7 @@ const API = {
                     Number(options.timeoutMs || 25000)
                 );
                 const data = await response.json().catch(() => ({}));
+                // Choose the correct browser state branch before continuing.
                 if (!response.ok || data.success === false) {
                     throw new Error(data.error || 'Local draft handoff failed');
                 }
@@ -3429,6 +3798,7 @@ const API = {
                     continue;
                 }
 
+                // Choose the correct browser state branch before continuing.
                 if (data.queued) {
                     queued += 1;
                     queuedReportIds.push(draft.report_id);
@@ -3445,6 +3815,7 @@ const API = {
                     handoff_attempted_at: new Date().toISOString(),
                     status: data.queued ? 'pending' : (draft.status || 'pending')
                 });
+                // Choose the correct browser state branch before continuing.
                 if (!data.queued) queuedReportIds.push(draft.report_id);
             } catch (error) {
                 errors.push(`${draft.report_id}: ${error.message}`);
@@ -3461,6 +3832,7 @@ const API = {
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (completedReportIds.length) {
             await this.markReportsAsLocalSynced(completedReportIds, {
                 origin: 'local_synced',
@@ -3473,6 +3845,7 @@ const API = {
             });
         }
 
+        // Return the prepared value to the caller.
         return {
             success: errors.length === 0,
             attempted,
@@ -3486,6 +3859,7 @@ const API = {
     },
 
     getRealtimeStreamUrl() {
+        // Return the prepared value to the caller.
         return `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.REALTIME_STREAM}`;
     },
 
@@ -3502,6 +3876,7 @@ const API = {
     }
 };
 
+// Keep this browser operation recoverable if it fails.
 try {
     window.API = window.API || API;
 } catch (e) {

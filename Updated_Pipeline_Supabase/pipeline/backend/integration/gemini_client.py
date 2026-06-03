@@ -14,6 +14,7 @@ Usage:
     caption = client.caption_image("path/to/image.jpg")
     report_json = client.generate_report_json(prompt)
 """
+# Readability: Integration module: isolate external model/provider calls behind stable helpers.
 
 import logging
 import json
@@ -24,6 +25,7 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional, Union, List
 
+# Prepare logger for the next step.
 logger = logging.getLogger(__name__)
 GEMINI_REQUIRED_BY_DEFAULT = str(os.getenv('GEMINI_REQUIRED', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
 DEFAULT_GEMINI_MODEL_CANDIDATES = (
@@ -34,11 +36,13 @@ DEFAULT_GEMINI_MODEL_CANDIDATES = (
 )
 
 # Try to import the Google GenAI SDK
+# Prepare gemini available for the next step.
 GEMINI_AVAILABLE = False
 GEMINI_ERROR = None
 try:
     from google import genai
     from google.genai import types
+    # Prepare gemini available for the next step.
     GEMINI_AVAILABLE = True
     logger.info(" Google GenAI SDK loaded successfully")
 except Exception as e:
@@ -48,6 +52,7 @@ except Exception as e:
     _import_log("Install with: pip install google-genai")
 
 
+# Section: group gemini client state and behaviour in one readable unit.
 class GeminiClient:
     """
     Unified Gemini API client for image captioning and NLP report generation.
@@ -58,6 +63,7 @@ class GeminiClient:
       - _get_ollama_embeddings() (nomic-embed-text via Ollama)
     """
 
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, config: Dict[str, Any]):
         """
         Initialize Gemini client.
@@ -66,20 +72,27 @@ class GeminiClient:
             config: Configuration dictionary. Expected keys:
                 - GEMINI_CONFIG: {api_key, model, temperature, max_tokens, ...}
         """
+        # Prepare gemini config for the next step.
         gemini_config = config.get('GEMINI_CONFIG', {})
 
+        # Section: run the clean key workflow with clear inputs and outputs.
         def _clean_key(value: Any) -> str:
+            # Choose the correct branch before the workflow continues.
             if value is None:
+                # Return the prepared result to the caller.
                 return ''
             key = str(value).strip()
             if (key.startswith('"') and key.endswith('"')) or (key.startswith("'") and key.endswith("'")):
                 key = key[1:-1].strip()
             return key
 
+        # Section: run the parse key list workflow with clear inputs and outputs.
         def _parse_key_list(value: Any) -> List[str]:
             if value is None:
                 return []
+            # Choose the correct branch before the workflow continues.
             if isinstance(value, (list, tuple, set)):
+                # Prepare raw items for the next step.
                 raw_items = list(value)
             else:
                 raw_items = str(value).split(',')
@@ -87,9 +100,12 @@ class GeminiClient:
             for raw in raw_items:
                 key = _clean_key(raw)
                 if key and key not in cleaned:
+                    # Trigger the side effect required for this stage.
                     cleaned.append(key)
+            # Return the prepared result to the caller.
             return cleaned
 
+        # Prepare api keys for the next step.
         self.api_keys = []
         self.api_key_index = 0
         key_candidates = []
@@ -99,8 +115,11 @@ class GeminiClient:
         key_candidates.extend(_parse_key_list(os.getenv('GOOGLE_API_KEYS', '')))
         key_candidates.extend(_parse_key_list(os.getenv('GEMINI_API_KEY', '')))
         key_candidates.extend(_parse_key_list(os.getenv('GOOGLE_API_KEY', '')))
+        # Process each item in this collection using the same rule set.
         for key in key_candidates:
+            # Choose the correct branch before the workflow continues.
             if key not in self.api_keys:
+                # Trigger the side effect required for this stage.
                 self.api_keys.append(key)
         self.api_key = self.api_keys[0] if self.api_keys else ''
 
@@ -108,6 +127,7 @@ class GeminiClient:
         self.report_model_name = gemini_config.get('report_model', os.getenv('GEMINI_REPORT_MODEL', self.model_name))
         self.vision_model_name = gemini_config.get('vision_model', os.getenv('GEMINI_VISION_MODEL', self.model_name))
         self.model_name = self.report_model_name
+        # Prepare candidate text for the next step.
         candidate_text = str(
             gemini_config.get(
                 'model_candidates',
@@ -117,8 +137,11 @@ class GeminiClient:
         parsed_candidates = [item.strip() for item in candidate_text.split(',') if item.strip()]
         deduped_candidates = []
         for candidate in [self.model_name, *parsed_candidates]:
+            # Choose the correct branch before the workflow continues.
             if candidate and candidate not in deduped_candidates:
+                # Trigger the side effect required for this stage.
                 deduped_candidates.append(candidate)
+        # Prepare model candidates for the next step.
         self.model_candidates = deduped_candidates
         self.last_model_switch_reason = None
         self.temperature = gemini_config.get('temperature', 0.4)
@@ -128,9 +151,11 @@ class GeminiClient:
         self.paid_plan = bool(gemini_config.get('paid_plan', False))
         self.required = bool(gemini_config.get('required', GEMINI_REQUIRED_BY_DEFAULT))
         try:
+            # Prepare vision thinking budget for the next step.
             self.vision_thinking_budget = int(os.getenv('GEMINI_VISION_THINKING_BUDGET', '0') or 0)
         except (TypeError, ValueError):
             self.vision_thinking_budget = 0
+        # Protect this step so expected failures can fall back cleanly.
         try:
             self.vision_max_output_tokens = int(os.getenv('GEMINI_VISION_MAX_OUTPUT_TOKENS', '900') or 900)
         except (TypeError, ValueError):
@@ -140,6 +165,7 @@ class GeminiClient:
         self.last_parse_strategy = None
         self.raw_capture_enabled = str(os.getenv('GEMINI_RAW_CAPTURE_ENABLED', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.raw_capture_max_chars = max(200, int(os.getenv('GEMINI_RAW_CAPTURE_MAX_CHARS', '4000')))
+        # Prepare capture file for the next step.
         capture_file = os.getenv('GEMINI_RAW_CAPTURE_FILE', 'reports/debug/gemini_raw_capture.jsonl').strip()
         self.raw_capture_file = Path(capture_file)
 
@@ -149,10 +175,12 @@ class GeminiClient:
         self.report_output_min_tokens = int(min_output_budget) if min_output_budget.isdigit() else 6144
         self.report_output_min_tokens = max(4096, min(self.report_output_min_tokens, 16384))
         output_budget = os.getenv('GEMINI_REPORT_MAX_OUTPUT_TOKENS', '').strip()
+        # Prepare report output max tokens for the next step.
         self.report_output_max_tokens = int(output_budget) if output_budget.isdigit() else 8192
         self.report_output_max_tokens = max(self.report_output_min_tokens, self.report_output_max_tokens)
         self.max_tokens = max(int(self.max_tokens or 0), self.report_output_min_tokens)
         try:
+            # Prepare report timeout ms for the next step.
             self.report_timeout_ms = int(os.getenv('GEMINI_REPORT_TIMEOUT_MS', '45000') or 45000)
         except (TypeError, ValueError):
             self.report_timeout_ms = 45000
@@ -161,8 +189,10 @@ class GeminiClient:
             self.report_max_retries = int(os.getenv('GEMINI_REPORT_MAX_RETRIES', '1') or 1)
         except (TypeError, ValueError):
             self.report_max_retries = 1
+        # Prepare report max retries for the next step.
         self.report_max_retries = max(1, min(self.report_max_retries, max(1, self.max_retries)))
         try:
+            # Prepare report thinking budget for the next step.
             self.report_thinking_budget = int(os.getenv('GEMINI_REPORT_THINKING_BUDGET', '0') or 0)
         except (TypeError, ValueError):
             self.report_thinking_budget = 0
@@ -170,8 +200,10 @@ class GeminiClient:
         self.allow_schema_incomplete_report = str(
             os.getenv('GEMINI_ALLOW_SCHEMA_INCOMPLETE', 'false')
         ).strip().lower() in ('1', 'true', 'yes', 'on')
+        # Prepare temp cap for the next step.
         temp_cap = os.getenv('GEMINI_REPORT_TEMPERATURE_CAP', '').strip()
         try:
+            # Prepare report temperature cap for the next step.
             self.report_temperature_cap = float(temp_cap) if temp_cap else 0.1
         except ValueError:
             self.report_temperature_cap = 0.1
@@ -181,21 +213,26 @@ class GeminiClient:
         self._min_interval = gemini_config.get('min_interval', 0.35 if self.paid_plan else 4.0)
 
         # Initialize the client
+        # Prepare client for the next step.
         self.client = None
         self._initialized = False
 
         unavailable_log = logger.error if self.required else logger.warning
 
         if not GEMINI_AVAILABLE:
+            # Trigger the side effect required for this stage.
             unavailable_log(f"Gemini SDK not available: {GEMINI_ERROR}")
             self.last_error = GEMINI_ERROR
             return
 
+        # Choose the correct branch before the workflow continues.
         if not self.api_key:
             if self.required:
+                # Trigger the side effect required for this stage.
                 logger.error("GEMINI_API_KEY not set. Add it to .env file.")
             else:
                 logger.info("GEMINI_API_KEY not set; Gemini disabled and fallback providers will be used")
+            # Prepare last error for the next step.
             self.last_error = "GEMINI_API_KEY not set"
             return
 
@@ -206,18 +243,23 @@ class GeminiClient:
                 f" Gemini client initialized (report_model: {self.model_name}, vision_model: {self.vision_model_name}, keys: {len(self.api_keys)})"
             )
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.error(f"Failed to initialize Gemini client: {e}")
             self.last_error = str(e)
 
+    # Section: run the switch to next api key workflow with clear inputs and outputs.
     def _switch_to_next_api_key(self, reason: str) -> bool:
         """Rotate to next configured Gemini API key when current key is throttled/exhausted."""
+        # Choose the correct branch before the workflow continues.
         if len(self.api_keys) <= 1:
             return False
 
         for offset in range(1, len(self.api_keys)):
+            # Prepare next index for the next step.
             next_index = (self.api_key_index + offset) % len(self.api_keys)
             next_key = self.api_keys[next_index]
             try:
+                # Prepare candidate client for the next step.
                 candidate_client = genai.Client(api_key=next_key)
                 self.api_key_index = next_index
                 self.api_key = next_key
@@ -228,36 +270,46 @@ class GeminiClient:
                 )
                 return True
             except Exception as e:
+                # Trigger the side effect required for this stage.
                 logger.warning(f"Failed to activate Gemini API key at slot {next_index + 1}: {e}")
 
+        # Return the prepared result to the caller.
         return False
 
+    # Section: run the is available workflow with clear inputs and outputs.
     @property
     def is_available(self) -> bool:
         """Check if Gemini client is ready."""
         return self._initialized and self.client is not None
 
+    # Section: run the rate limit workflow with clear inputs and outputs.
     def _rate_limit(self):
         """Simple rate limiter; interval is configurable and can be lower for paid plans."""
+        # Prepare now for the next step.
         now = time.time()
         elapsed = now - self._last_call_time
         if elapsed < self._min_interval:
+            # Prepare wait for the next step.
             wait = self._min_interval - elapsed
             logger.debug(f"Rate limiting: waiting {wait:.1f}s")
             time.sleep(wait)
         self._last_call_time = time.time()
 
+    # Section: run the try switch to next model workflow with clear inputs and outputs.
     def _try_switch_to_next_model(self, reason: str, *, target: str = 'report') -> bool:
         """Switch to next configured Gemini model candidate for report or vision generation."""
+        # Choose the correct branch before the workflow continues.
         if not self.model_candidates:
             return False
 
         current_model = self.vision_model_name if target == 'vision' else self.model_name
         try:
+            # Prepare current index for the next step.
             current_index = self.model_candidates.index(current_model)
         except ValueError:
             current_index = -1
 
+        # Prepare next index for the next step.
         next_index = current_index + 1
         if next_index >= len(self.model_candidates):
             return False
@@ -265,13 +317,16 @@ class GeminiClient:
         previous = current_model
         next_model = self.model_candidates[next_index]
         if target == 'vision':
+            # Prepare vision model name for the next step.
             self.vision_model_name = next_model
         else:
             self.model_name = next_model
+        # Prepare last model switch reason for the next step.
         self.last_model_switch_reason = reason
         logger.warning(f"Switching Gemini {target} model from {previous} to {next_model} due to: {reason}")
         return True
 
+    # Section: run the load image as part workflow with clear inputs and outputs.
     def _load_image_as_part(self, image_path: str) -> Optional[Any]:
         """
         Load an image file and return it as a Gemini-compatible part.
@@ -282,9 +337,12 @@ class GeminiClient:
         Returns:
             Image part for Gemini API, or None if failed
         """
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare path for the next step.
             path = Path(image_path)
             if not path.exists():
+                # Trigger the side effect required for this stage.
                 logger.error(f"Image not found: {image_path}")
                 return None
 
@@ -297,6 +355,7 @@ class GeminiClient:
                 '.webp': 'image/webp',
                 '.gif': 'image/gif',
             }
+            # Prepare mime type for the next step.
             mime_type = mime_map.get(suffix, 'image/jpeg')
 
             # Read image data
@@ -308,11 +367,14 @@ class GeminiClient:
             )
 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.error(f"Failed to load image {image_path}: {e}")
             return None
 
+    # Section: run the extract balanced json object workflow with clear inputs and outputs.
     def _extract_balanced_json_object(self, text: str) -> Optional[str]:
         """Extract the first balanced JSON object from text, ignoring braces inside strings."""
+        # Prepare start for the next step.
         start = text.find('{')
         if start == -1:
             return None
@@ -322,10 +384,13 @@ class GeminiClient:
         escaped = False
 
         for i in range(start, len(text)):
+            # Prepare ch for the next step.
             ch = text[i]
 
             if in_string:
+                # Choose the correct branch before the workflow continues.
                 if escaped:
+                    # Prepare escaped for the next step.
                     escaped = False
                 elif ch == '\\':
                     escaped = True
@@ -333,7 +398,9 @@ class GeminiClient:
                     in_string = False
                 continue
 
+            # Choose the correct branch before the workflow continues.
             if ch == '"':
+                # Prepare in string for the next step.
                 in_string = True
                 continue
 
@@ -342,24 +409,31 @@ class GeminiClient:
             elif ch == '}':
                 depth -= 1
                 if depth == 0:
+                    # Return the prepared result to the caller.
                     return text[start:i + 1]
 
+        # Return the prepared result to the caller.
         return None
 
+    # Section: run the extract json string field workflow with clear inputs and outputs.
     def _extract_json_string_field(self, text: str, key: str) -> Optional[str]:
         """Extract a top-level JSON string value, tolerating a truncated closing quote."""
         match = re.search(rf'"{re.escape(key)}"\s*:\s*"', str(text or ''))
         if not match:
+            # Return the prepared result to the caller.
             return None
 
         raw_chars: List[str] = []
+        # Prepare escaped for the next step.
         escaped = False
         closed = False
         for ch in str(text or '')[match.end():]:
             if escaped:
+                # Trigger the side effect required for this stage.
                 raw_chars.append('\\' + ch)
                 escaped = False
                 continue
+            # Choose the correct branch before the workflow continues.
             if ch == '\\':
                 escaped = True
                 continue
@@ -368,35 +442,47 @@ class GeminiClient:
                 break
             raw_chars.append(ch)
 
+        # Prepare raw value for the next step.
         raw_value = ''.join(raw_chars).strip()
         if not raw_value:
+            # Return the prepared result to the caller.
             return None
         if closed:
             try:
+                # Prepare decoded for the next step.
                 decoded = json.loads('"' + raw_value + '"')
                 return str(decoded).strip() or None
             except Exception:
                 pass
+        # Return the prepared result to the caller.
         return re.sub(r'\s+', ' ', raw_value).strip() or None
 
+    # Section: run the extract partial top level json fields workflow with clear inputs and outputs.
     def _extract_partial_top_level_json_fields(self, text: str) -> Optional[Dict[str, Any]]:
         """Recover useful leading fields from malformed/truncated Gemini JSON."""
         partial: Dict[str, Any] = {}
         for key in ('environment_type', 'visual_evidence', 'summary'):
+            # Prepare value for the next step.
             value = self._extract_json_string_field(text, key)
             if value:
+                # Prepare values needed by the next step.
                 partial[key] = value
+        # Return the prepared result to the caller.
         return partial or None
 
+    # Section: run the sanitize debug text workflow with clear inputs and outputs.
     def _sanitize_debug_text(self, value: Any, max_chars: Optional[int] = None) -> str:
         """Sanitize debug text to keep logs safe and bounded."""
         limit = max_chars if isinstance(max_chars, int) and max_chars > 0 else self.raw_capture_max_chars
         text = str(value or "").replace('\r', '')
         text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
         if len(text) > limit:
+            # Return the prepared result to the caller.
             return f"{text[:limit]} ...[truncated {len(text) - limit} chars]"
+        # Return the prepared result to the caller.
         return text
 
+    # Section: run the capture nlp debug workflow with clear inputs and outputs.
     def _capture_nlp_debug(
         self,
         *,
@@ -411,21 +497,26 @@ class GeminiClient:
         repaired: bool = False,
     ) -> None:
         """Persist sanitized Gemini NLP attempt telemetry for postmortem analysis."""
+        # Choose the correct branch before the workflow continues.
         if not self.raw_capture_enabled:
+            # Return the prepared result to the caller.
             return
 
         try:
             resolved_path = self.raw_capture_file
             if not resolved_path.is_absolute():
+                # Prepare resolved path for the next step.
                 resolved_path = Path.cwd() / resolved_path
             resolved_path.parent.mkdir(parents=True, exist_ok=True)
 
             required_keys = ['environment_type', 'visual_evidence', 'persons', 'summary', 'dosh_regulations_cited']
+            # Prepare key presence for the next step.
             key_presence = {}
             payload = None
             if raw_response:
                 payload = self._parse_json_from_response_text(raw_response)
             if isinstance(payload, dict):
+                # Prepare key presence for the next step.
                 key_presence = {key: key in payload for key in required_keys}
 
             record = {
@@ -445,15 +536,20 @@ class GeminiClient:
                 'response_preview': self._sanitize_debug_text(raw_response or ''),
             }
 
+            # Open the managed resource only for the block that needs it.
             with resolved_path.open('a', encoding='utf-8') as handle:
+                # Trigger the side effect required for this stage.
                 handle.write(json.dumps(record, ensure_ascii=True) + '\n')
         except Exception as capture_error:
             logger.warning(f"Failed to capture Gemini debug payload: {capture_error}")
 
+    # Section: run the tighten prompt for json workflow with clear inputs and outputs.
     def _tighten_prompt_for_json(self, prompt: str) -> str:
         """Reduce prompt bloat while preserving required JSON-output instructions."""
+        # Prepare compact for the next step.
         compact = str(prompt or '').strip()
         if not compact:
+            # Return the prepared result to the caller.
             return compact
 
         compact = re.sub(
@@ -463,8 +559,10 @@ class GeminiClient:
             flags=re.DOTALL,
         )
 
+        # Prepare max chars for the next step.
         max_chars = max(4000, self.report_prompt_max_chars)
         if len(compact) > max_chars:
+            # Prepare truncation marker for the next step.
             truncation_marker = "\n\n...[middle prompt content truncated; output schema preserved below]...\n\n"
             contract_markers = (
                 "Return exactly one valid JSON object",
@@ -474,9 +572,11 @@ class GeminiClient:
             )
             contract_positions = [compact.rfind(marker) for marker in contract_markers]
             contract_positions = [pos for pos in contract_positions if pos >= 0]
+            # Prepare contract start for the next step.
             contract_start = min(contract_positions) if contract_positions else -1
 
             if contract_start >= 0 and len(compact) - contract_start <= max_chars:
+                # Prepare contract for the next step.
                 contract = compact[contract_start:]
                 head_budget = max(1000, max_chars - len(contract) - len(truncation_marker))
                 compact = compact[:head_budget].rstrip() + truncation_marker + contract.lstrip()
@@ -492,8 +592,10 @@ class GeminiClient:
             "- If a detail is uncertain, still include the key with a conservative evidence-based value instead of omitting it.\n"
             "- Keep each description concise while preserving factual grounding.\n"
         )
+        # Return the prepared result to the caller.
         return compact
 
+    # Section: run the build report json schema workflow with clear inputs and outputs.
     def _build_report_json_schema(self) -> Dict[str, Any]:
         """Return a Gemini structured-output schema for report generation JSON."""
         string_array = {
@@ -514,6 +616,7 @@ class GeminiClient:
                 "mitigation_steps": string_array,
             },
         }
+        # Prepare person schema for the next step.
         person_schema = {
             "type": "object",
             "required": ["id", "description", "ppe", "hazards_faced", "risks", "corrective_actions"],
@@ -562,6 +665,7 @@ class GeminiClient:
                 "actions": string_array,
             },
         }
+        # Prepare regulation schema for the next step.
         regulation_schema = {
             "type": "object",
             "required": ["regulation", "requirement", "explanation", "penalty"],
@@ -572,6 +676,7 @@ class GeminiClient:
                 "penalty": {"type": "string"},
             },
         }
+        # Return the prepared result to the caller.
         return {
             "type": "object",
             "required": [
@@ -598,12 +703,15 @@ class GeminiClient:
             },
         }
 
+    # Section: run the effective report output tokens workflow with clear inputs and outputs.
     def _effective_report_output_tokens(self) -> int:
         """Return an output budget large enough for complete report JSON."""
+        # Prepare configured for the next step.
         configured = max(int(self.max_tokens or 0), self.report_output_min_tokens)
         ceiling = max(int(self.report_output_max_tokens or 0), self.report_output_min_tokens)
         return max(self.report_output_min_tokens, min(configured, ceiling))
 
+    # Section: run the build report generation config workflow with clear inputs and outputs.
     def _build_report_generation_config(self):
         """Build Gemini report config with JSON schema enforcement enabled."""
         config_kwargs = {
@@ -613,24 +721,31 @@ class GeminiClient:
             "response_json_schema": self._build_report_json_schema(),
             "http_options": types.HttpOptions(timeout=self.report_timeout_ms),
         }
+        # Choose the correct branch before the workflow continues.
         if self.report_thinking_budget >= 0 and hasattr(types, "ThinkingConfig"):
+            # Prepare values needed by the next step.
             config_kwargs["thinking_config"] = types.ThinkingConfig(
                 thinking_budget=self.report_thinking_budget,
                 include_thoughts=False,
             )
         return types.GenerateContentConfig(**config_kwargs)
 
+    # Section: run the mark schema incomplete payload workflow with clear inputs and outputs.
     def _mark_schema_incomplete_payload(self, payload: Dict[str, Any], missing_keys: List[str]) -> Dict[str, Any]:
         """Annotate a usable but incomplete Gemini payload for downstream deterministic completion."""
+        # Prepare marked for the next step.
         marked = dict(payload)
         marked['_schema_incomplete'] = True
         marked['_missing_required_report_keys'] = list(missing_keys or [])
         return marked
 
+    # Section: run the is usable schema incomplete payload workflow with clear inputs and outputs.
     def _is_usable_schema_incomplete_payload(self, payload: Optional[Dict[str, Any]]) -> bool:
         """Return True when partial model output has enough grounding to finish locally."""
         if not isinstance(payload, dict) or not payload:
+            # Return the prepared result to the caller.
             return False
+        # Prepare grounding fields for the next step.
         grounding_fields = (
             payload.get('environment_type'),
             payload.get('visual_evidence'),
@@ -638,42 +753,54 @@ class GeminiClient:
         )
         return any(str(value or '').strip() for value in grounding_fields)
 
+    # Section: run the parse json from response text workflow with clear inputs and outputs.
     def _parse_json_from_response_text(self, raw_text: str) -> Optional[Dict[str, Any]]:
         """Parse model output into JSON dict using progressive recovery strategies."""
+        # Prepare last parse strategy for the next step.
         self.last_parse_strategy = None
         # 1) Strict JSON response
         try:
+            # Prepare parsed for the next step.
             parsed = json.loads(raw_text)
             if isinstance(parsed, dict):
+                # Prepare last parse strategy for the next step.
                 self.last_parse_strategy = 'strict_json'
                 return parsed
         except json.JSONDecodeError:
             pass
 
         # 2) Markdown fenced payloads
+        # Prepare fenced match for the next step.
         fenced_match = re.search(r"```json\s*(.*?)\s*```", raw_text, flags=re.IGNORECASE | re.DOTALL)
         if fenced_match:
             candidate = fenced_match.group(1).strip()
             try:
+                # Prepare parsed for the next step.
                 parsed = json.loads(candidate)
                 if isinstance(parsed, dict):
+                    # Prepare last parse strategy for the next step.
                     self.last_parse_strategy = 'fenced_json'
                     return parsed
             except json.JSONDecodeError:
                 pass
 
+        # Prepare generic fence for the next step.
         generic_fence = re.search(r"```\s*(.*?)\s*```", raw_text, flags=re.DOTALL)
         if generic_fence:
+            # Prepare candidate for the next step.
             candidate = generic_fence.group(1).strip()
             try:
+                # Prepare parsed for the next step.
                 parsed = json.loads(candidate)
                 if isinstance(parsed, dict):
+                    # Prepare last parse strategy for the next step.
                     self.last_parse_strategy = 'generic_fence_json'
                     return parsed
             except json.JSONDecodeError:
                 pass
 
         # 3) Balanced object extraction from mixed text
+        # Prepare candidate for the next step.
         candidate = self._extract_balanced_json_object(raw_text)
         if candidate:
             cleaned = candidate
@@ -681,8 +808,10 @@ class GeminiClient:
             cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
             cleaned = cleaned.strip()
             try:
+                # Prepare parsed for the next step.
                 parsed = json.loads(cleaned)
                 if isinstance(parsed, dict):
+                    # Prepare last parse strategy for the next step.
                     self.last_parse_strategy = 'balanced_object_json'
                     return parsed
             except json.JSONDecodeError:
@@ -698,28 +827,35 @@ class GeminiClient:
 
         return None
 
+    # Section: run the missing required report keys workflow with clear inputs and outputs.
     def _missing_required_report_keys(self, payload: Optional[Dict[str, Any]]) -> List[str]:
         """Return required report keys absent from a parsed Gemini NLP payload."""
+        # Choose the correct branch before the workflow continues.
         if not isinstance(payload, dict):
             return ['environment_type', 'visual_evidence', 'persons', 'summary', 'severity_level', 'dosh_regulations_cited']
 
         missing = []
         if not str(payload.get('environment_type') or '').strip():
+            # Trigger the side effect required for this stage.
             missing.append('environment_type')
         if not str(payload.get('visual_evidence') or '').strip():
             missing.append('visual_evidence')
         if not isinstance(payload.get('persons'), list) or len(payload.get('persons') or []) == 0:
             missing.append('persons')
+        # Choose the correct branch before the workflow continues.
         if not str(payload.get('summary') or '').strip():
             missing.append('summary')
         if not str(payload.get('severity_level') or '').strip():
             missing.append('severity_level')
         if not isinstance(payload.get('dosh_regulations_cited'), list) or len(payload.get('dosh_regulations_cited') or []) == 0:
+            # Trigger the side effect required for this stage.
             missing.append('dosh_regulations_cited')
         return missing
 
+    # Section: run the repair json with gemini workflow with clear inputs and outputs.
     def _repair_json_with_gemini(self, malformed_text: str) -> Optional[Dict[str, Any]]:
         """Ask Gemini to repair malformed JSON into strict JSON object output."""
+        # Protect this step so expected failures can fall back cleanly.
         try:
             repair_prompt = (
                 "You are a JSON repair tool.\n"
@@ -732,6 +868,7 @@ class GeminiClient:
                 f"{malformed_text}"
             )
 
+            # Prepare repair response for the next step.
             repair_response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=[repair_prompt],
@@ -743,7 +880,9 @@ class GeminiClient:
                 )
             )
 
+            # Choose the correct branch before the workflow continues.
             if not repair_response or not repair_response.text:
+                # Return the prepared result to the caller.
                 return None
 
             return self._parse_json_from_response_text(repair_response.text.strip())
@@ -757,28 +896,35 @@ class GeminiClient:
 
     def _build_vision_generation_config(self, *, temperature: float = 0.3, max_output_tokens: Optional[int] = None):
         """Build Gemini Vision config with thinking disabled by default for complete captions."""
+        # Prepare config kwargs for the next step.
         config_kwargs = {
             'temperature': temperature,
             'max_output_tokens': max_output_tokens or self.vision_max_output_tokens,
         }
         if self.vision_thinking_budget >= 0 and hasattr(types, 'ThinkingConfig'):
+            # Prepare values needed by the next step.
             config_kwargs['thinking_config'] = types.ThinkingConfig(
                 thinking_budget=self.vision_thinking_budget
             )
         return types.GenerateContentConfig(**config_kwargs)
 
+    # Section: run the extract finish reason workflow with clear inputs and outputs.
     def _extract_finish_reason(self, response: Any) -> str:
+        # Protect this step so expected failures can fall back cleanly.
         try:
             return str(response.candidates[0].finish_reason or '')
         except Exception:
+            # Return the prepared result to the caller.
             return ''
 
+    # Section: run the normalize caption text workflow with clear inputs and outputs.
     def _normalize_caption_text(self, caption: str) -> str:
         """Remove model boilerplate and normalize caption whitespace."""
         text = re.sub(r'\s+', ' ', str(caption or '')).strip()
         if not text:
             return ''
 
+        # Prepare text for the next step.
         text = re.sub(r'^(?:[-*]\s*)+', '', text).strip()
         prefixes = (
             "Here is a description of the image:",
@@ -789,8 +935,11 @@ class GeminiClient:
             "In this image,",
             "In this image",
         )
+        # Process each item in this collection using the same rule set.
         for prefix in prefixes:
+            # Choose the correct branch before the workflow continues.
             if text.lower().startswith(prefix.lower()):
+                # Prepare text for the next step.
                 text = text[len(prefix):].strip(" ,:")
                 break
 
@@ -798,8 +947,10 @@ class GeminiClient:
             text = text[0].upper() + text[1:]
         return text
 
+    # Section: run the strip caption inference sentences workflow with clear inputs and outputs.
     def _strip_caption_inference_sentences(self, caption: str) -> str:
         """Remove evaluative caption sentences while preserving visible facts."""
+        # Prepare sentences for the next step.
         sentences = re.split(r'(?<=[.!?])\s+', str(caption or '').strip())
         kept = []
         blocked_patterns = (
@@ -818,7 +969,9 @@ class GeminiClient:
             'likely ',
             'probably ',
         )
+        # Process each item in this collection using the same rule set.
         for sentence in sentences:
+            # Prepare cleaned for the next step.
             cleaned = sentence.strip()
             if not cleaned:
                 continue
@@ -828,10 +981,13 @@ class GeminiClient:
             kept.append(cleaned)
         return ' '.join(kept).strip()
 
+    # Section: run the caption needs expansion workflow with clear inputs and outputs.
     def _caption_needs_expansion(self, caption: str, finish_reason: str = '') -> bool:
         """Detect captions that are too short, generic, or visibly truncated."""
+        # Prepare text for the next step.
         text = self._normalize_caption_text(caption)
         if not text:
+            # Return the prepared result to the caller.
             return True
 
         finish_upper = str(finish_reason or '').upper()
@@ -839,9 +995,11 @@ class GeminiClient:
             return True
 
         lowered = text.lower()
+        # Prepare words for the next step.
         words = re.findall(r"[a-z0-9']+", lowered)
         sentence_count = len(re.findall(r'[.!?](?:\s|$)', text))
         if len(text) < 220 or len(words) < 35 or sentence_count < 3:
+            # Return the prepared result to the caller.
             return True
 
         generic_markers = (
@@ -852,7 +1010,9 @@ class GeminiClient:
             'indoor environment',
             'outdoor environment',
         )
+        # Choose the correct branch before the workflow continues.
         if any(marker in lowered for marker in generic_markers) and len(words) < 55:
+            # Return the prepared result to the caller.
             return True
 
         last_word_match = re.search(r"([a-z']+)[.!?]?$", lowered)
@@ -862,13 +1022,16 @@ class GeminiClient:
             'including', 'near', 'of', 'on', 'or', 'partially', 'the',
             'to', 'toward', 'under', 'with', 'wearing',
         }
+        # Choose the correct branch before the workflow continues.
         if last_word in dangling_last_words:
+            # Return the prepared result to the caller.
             return True
         if re.search(r'\b(is|are|was|were|appears|seems|looks)\s+(?:partially|likely)?\.?$', lowered):
             return True
 
         return False
 
+    # Section: run the call gemini caption once workflow with clear inputs and outputs.
     def _call_gemini_caption_once(
         self,
         prompt: str,
@@ -877,6 +1040,7 @@ class GeminiClient:
         temperature: float = 0.3,
         max_output_tokens: Optional[int] = None,
     ) -> tuple:
+        # Prepare response for the next step.
         response = self.client.models.generate_content(
             model=self.vision_model_name,
             contents=[prompt, image_part],
@@ -886,9 +1050,11 @@ class GeminiClient:
             )
         )
         text = self._normalize_caption_text(response.text if response and response.text else '')
+        # Prepare text for the next step.
         text = self._strip_caption_inference_sentences(text)
         return text, self._extract_finish_reason(response)
 
+    # Section: run the caption image workflow with clear inputs and outputs.
     def caption_image(
         self,
         image_path: str,
@@ -906,7 +1072,9 @@ class GeminiClient:
         Returns:
             Generated caption string
         """
+        # Choose the correct branch before the workflow continues.
         if not self.is_available:
+            # Return the prepared result to the caller.
             return "Image captioning not available. Gemini API is not configured"
 
         # Default safety-focused prompt with stronger people/action/situation structure.
@@ -930,6 +1098,7 @@ class GeminiClient:
         )
 
         # Load image
+        # Prepare image part for the next step.
         image_part = self._load_image_as_part(image_path)
         if not image_part:
             return f"Error: Could not load image from {image_path}"
@@ -948,8 +1117,11 @@ class GeminiClient:
                     max_output_tokens=self.vision_max_output_tokens,
                 )
 
+                # Choose the correct branch before the workflow continues.
                 if caption:
+                    # Choose the correct branch before the workflow continues.
                     if self._caption_needs_expansion(caption, finish_reason):
+                        # Trigger the side effect required for this stage.
                         logger.warning(
                             "Gemini caption was short/incomplete "
                             f"(finish_reason={finish_reason or 'unknown'}, chars={len(caption)}); retrying"
@@ -967,6 +1139,7 @@ class GeminiClient:
                             "- Do not stop mid-sentence. No bullet points, markdown, or meta commentary.\n\n"
                             f"Previous incomplete caption: {caption}"
                         )
+                        # Prepare values needed by the next step.
                         expanded, expanded_finish_reason = self._call_gemini_caption_once(
                             expansion_prompt,
                             image_part,
@@ -977,9 +1150,11 @@ class GeminiClient:
                             len(expanded) > len(caption)
                             or not self._caption_needs_expansion(expanded, expanded_finish_reason)
                         ):
+                            # Prepare caption for the next step.
                             caption = expanded
                             finish_reason = expanded_finish_reason
 
+                    # Trigger the side effect required for this stage.
                     logger.info(
                         f" Caption generated ({len(caption)} chars, finish_reason={finish_reason or 'unknown'}): "
                         f"{caption[:100]}..."
@@ -989,12 +1164,14 @@ class GeminiClient:
                     logger.warning(f"Empty response from Gemini (attempt {attempt + 1})")
 
             except Exception as e:
+                # Prepare err text for the next step.
                 err_text = str(e)
                 logger.error(f"Gemini captioning error (attempt {attempt + 1}): {err_text}")
                 upper = err_text.upper()
                 quota_or_exhausted = ('RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper)
                 service_unavailable = ('UNAVAILABLE' in upper or '503' in upper or 'HIGH DEMAND' in upper)
                 if quota_or_exhausted or service_unavailable:
+                    # Prepare reason for the next step.
                     reason = (
                         'quota/resource exhaustion (caption)'
                         if quota_or_exhausted
@@ -1004,11 +1181,14 @@ class GeminiClient:
                         continue
                     if self._try_switch_to_next_model(reason, target='vision'):
                         continue
+                # Choose the correct branch before the workflow continues.
                 if attempt < self.max_retries - 1:
+                    # Prepare wait for the next step.
                     wait = 2 ** (attempt + 1)
                     logger.info(f"Retrying in {wait}s...")
                     time.sleep(wait)
 
+        # Return the prepared result to the caller.
         return "Failed to generate caption after multiple attempts"
 
     # =========================================================================
@@ -1033,7 +1213,9 @@ class GeminiClient:
         Returns:
             Parsed JSON dict, or None if failed
         """
+        # Choose the correct branch before the workflow continues.
         if not self.is_available:
+            # Trigger the side effect required for this stage.
             logger.error("Gemini not available for report generation")
             self.last_error = "Gemini client not available for report generation"
             self._capture_nlp_debug(
@@ -1044,8 +1226,10 @@ class GeminiClient:
                 success=False,
                 error=self.last_error,
             )
+            # Return the prepared result to the caller.
             return None
 
+        # Prepare last model switch reason for the next step.
         self.last_model_switch_reason = None
 
         tight_prompt = self._tighten_prompt_for_json(prompt)
@@ -1056,9 +1240,11 @@ class GeminiClient:
         contents = [tight_prompt]
 
         # Optionally include the image for multimodal analysis
+        # Choose the correct branch before the workflow continues.
         if image_path:
             image_part = self._load_image_as_part(image_path)
             if image_part:
+                # Trigger the side effect required for this stage.
                 contents.insert(0, image_part)  # Image first, then prompt
 
         # Call Gemini with retry
@@ -1074,6 +1260,7 @@ class GeminiClient:
                     self.report_thinking_budget,
                 )
 
+                # Prepare generation config for the next step.
                 generation_config = self._build_report_generation_config()
 
                 response = self.client.models.generate_content(
@@ -1083,23 +1270,29 @@ class GeminiClient:
                 )
 
                 if response and response.text:
+                    # Prepare raw text for the next step.
                     raw_text = response.text.strip()
                     result = self._parse_json_from_response_text(raw_text)
                     if result is not None:
+                        # Prepare missing keys for the next step.
                         missing_keys = self._missing_required_report_keys(result)
                         if missing_keys:
+                            # Prepare last error for the next step.
                             self.last_error = (
                                 "Gemini JSON missing required report keys: "
                                 + ", ".join(missing_keys)
                             )
                             logger.warning(self.last_error)
                             if self._is_usable_schema_incomplete_payload(result):
+                                # Choose the correct branch before the workflow continues.
                                 if (
                                     best_effort_result is None
                                     or len(missing_keys) < len(best_effort_missing)
                                 ):
+                                    # Prepare best effort result for the next step.
                                     best_effort_result = result
                                     best_effort_missing = list(missing_keys)
+                            # Trigger the side effect required for this stage.
                             self._capture_nlp_debug(
                                 report_id=report_id,
                                 attempt=attempt + 1,
@@ -1110,7 +1303,9 @@ class GeminiClient:
                                 success=False,
                                 error=self.last_error,
                             )
+                            # Choose the correct branch before the workflow continues.
                             if best_effort_result is not None and self.allow_schema_incomplete_report:
+                                # Trigger the side effect required for this stage.
                                 logger.warning(
                                     "Proceeding with best-effort Gemini JSON for report %s; "
                                     "downstream sanitizer will fill missing keys: %s",
@@ -1123,6 +1318,7 @@ class GeminiClient:
                                 )
                             continue
 
+                        # Trigger the side effect required for this stage.
                         logger.info(" NLP report JSON generated successfully")
                         self.last_error = None
                         self._capture_nlp_debug(
@@ -1134,24 +1330,30 @@ class GeminiClient:
                             parse_strategy=self.last_parse_strategy,
                             success=True,
                         )
+                        # Return the prepared result to the caller.
                         return result
 
+                    # Prepare repaired for the next step.
                     repaired = self._repair_json_with_gemini(raw_text)
                     if repaired is not None:
                         missing_keys = self._missing_required_report_keys(repaired)
                         if missing_keys:
+                            # Prepare last error for the next step.
                             self.last_error = (
                                 "Gemini repaired JSON missing required report keys: "
                                 + ", ".join(missing_keys)
                             )
                             logger.warning(self.last_error)
                             if self._is_usable_schema_incomplete_payload(repaired):
+                                # Choose the correct branch before the workflow continues.
                                 if (
                                     best_effort_result is None
                                     or len(missing_keys) < len(best_effort_missing)
                                 ):
+                                    # Prepare best effort result for the next step.
                                     best_effort_result = repaired
                                     best_effort_missing = list(missing_keys)
+                            # Trigger the side effect required for this stage.
                             self._capture_nlp_debug(
                                 report_id=report_id,
                                 attempt=attempt + 1,
@@ -1163,7 +1365,9 @@ class GeminiClient:
                                 error=self.last_error,
                                 repaired=True,
                             )
+                            # Choose the correct branch before the workflow continues.
                             if best_effort_result is not None and self.allow_schema_incomplete_report:
+                                # Trigger the side effect required for this stage.
                                 logger.warning(
                                     "Proceeding with best-effort repaired Gemini JSON for report %s; "
                                     "downstream sanitizer will fill missing keys: %s",
@@ -1176,6 +1380,7 @@ class GeminiClient:
                                 )
                             continue
 
+                        # Trigger the side effect required for this stage.
                         logger.info(" NLP report JSON repaired successfully")
                         self.last_error = None
                         self._capture_nlp_debug(
@@ -1188,8 +1393,10 @@ class GeminiClient:
                             success=True,
                             repaired=True,
                         )
+                        # Return the prepared result to the caller.
                         return repaired
 
+                    # Prepare last error for the next step.
                     self.last_error = f"Could not parse JSON from Gemini response: {raw_text[:200]}..."
                     logger.error(self.last_error)
                     self._capture_nlp_debug(
@@ -1203,6 +1410,7 @@ class GeminiClient:
                         error=self.last_error,
                     )
                 else:
+                    # Prepare last error for the next step.
                     self.last_error = f"Empty response from Gemini (attempt {attempt + 1})"
                     logger.warning(self.last_error)
                     self._capture_nlp_debug(
@@ -1215,9 +1423,11 @@ class GeminiClient:
                     )
 
             except json.JSONDecodeError as e:
+                # Prepare last error for the next step.
                 self.last_error = f"JSON parse error (attempt {attempt + 1}): {e}"
                 logger.error(self.last_error)
                 if attempt < self.report_max_retries - 1:
+                    # Trigger the side effect required for this stage.
                     time.sleep(2)
             except Exception as e:
                 err_text = str(e)
@@ -1243,7 +1453,9 @@ class GeminiClient:
                     or 'NOT SUPPORTED FOR GENERATECONTENT' in upper
                 )
                 if quota_or_exhausted or service_unavailable or model_not_found:
+                    # Choose the correct branch before the workflow continues.
                     if quota_or_exhausted:
+                        # Prepare reason for the next step.
                         reason = 'quota/resource exhaustion'
                     elif model_not_found:
                         reason = 'configured Gemini model unavailable'
@@ -1252,19 +1464,24 @@ class GeminiClient:
                     switched_key = self._switch_to_next_api_key(reason)
                     if switched_key:
                         continue
+                    # Prepare switched for the next step.
                     switched = self._try_switch_to_next_model(reason, target='report')
                     if switched:
                         continue
                     if quota_or_exhausted:
                         break
 
+                # Choose the correct branch before the workflow continues.
                 if attempt < self.report_max_retries - 1:
                     wait = 2 ** (attempt + 1)
                     logger.info(f"Retrying in {wait}s...")
+                    # Trigger the side effect required for this stage.
                     time.sleep(wait)
 
+        # Trigger the side effect required for this stage.
         logger.error("Failed to generate NLP report after all retries")
         if best_effort_result is not None and self.allow_schema_incomplete_report:
+            # Trigger the side effect required for this stage.
             logger.warning(
                 "Using best-effort Gemini JSON after retries for report %s; missing keys: %s",
                 report_id or 'unknown',
@@ -1277,10 +1494,13 @@ class GeminiClient:
                 "GEMINI_ALLOW_SCHEMA_INCOMPLETE is disabled; missing keys: "
                 + ", ".join(best_effort_missing)
             )
+        # Choose the correct branch before the workflow continues.
         if not self.last_error:
+            # Prepare last error for the next step.
             self.last_error = "Failed to generate NLP report after all retries"
         return None
 
+    # Section: run the get status workflow with clear inputs and outputs.
     def get_status(self) -> Dict[str, Any]:
         """Get Gemini client status."""
         return {
@@ -1316,17 +1536,21 @@ def load_regulations(regulations_path: Optional[str] = None) -> Dict[str, Any]:
     Returns:
         Regulations dictionary
     """
+    # Choose the correct branch before the workflow continues.
     if regulations_path is None:
+        # Prepare regulations path for the next step.
         regulations_path = Path(__file__).parent.parent / 'data' / 'malaysian_regulations.json'
     else:
         regulations_path = Path(regulations_path)
 
     try:
         with open(regulations_path, 'r', encoding='utf-8') as f:
+            # Prepare data for the next step.
             data = json.load(f)
         logger.info(f" Loaded {len(data.get('regulations', {}))} regulation entries from {regulations_path.name}")
         return data
     except FileNotFoundError:
+        # Trigger the side effect required for this stage.
         logger.error(f"Regulations file not found: {regulations_path}")
         return {}
     except Exception as e:
@@ -1334,6 +1558,7 @@ def load_regulations(regulations_path: Optional[str] = None) -> Dict[str, Any]:
         return {}
 
 
+# Section: run the build regulation context workflow with clear inputs and outputs.
 def build_regulation_context(regulations_data: Dict[str, Any], detected_violations: list = None, environment_type: str = None) -> str:
     """
     Build regulation context text for injection into the NLP prompt.
@@ -1349,7 +1574,9 @@ def build_regulation_context(regulations_data: Dict[str, Any], detected_violatio
     Returns:
         Formatted regulation context string for prompt injection
     """
+    # Choose the correct branch before the workflow continues.
     if not regulations_data:
+        # Return the prepared result to the caller.
         return ""
 
     sections = []
@@ -1359,11 +1586,14 @@ def build_regulation_context(regulations_data: Dict[str, Any], detected_violatio
     acronyms = regulations_data.get('acronyms', {})
     if acronyms:
         sections.append("REGULATION ACRONYMS:")
+        # Process each item in this collection using the same rule set.
         for abbrev, full_name in acronyms.items():
+            # Trigger the side effect required for this stage.
             sections.append(f"  {abbrev} = {full_name}")
         sections.append("")
 
     # Add relevant PPE regulations
+    # Prepare regs for the next step.
     regs = regulations_data.get('regulations', {})
 
     # If we know the violations, only include relevant regulations
@@ -1377,10 +1607,13 @@ def build_regulation_context(regulations_data: Dict[str, Any], detected_violatio
             'NO-Safety Shoes': 'footwear',
         }
         for v in detected_violations:
+            # Prepare key for the next step.
             key = violation_map.get(v)
             if key:
+                # Trigger the side effect required for this stage.
                 relevant_keys.add(key)
         # Always include harness for height work
+        # Choose the correct branch before the workflow continues.
         if environment_type and 'height' in environment_type.lower():
             relevant_keys.add('harness')
     else:
@@ -1390,8 +1623,10 @@ def build_regulation_context(regulations_data: Dict[str, Any], detected_violatio
     if relevant_keys:
         sections.append("APPLICABLE PPE REGULATIONS:")
         for key in relevant_keys:
+            # Prepare reg for the next step.
             reg = regs.get(key, {})
             if reg:
+                # Trigger the side effect required for this stage.
                 sections.append(f"\n[{reg.get('ppe_item', key.upper())}]")
                 sections.append(f"  Regulation: {reg.get('regulation_ref', 'N/A')}")
                 sections.append(f"  Legal Citation: {reg.get('legal_citation', 'N/A')}")
@@ -1403,15 +1638,18 @@ def build_regulation_context(regulations_data: Dict[str, Any], detected_violatio
                 sections.append(f"  Penalty: {reg.get('penalty', 'N/A')}")
 
     # Add environment-specific rules
+    # Prepare env rules for the next step.
     env_rules = regulations_data.get('environment_rules', {})
     if environment_type and environment_type in env_rules:
         rule = env_rules[environment_type]
         sections.append(f"\nENVIRONMENT-SPECIFIC RULES ({environment_type}):")
         sections.append(f"  Primary Regulation: {rule.get('primary_regulation', 'N/A')}")
         for req in rule.get('requirements', []):
+            # Trigger the side effect required for this stage.
             sections.append(f"   {req}")
         sections.append(f"  Penalty: {rule.get('penalty', 'N/A')}")
 
+    # Trigger the side effect required for this stage.
     sections.append("\n=== END REGULATIONS ===\n")
     sections.append("IMPORTANT: You MUST cite the specific regulation references above in your report. "
                     "Do NOT make up regulation numbers. Use only the citations provided.\n")
@@ -1427,6 +1665,7 @@ if __name__ == '__main__':
     import os
     from dotenv import load_dotenv
 
+    # Trigger the side effect required for this stage.
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -1436,6 +1675,7 @@ if __name__ == '__main__':
 
     print("=" * 70)
     print("GEMINI CLIENT TEST")
+    # Trigger the side effect required for this stage.
     print("=" * 70)
 
     config = {
@@ -1446,11 +1686,13 @@ if __name__ == '__main__':
         }
     }
 
+    # Prepare client for the next step.
     client = GeminiClient(config)
     status = client.get_status()
 
     print(f"\nStatus:")
     for key, value in status.items():
+        # Trigger the side effect required for this stage.
         print(f"  {key}: {value}")
 
     # Test regulation loading
@@ -1463,7 +1705,9 @@ if __name__ == '__main__':
             detected_violations=['NO-Hardhat', 'NO-Safety Vest'],
             environment_type='Construction Site'
         )
+        # Trigger the side effect required for this stage.
         print(f"Regulation context ({len(context)} chars):")
         print(context[:500])
 
+    # Trigger the side effect required for this stage.
     print("\n" + "=" * 70)

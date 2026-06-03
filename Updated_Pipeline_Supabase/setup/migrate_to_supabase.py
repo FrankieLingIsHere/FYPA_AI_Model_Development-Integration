@@ -12,6 +12,7 @@ Options:
     --dry-run: Preview what would be migrated without actually migrating
     --limit N: Only migrate the first N violations (for testing)
 """
+# Readability: Setup helper: prepare project dependencies, data, or cloud resources.
 
 import argparse
 import logging
@@ -25,6 +26,7 @@ import json
 from dotenv import load_dotenv
 
 # Add project root to path (file is in setup/, project root is parent dir)
+# Trigger the side effect required for this stage.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from pipeline.backend.core.supabase_storage import create_storage_manager_from_env
@@ -34,12 +36,15 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+# Prepare logger for the next step.
 logger = logging.getLogger(__name__)
 
 
+# Section: group sqlite to supabase migrator state and behaviour in one readable unit.
 class SQLiteToSupabaseMigrator:
     """Migrates violations from SQLite to Supabase."""
     
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, sqlite_db_path: str, violations_dir: str):
         """
         Initialize migrator.
@@ -48,6 +53,7 @@ class SQLiteToSupabaseMigrator:
             sqlite_db_path: Path to SQLite database file
             violations_dir: Path to local violations directory
         """
+        # Prepare sqlite db path for the next step.
         self.sqlite_db_path = Path(sqlite_db_path)
         self.violations_dir = Path(violations_dir)
         
@@ -58,9 +64,12 @@ class SQLiteToSupabaseMigrator:
         logger.info(f"SQLite DB: {self.sqlite_db_path}")
         logger.info(f"Violations dir: {self.violations_dir}")
     
+    # Section: run the get sqlite violations workflow with clear inputs and outputs.
     def get_sqlite_violations(self) -> List[Dict[str, Any]]:
         """Fetch all violations from SQLite database."""
+        # Choose the correct branch before the workflow continues.
         if not self.sqlite_db_path.exists():
+            # Trigger the side effect required for this stage.
             logger.error(f"SQLite database not found: {self.sqlite_db_path}")
             return []
         
@@ -70,10 +79,12 @@ class SQLiteToSupabaseMigrator:
             cursor = conn.cursor()
             
             cursor.execute("SELECT * FROM violations ORDER BY created_at DESC")
+            # Prepare rows for the next step.
             rows = cursor.fetchall()
             
             violations = []
             for row in rows:
+                # Prepare violation for the next step.
                 violation = dict(row)
                 
                 # Parse JSON fields
@@ -83,6 +94,7 @@ class SQLiteToSupabaseMigrator:
                     except:
                         pass
                 
+                # Choose the correct branch before the workflow continues.
                 if violation.get('detection_data'):
                     try:
                         violation['detection_data'] = json.loads(violation['detection_data'])
@@ -91,6 +103,7 @@ class SQLiteToSupabaseMigrator:
                 
                 violations.append(violation)
             
+            # Trigger the side effect required for this stage.
             conn.close()
             logger.info(f"Found {len(violations)} violations in SQLite")
             return violations
@@ -99,6 +112,7 @@ class SQLiteToSupabaseMigrator:
             logger.error(f"Error reading SQLite database: {e}")
             return []
     
+    # Section: run the migrate violation workflow with clear inputs and outputs.
     def migrate_violation(self, violation: Dict[str, Any], dry_run: bool = False) -> bool:
         """
         Migrate a single violation to Supabase.
@@ -110,10 +124,12 @@ class SQLiteToSupabaseMigrator:
         Returns:
             True if successful, False otherwise
         """
+        # Prepare report id for the next step.
         report_id = violation['report_id']
         logger.info(f"{'[DRY RUN] ' if dry_run else ''}Migrating: {report_id}")
         
         if dry_run:
+            # Return the prepared result to the caller.
             return True
         
         try:
@@ -128,7 +144,9 @@ class SQLiteToSupabaseMigrator:
                 severity='HIGH'  # Default severity
             )
             
+            # Choose the correct branch before the workflow continues.
             if not detection_result:
+                # Trigger the side effect required for this stage.
                 logger.error(f"Failed to insert detection event: {report_id}")
                 return False
             
@@ -137,6 +155,7 @@ class SQLiteToSupabaseMigrator:
             
             original_image = violation_dir / 'original.jpg'
             annotated_image = violation_dir / 'annotated.jpg'
+            # Prepare report html for the next step.
             report_html = violation_dir / 'report.html'
             report_pdf = violation_dir / 'report.pdf'
             
@@ -149,6 +168,7 @@ class SQLiteToSupabaseMigrator:
             )
             
             # Step 3: Insert violation record
+            # Prepare violation id for the next step.
             violation_id = self.db_manager.insert_violation(
                 report_id=report_id,
                 violation_summary=violation.get('violation_summary'),
@@ -161,7 +181,9 @@ class SQLiteToSupabaseMigrator:
                 report_pdf_key=upload_results.get('report_pdf_key')
             )
             
+            # Choose the correct branch before the workflow continues.
             if violation_id:
+                # Trigger the side effect required for this stage.
                 logger.info(f"✓ Migrated: {report_id}")
                 return True
             else:
@@ -170,8 +192,10 @@ class SQLiteToSupabaseMigrator:
                 
         except Exception as e:
             logger.error(f"Error migrating {report_id}: {e}")
+            # Return the prepared result to the caller.
             return False
     
+    # Section: run the migrate all workflow with clear inputs and outputs.
     def migrate_all(self, limit: int = None, dry_run: bool = False):
         """
         Migrate all violations from SQLite to Supabase.
@@ -180,9 +204,11 @@ class SQLiteToSupabaseMigrator:
             limit: Maximum number of violations to migrate
             dry_run: If True, only preview without actually migrating
         """
+        # Prepare violations for the next step.
         violations = self.get_sqlite_violations()
         
         if limit:
+            # Prepare violations for the next step.
             violations = violations[:limit]
             logger.info(f"Limited to first {limit} violations")
         
@@ -191,15 +217,18 @@ class SQLiteToSupabaseMigrator:
             logger.info("DRY RUN MODE - No changes will be made")
             logger.info("=" * 70)
         
+        # Prepare total for the next step.
         total = len(violations)
         success_count = 0
         
         for i, violation in enumerate(violations, 1):
+            # Trigger the side effect required for this stage.
             logger.info(f"\n[{i}/{total}] Processing {violation['report_id']}")
             
             if self.migrate_violation(violation, dry_run):
                 success_count += 1
         
+        # Trigger the side effect required for this stage.
         logger.info("\n" + "=" * 70)
         logger.info("MIGRATION SUMMARY")
         logger.info("=" * 70)
@@ -209,8 +238,10 @@ class SQLiteToSupabaseMigrator:
         logger.info("=" * 70)
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main():
     """Main entry point."""
+    # Prepare parser for the next step.
     parser = argparse.ArgumentParser(description='Migrate violations from SQLite to Supabase')
     parser.add_argument('--dry-run', action='store_true', help='Preview migration without making changes')
     parser.add_argument('--limit', type=int, help='Limit number of violations to migrate')
@@ -222,6 +253,7 @@ def main():
     args = parser.parse_args()
     
     # Load environment variables
+    # Trigger the side effect required for this stage.
     load_dotenv()
     
     print("=" * 70)
@@ -229,6 +261,7 @@ def main():
     print("=" * 70)
     
     try:
+        # Prepare migrator for the next step.
         migrator = SQLiteToSupabaseMigrator(
             sqlite_db_path=args.sqlite_db,
             violations_dir=args.violations_dir
@@ -239,11 +272,14 @@ def main():
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         import traceback
+        # Trigger the side effect required for this stage.
         traceback.print_exc()
         return 1
     
+    # Return the prepared result to the caller.
     return 0
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == '__main__':
     exit(main())

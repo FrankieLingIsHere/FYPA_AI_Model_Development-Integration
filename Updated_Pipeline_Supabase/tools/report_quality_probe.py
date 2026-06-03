@@ -8,6 +8,7 @@ The probe intentionally uses one known image plus detector facts, then exercises
 
 It writes all artifacts under reports/debug so generated files stay out of git.
 """
+# Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 
 from __future__ import annotations
 
@@ -24,12 +25,16 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 
+# Prepare root for the next step.
 ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ROOT.parent
 
 
+# Section: run the load env file workflow with clear inputs and outputs.
 def _load_env_file(path: Path) -> None:
+    # Choose the correct branch before the workflow continues.
     if not path.exists():
+        # Return the prepared result to the caller.
         return
     for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         line = raw_line.strip()
@@ -39,17 +44,21 @@ def _load_env_file(path: Path) -> None:
         key = key.strip()
         if not key or key in os.environ:
             continue
+        # Prepare value for the next step.
         value = value.strip().strip('"').strip("'")
         os.environ[key] = value
 
 
+# Section: run the configure mode workflow with clear inputs and outputs.
 def _configure_mode(mode: str) -> None:
+    # Prepare values needed by the next step.
     os.environ["STRICT_PROVIDER_MODE_SPLIT"] = "true"
     os.environ["ALLOW_NLP_FALLBACK"] = "false"
     os.environ["STRICT_REPORT_GENERATION"] = "true"
     os.environ["CLOUD_REPORT_FALLBACK_ENABLED"] = "false"
 
     if mode == "local":
+        # Prepare values needed by the next step.
         os.environ["CASM_ROUTING_PROFILE"] = "local"
         os.environ["GEMINI_ENABLED"] = "false"
         os.environ["MODEL_API_ENABLED"] = "false"
@@ -59,6 +68,7 @@ def _configure_mode(mode: str) -> None:
         os.environ.setdefault("OLLAMA_MODEL", os.environ.get("LOCAL_OLLAMA_UNIFIED_MODEL", "gemma3:4b"))
         os.environ.setdefault("LOCAL_OLLAMA_CPU_VISION_READ_TIMEOUT_SECONDS", "210")
         os.environ.setdefault("OLLAMA_FORCE_LOCAL_READ_TIMEOUT_SECONDS", "240")
+        # Trigger the side effect required for this stage.
         os.environ.setdefault("OLLAMA_FORCE_LOCAL_MAX_ATTEMPTS", "2")
         os.environ.setdefault("OLLAMA_FORCE_LOCAL_JSON_SCHEMA", "true")
     else:
@@ -68,11 +78,14 @@ def _configure_mode(mode: str) -> None:
         os.environ["VISION_PROVIDER_ORDER"] = "gemini"
         os.environ["NLP_PROVIDER_ORDER"] = "gemini"
         os.environ.setdefault("GEMINI_REPORT_MAX_RETRIES", "1")
+        # Trigger the side effect required for this stage.
         os.environ.setdefault("GEMINI_SCHEMA_REGEN_ATTEMPTS", "1")
         os.environ.setdefault("GEMINI_SEMANTIC_REGEN_ATTEMPTS", "1")
 
 
+# Section: run the strip html text workflow with clear inputs and outputs.
 def _strip_html_text(path: Path) -> str:
+    # Choose the correct branch before the workflow continues.
     if not path.exists():
         return ""
     raw = path.read_text(encoding="utf-8", errors="ignore")
@@ -82,7 +95,9 @@ def _strip_html_text(path: Path) -> str:
     return html.unescape(re.sub(r"\s+", " ", raw)).strip()
 
 
+# Section: run the quality flags workflow with clear inputs and outputs.
 def _quality_flags(text: str, nlp_analysis: Dict[str, Any]) -> Dict[str, Any]:
+    # Prepare lower for the next step.
     lower = text.lower()
     hard_fail_terms = [
         "stop work",
@@ -93,16 +108,21 @@ def _quality_flags(text: str, nlp_analysis: Dict[str, Any]) -> Dict[str, Any]:
         "respiratory exposure risk from dust",
         "struck-by risk due to reduced worker visibility",
     ]
+    # Prepare found terms for the next step.
     found_terms = [term for term in hard_fail_terms if term in lower]
 
     likelihoods: List[str] = []
     for person in nlp_analysis.get("persons") or []:
+        # Choose the correct branch before the workflow continues.
         if not isinstance(person, dict):
             continue
         for risk in person.get("risks") or []:
+            # Choose the correct branch before the workflow continues.
             if isinstance(risk, dict):
+                # Trigger the side effect required for this stage.
                 likelihoods.append(str(risk.get("likelihood") or "").strip().upper())
 
+    # Return the prepared result to the caller.
     return {
         "over_escalation_terms": found_terms,
         "likelihoods": likelihoods,
@@ -114,7 +134,9 @@ def _quality_flags(text: str, nlp_analysis: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# Section: run the default detections workflow with clear inputs and outputs.
 def _default_detections() -> List[Dict[str, Any]]:
+    # Return the prepared result to the caller.
     return [
         {"class_name": "Person", "confidence": 0.91, "bbox": [0, 0, 1, 1]},
         {"class_name": "NO-Hardhat", "confidence": 0.88, "bbox": [0, 0, 1, 1]},
@@ -123,7 +145,9 @@ def _default_detections() -> List[Dict[str, Any]]:
     ]
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main() -> int:
+    # Prepare parser for the next step.
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["local", "cloud"], required=True)
     parser.add_argument("--image", required=True)
@@ -133,6 +157,7 @@ def main() -> int:
     args = parser.parse_args()
 
     _load_env_file(ROOT / ".env")
+    # Trigger the side effect required for this stage.
     _load_env_file(REPO_ROOT / ".env")
     _configure_mode(args.mode)
 
@@ -148,8 +173,10 @@ def main() -> int:
         REPORT_CONFIG,
     )
 
+    # Prepare source image for the next step.
     source_image = Path(args.image).resolve()
     if not source_image.exists():
+        # Surface the failure with enough context for the caller.
         raise FileNotFoundError(source_image)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -157,6 +184,7 @@ def main() -> int:
     report_id = f"{args.mode}_quality_probe_{report_id_seed}_{timestamp}"
     output_root = ROOT / "reports" / "debug" / report_id
     violation_dir = output_root / "violations" / report_id
+    # Prepare reports dir for the next step.
     reports_dir = output_root / "reports"
     violation_dir.mkdir(parents=True, exist_ok=True)
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -169,6 +197,7 @@ def main() -> int:
 
     timings: Dict[str, float] = {}
 
+    # Prepare caption started for the next step.
     caption_started = time.perf_counter()
     caption = caption_image_llava(str(original_path)) or ""
     timings["caption_generation_seconds"] = round(time.perf_counter() - caption_started, 2)
@@ -187,6 +216,7 @@ def main() -> int:
         "VIOLATIONS_DIR": output_root / "violations",
     }
 
+    # Prepare init started for the next step.
     init_started = time.perf_counter()
     generator = ReportGenerator(config)
     timings["report_generator_init_seconds"] = round(time.perf_counter() - init_started, 2)
@@ -206,6 +236,7 @@ def main() -> int:
         "force_local_nlp": args.mode == "local",
     }
 
+    # Prepare report started for the next step.
     report_started = time.perf_counter()
     result = generator.generate_report(report_data)
     timings["report_generation_seconds"] = round(time.perf_counter() - report_started, 2)
@@ -215,6 +246,7 @@ def main() -> int:
     ), 2)
 
     html_path = Path(result.get("html") or "")
+    # Prepare nlp analysis for the next step.
     nlp_analysis = result.get("nlp_analysis") or {}
     rendered_text = _strip_html_text(html_path)
     flags = _quality_flags(rendered_text, nlp_analysis if isinstance(nlp_analysis, dict) else {})
@@ -244,11 +276,13 @@ def main() -> int:
         "quality_flags": flags,
     }
 
+    # Prepare metadata path for the next step.
     metadata_path = output_root / "probe_metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=True), encoding="utf-8")
     print(json.dumps(metadata, indent=2, ensure_ascii=True))
     return 0
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
     raise SystemExit(main())

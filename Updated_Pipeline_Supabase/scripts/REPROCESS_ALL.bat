@@ -1,4 +1,5 @@
 @echo off
+REM Readability: Utility script: keep operational maintenance steps visible and repeatable.
 REM Reprocess All Reports with Latest Pipeline
 REM ============================================
 
@@ -6,6 +7,7 @@ REM Move to project root (this .bat lives in scripts/, root is parent dir)
 cd /d "%~dp0.."
 
 echo.
+REM Section: perform this operational step before continuing.
 echo ========================================
 echo  Reprocess All Reports Utility
 echo ========================================
@@ -16,6 +18,7 @@ echo.
 echo Press Ctrl+C to cancel, or
 pause
 
+REM Section: perform this operational step before continuing.
 echo.
 echo Starting reprocessing...
 echo.
@@ -29,6 +32,7 @@ if not exist "venv\Scripts\activate.bat" (
 )
 
 REM Activate virtual environment
+REM Section: perform this operational step before continuing.
 echo Activating virtual environment...
 call venv\Scripts\activate.bat
 
@@ -39,6 +43,7 @@ if errorlevel 1 (
 )
 
 echo Virtual environment activated.
+REM Section: perform this operational step before continuing.
 echo.
 
 REM Check if .env file exists
@@ -50,6 +55,7 @@ if not exist ".env" (
 )
 
 REM Run reprocessing script (now in scripts/ subfolder)
+REM Section: perform this operational step before continuing.
 echo Running scripts\reprocess_reports.py --all
 echo.
 python scripts\reprocess_reports.py --all
@@ -60,6 +66,7 @@ if errorlevel 1 (
     echo Check the error messages above.
 ) else (
     echo.
+REM Section: perform this operational step before continuing.
     echo ========================================
     echo  Reprocessing Complete Successfully!
     echo ========================================

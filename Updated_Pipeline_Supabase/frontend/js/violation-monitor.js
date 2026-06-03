@@ -1,3 +1,4 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 // Violation Monitor - Smart Notification System
 // ==============================================
 // NOTIFICATION BEHAVIOR:
@@ -23,6 +24,7 @@ const ViolationMonitor = {
     STORAGE_KEY: 'casm_last_visit_time',
 
     start() {
+        // Choose the correct browser state branch before continuing.
         if (this.isMonitoring) return;
 
         this.isMonitoring = true;
@@ -49,16 +51,19 @@ const ViolationMonitor = {
         const POLL_INTERVAL_ACTIVE_MS = 15000;
         const POLL_INTERVAL_REALTIME_MS = 60000;
         const computePollInterval = () => {
+            // Choose the correct browser state branch before continuing.
             if (typeof document !== 'undefined' && document.hidden) return null;
             const realtimeConnected = typeof RealtimeSync !== 'undefined' && !!RealtimeSync.isConnected;
             return realtimeConnected ? POLL_INTERVAL_REALTIME_MS : POLL_INTERVAL_ACTIVE_MS;
         };
+        // Prepare arm polling for the next UI or data step.
         const armPolling = () => {
             if (this.checkInterval) {
                 clearInterval(this.checkInterval);
                 this.checkInterval = null;
             }
             const intervalMs = computePollInterval();
+            // Choose the correct browser state branch before continuing.
             if (!intervalMs) return;
             this.checkInterval = setInterval(() => {
                 this.checkForNewViolations({ reason: 'poll' });
@@ -73,6 +78,7 @@ const ViolationMonitor = {
             }
         };
         window.addEventListener('ppe-realtime:connection', this._pollAdjustHandler);
+        // Choose the correct browser state branch before continuing.
         if (typeof document !== 'undefined') {
             document.addEventListener('visibilitychange', this._pollAdjustHandler);
         }
@@ -86,6 +92,7 @@ const ViolationMonitor = {
     },
 
     stop() {
+        // Choose the correct browser state branch before continuing.
         if (!this.isMonitoring) return;
 
         this.isMonitoring = false;
@@ -96,8 +103,10 @@ const ViolationMonitor = {
             this.checkInterval = null;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (this._pollAdjustHandler) {
             window.removeEventListener('ppe-realtime:connection', this._pollAdjustHandler);
+            // Choose the correct browser state branch before continuing.
             if (typeof document !== 'undefined') {
                 document.removeEventListener('visibilitychange', this._pollAdjustHandler);
             }
@@ -112,6 +121,7 @@ const ViolationMonitor = {
     },
 
     hasReadableReportEvidence(record = {}) {
+        // Choose the correct browser state branch before continuing.
         if (!record || typeof record !== 'object') return false;
         return !!(
             record.has_report
@@ -128,10 +138,13 @@ const ViolationMonitor = {
     },
 
     hasTrackedInFlightReports() {
+        // Walk through the active items and update each one consistently.
         for (const item of this.knownViolations.values()) {
+            // Choose the correct browser state branch before continuing.
             if (!item || item.watchStatus !== true) continue;
             const status = this.normalizeStatusValue(item && item.status, !!(item && item.hasReport));
             if (status === 'pending' || status === 'generating') {
+                // Return the prepared value to the caller.
                 return true;
             }
         }
@@ -139,8 +152,10 @@ const ViolationMonitor = {
     },
 
     syncInFlightStatusFallback() {
+        // Choose the correct browser state branch before continuing.
         if (!this.isMonitoring) return;
         if (!this.hasTrackedInFlightReports()) {
+            // Choose the correct browser state branch before continuing.
             if (this.inFlightStatusTimer) {
                 clearInterval(this.inFlightStatusTimer);
                 this.inFlightStatusTimer = null;
@@ -155,19 +170,23 @@ const ViolationMonitor = {
     },
 
     async pollInFlightReportStatuses() {
+        // Choose the correct browser state branch before continuing.
         if (this.inFlightStatusInProgress) return;
         if (typeof API === 'undefined' || typeof API.getReportStatus !== 'function') return;
         if (typeof document !== 'undefined' && document.hidden) return;
 
         const candidates = Array.from(this.knownViolations.entries())
             .filter(([, item]) => {
+                // Choose the correct browser state branch before continuing.
                 if (!item || item.watchStatus !== true) return false;
                 const status = this.normalizeStatusValue(item && item.status, !!(item && item.hasReport));
                 return status === 'pending' || status === 'generating';
             })
             .slice(0, 3);
+        // Choose the correct browser state branch before continuing.
         if (!candidates.length) {
             this.syncInFlightStatusFallback();
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -179,6 +198,7 @@ const ViolationMonitor = {
                     noCache: true,
                     timeoutMs: 6000
                 });
+                // Choose the correct browser state branch before continuing.
                 if (!data || typeof data !== 'object') return;
 
                 const previousHasReport = !!(tracked && tracked.hasReport);
@@ -210,6 +230,7 @@ const ViolationMonitor = {
                     watchStatus: nextStatus === 'pending' || nextStatus === 'generating'
                 });
 
+                // Choose the correct browser state branch before continuing.
                 if (typeof window !== 'undefined') {
                     window.dispatchEvent(new CustomEvent('ppe-report-status:update', {
                         detail: violation
@@ -232,8 +253,10 @@ const ViolationMonitor = {
     },
 
     _getLastVisitTime() {
+        // Keep this browser operation recoverable if it fails.
         try {
             const stored = localStorage.getItem(this.STORAGE_KEY);
+            // Return the prepared value to the caller.
             return stored ? new Date(stored) : null;
         } catch (e) {
             console.warn('[ViolationMonitor] Could not read localStorage:', e);
@@ -242,6 +265,7 @@ const ViolationMonitor = {
     },
 
     _saveVisitTime() {
+        // Keep this browser operation recoverable if it fails.
         try {
             localStorage.setItem(this.STORAGE_KEY, new Date().toISOString());
         } catch (e) {
@@ -258,8 +282,10 @@ const ViolationMonitor = {
 
     async checkForNewViolations(options = {}) {
         const requestedOptions = this._mergeCheckOptions(null, options);
+        // Choose the correct browser state branch before continuing.
         if (this.isChecking) {
             this.pendingCheckOptions = this._mergeCheckOptions(this.pendingCheckOptions, requestedOptions);
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -278,6 +304,7 @@ const ViolationMonitor = {
 
     applyRealtimePayload(payload = {}) {
         const reports = Array.isArray(payload && payload.reports) ? payload.reports : [];
+        // Choose the correct browser state branch before continuing.
         if (!reports.length) return;
         this.processViolationRows(reports, { reason: 'realtime-payload' });
     },
@@ -287,6 +314,7 @@ const ViolationMonitor = {
 
         for (const violation of violations) {
             const reportId = violation && violation.report_id;
+            // Choose the correct browser state branch before continuing.
             if (!reportId) continue;
 
             const rowHasReport = this.hasReadableReportEvidence(violation);
@@ -302,12 +330,15 @@ const ViolationMonitor = {
                 || new Date(0);
             const eventType = String((violation && violation.event_type) || '').trim().toLowerCase();
             const happenedDuringSession = violationTime >= this.sessionStartTime;
+            // Prepare watch status for the next UI or data step.
             const watchStatus = (status === 'pending' || status === 'generating')
                 && (happenedDuringSession || eventType === 'violation_detected' || (previousData && previousData.watchStatus === true));
 
             if (!previousData) {
+                // Choose the correct browser state branch before continuing.
                 if (happenedDuringSession) {
                     console.log(`[ViolationMonitor] realtime/poll row: ${reportId} ${status} (${reason || 'unknown'})`);
+                    // Choose the correct browser state branch before continuing.
                     if (eventType === 'violation_detected') {
                         this._notifyViolationDetected(violation);
                     }
@@ -329,10 +360,13 @@ const ViolationMonitor = {
                 continue;
             }
 
+            // Choose the correct browser state branch before continuing.
             if (previousData.status !== status) {
                 console.log(`[ViolationMonitor] Status change: ${reportId} ${previousData.status} -> ${status}`);
                 const shouldNotify = previousData.watchStatus === true || happenedDuringSession;
+                // Choose the correct browser state branch before continuing.
                 if (shouldNotify) {
+                    // Choose the correct browser state branch before continuing.
                     if (status === 'generating' && previousData.status === 'pending') {
                         this._notifyReportGenerating(violation);
                     } else if (status === 'completed') {
@@ -353,6 +387,7 @@ const ViolationMonitor = {
             }
 
             const isRealtime = this.knownViolations.get(reportId)?.timestamp > this.sessionStartTime;
+            // Choose the correct browser state branch before continuing.
             if (isRealtime) {
                 this._checkValidationWarnings(violation);
             }
@@ -362,14 +397,17 @@ const ViolationMonitor = {
     },
 
     async _runViolationCheck(options = {}) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const violations = await this.fetchMonitorViolations(options);
 
+            // Choose the correct browser state branch before continuing.
             if (this.isInitialLoad) {
                 // INITIAL LOAD: hydrate baseline state without replaying historical toasts.
                 this._handleInitialLoad(violations);
                 this.isInitialLoad = false;
                 this.syncInFlightStatusFallback();
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -377,6 +415,7 @@ const ViolationMonitor = {
             return;
 
             // REAL-TIME MODE: Only notify for violations detected AFTER session started
+            // Walk through the active items and update each one consistently.
             for (const violation of violations) {
                 const reportId = violation.report_id;
                 if (!reportId) continue;
@@ -385,6 +424,7 @@ const ViolationMonitor = {
                 const previousData = this.knownViolations.get(reportId);
 
                 // Check if this is a NEW violation (not seen before)
+                // Choose the correct browser state branch before continuing.
                 if (!previousData) {
                     // Only show real-time notifications for violations created after this page session started.
                     const isNewDuringSession = violationTime >= this.sessionStartTime;
@@ -467,6 +507,7 @@ const ViolationMonitor = {
             API.getPendingReports(requestOptions)
         ]);
 
+        // Choose the correct browser state branch before continuing.
         if (violationsResult.status === 'rejected' && pendingResult.status === 'rejected') {
             throw violationsResult.reason || pendingResult.reason;
         }
@@ -485,6 +526,7 @@ const ViolationMonitor = {
             ? pendingResult.value
             : [];
 
+        // Return the prepared value to the caller.
         return this.mergePendingReportsForNotifications(violations, pendingReports);
     },
 
@@ -495,6 +537,7 @@ const ViolationMonitor = {
 
         base.forEach((item) => {
             const reportId = String((item && item.report_id) || '').trim();
+            // Choose the correct browser state branch before continuing.
             if (!reportId) return;
             const normalized = { ...item, report_id: reportId };
             normalized.has_report = this.hasReadableReportEvidence(normalized);
@@ -509,9 +552,11 @@ const ViolationMonitor = {
             const pendingHasReport = this.hasReadableReportEvidence(item);
             const pendingStatus = this.normalizeStatusValue(item && item.status, pendingHasReport);
             const existing = byId.get(reportId);
+            // Choose the correct browser state branch before continuing.
             if (existing) {
                 const existingHasReport = this.hasReadableReportEvidence(existing);
                 const existingStatus = this.normalizeStatusValue(existing.status, existingHasReport);
+                // Choose the correct browser state branch before continuing.
                 if (
                     this.getStatusPriority(pendingStatus) > this.getStatusPriority(existingStatus)
                     && !existingHasReport
@@ -532,6 +577,7 @@ const ViolationMonitor = {
                 existing.has_original = !!existing.has_original || !!item.has_original;
                 existing.has_annotated = !!existing.has_annotated || !!item.has_annotated;
                 existing.has_report = existingHasReport || pendingHasReport;
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -557,8 +603,10 @@ const ViolationMonitor = {
         merged.sort((a, b) => {
             const aTime = Date.parse(a.timestamp || a.updated_at || '') || 0;
             const bTime = Date.parse(b.timestamp || b.updated_at || '') || 0;
+            // Return the prepared value to the caller.
             return bTime - aTime;
         });
+        // Return the prepared value to the caller.
         return merged;
     },
 
@@ -569,6 +617,7 @@ const ViolationMonitor = {
         if (raw === 'partial' || raw === 'degraded') return 'partial';
         if (raw === 'failed' || raw === 'error' || raw === 'errored') return 'failed';
         if (raw === 'skipped' || raw === 'cancelled' || raw === 'canceled') return 'skipped';
+        // Choose the correct browser state branch before continuing.
         if (hasReport && (
             raw === 'generating'
             || raw === 'processing'
@@ -581,8 +630,10 @@ const ViolationMonitor = {
             || raw === 'waiting'
             || raw === 'enqueued'
         )) {
+            // Return the prepared value to the caller.
             return 'completed';
         }
+        // Choose the correct browser state branch before continuing.
         if (
             raw === 'generating'
             || raw === 'processing'
@@ -599,8 +650,10 @@ const ViolationMonitor = {
             || raw === 'waiting'
             || raw === 'enqueued'
         ) {
+            // Return the prepared value to the caller.
             return 'pending';
         }
+        // Return the prepared value to the caller.
         return hasReport ? 'completed' : raw;
     },
 
@@ -614,6 +667,7 @@ const ViolationMonitor = {
     },
 
     parseEventDate(value) {
+        // Choose the correct browser state branch before continuing.
         if (!value) return null;
         const date = new Date(value);
         return Number.isFinite(date.getTime()) ? date : null;
@@ -630,8 +684,10 @@ const ViolationMonitor = {
             violation.failed_at,
             violation.timestamp
         ];
+        // Walk through the active items and update each one consistently.
         for (const candidate of candidates) {
             const parsed = this.parseEventDate(candidate);
+            // Choose the correct browser state branch before continuing.
             if (parsed) return parsed;
         }
         return null;
@@ -640,12 +696,14 @@ const ViolationMonitor = {
     isLifecycleEventDuringSession(violation) {
         const eventDate = this.getLifecycleEventDate(violation);
         if (!eventDate || !this.sessionStartTime) return false;
+        // Return the prepared value to the caller.
         return eventDate >= this.sessionStartTime;
     },
 
     _handleInitialLoad(violations) {
         if (!violations || violations.length === 0) {
             console.log('[ViolationMonitor] No violations in database');
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -656,6 +714,7 @@ const ViolationMonitor = {
             const hasReport = this.hasReadableReportEvidence(v);
             const status = this.normalizeStatusValue(v.status, hasReport);
             const happenedDuringSession = this.sessionStartTime && violationTime >= this.sessionStartTime;
+            // Prepare watch status for the next UI or data step.
             const watchStatus = (status === 'pending' || status === 'generating') && happenedDuringSession;
 
             this.knownViolations.set(reportId, { status, timestamp: violationTime, hasReport, watchStatus });
@@ -713,8 +772,10 @@ const ViolationMonitor = {
         const hasReport = this.hasReadableReportEvidence(violation);
         const status = this.normalizeStatusValue(violation.status, hasReport);
         const violationTime = this.parseEventDate(violation.timestamp) || this.getLifecycleEventDate(violation) || new Date();
+        // Choose the correct browser state branch before continuing.
         if (reportId) {
             const previous = this.knownViolations.get(reportId);
+            // Choose the correct browser state branch before continuing.
             if (!previous || this.getStatusPriority(status) >= this.getStatusPriority(previous.status)) {
                 this.knownViolations.set(reportId, {
                     status,
@@ -722,6 +783,7 @@ const ViolationMonitor = {
                     hasReport,
                     watchStatus: status === 'pending' || status === 'generating'
                 });
+                // Choose the correct browser state branch before continuing.
                 if (status === 'pending' || status === 'generating') {
                     this.syncInFlightStatusFallback();
                 }
@@ -729,30 +791,37 @@ const ViolationMonitor = {
         }
 
         // Derive a human-friendly type string: prefer explicit type, else missing PPE, else try parsing summary
+        // Prepare derived type for the next UI or data step.
         let derivedType = null;
         if (violation.violation_type && violation.violation_type !== 'PPE Violation') {
             derivedType = violation.violation_type;
         }
 
         if (!derivedType) {
+            // Choose the correct browser state branch before continuing.
             if (Array.isArray(violation.missing_ppe) && violation.missing_ppe.length > 0) {
+                // Choose the correct browser state branch before continuing.
                 if (violation.missing_ppe.length === 1) derivedType = `Missing ${violation.missing_ppe[0]}`;
                 else if (violation.missing_ppe.length === 2) derivedType = `Missing ${violation.missing_ppe[0]} and ${violation.missing_ppe[1]}`;
                 else derivedType = `Missing ${violation.missing_ppe.slice(0, 5).join(', ')}`;
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (!derivedType && violation.violation_summary) {
             const s = violation.violation_summary;
             const m = s.match(/Missing:?\s*([^\.\n]+)/i) || s.match(/PPE Violation Detected:\s*(.+)/i);
+            // Choose the correct browser state branch before continuing.
             if (m && m[1]) {
                 const parts = m[1].split(',').map(x => x.trim()).filter(Boolean);
+                // Choose the correct browser state branch before continuing.
                 if (parts.length === 1) derivedType = `Missing ${parts[0]}`;
                 else if (parts.length === 2) derivedType = `Missing ${parts[0]} and ${parts[1]}`;
                 else derivedType = `Missing ${parts.slice(0, 5).join(', ')}`;
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (!derivedType) derivedType = 'PPE Violation';
 
         NotificationManager.show(
@@ -772,7 +841,9 @@ const ViolationMonitor = {
 
         console.log(`[ViolationMonitor] VIOLATION: ${violation.report_id} (${derivedType})`);
         // Trigger audio alert (if available) for immediate real-time detections
+        // Keep this browser operation recoverable if it fails.
         try {
+            // Choose the correct browser state branch before continuing.
             if (window.AudioAlert && typeof window.AudioAlert.speakViolation === 'function') {
                 console.log('[ViolationMonitor] Calling AudioAlert.speakViolation for', violation.report_id);
                 AudioAlert.speakViolation(violation);
@@ -818,6 +889,7 @@ const ViolationMonitor = {
         const action = {
             text: 'Open Report',
             onClickFn: () => {
+                // Prepare url for the next UI or data step.
                 const url = (typeof API !== 'undefined' && typeof API.getReportUrl === 'function')
                     ? API.getReportUrl(violation.report_id, violation)
                     : `${API_CONFIG.BASE_URL}/report/${violation.report_id}`;
@@ -825,6 +897,7 @@ const ViolationMonitor = {
             }
         };
 
+        // Choose the correct browser state branch before continuing.
         if (typeof NotificationManager.reportReady === 'function') {
             NotificationManager.reportReady(violation.report_id, {
                 title: 'Report Complete',
@@ -878,6 +951,7 @@ const ViolationMonitor = {
         if (!validation || validation.is_valid !== false) return;
 
         const notifKey = `validation_${violation.report_id}`;
+        // Choose the correct browser state branch before continuing.
         if (this.notifiedEvents.has(notifKey)) return;
 
         this.notifiedEvents.add(notifKey);
@@ -960,6 +1034,7 @@ const ViolationMonitor = {
 };
 
 // Auto-start monitoring when page loads
+// Choose the correct browser state branch before continuing.
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => ViolationMonitor.start(), 2000);

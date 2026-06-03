@@ -1,3 +1,4 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 const CASMAssistant = {
     ASSISTANT_NAME: 'Mira',
     ASSISTANT_ROLE: 'CASM Safety Copilot',
@@ -27,6 +28,7 @@ const CASMAssistant = {
 
     init() {
         this.cacheDom();
+        // Choose the correct browser state branch before continuing.
         if (!this.ui.launcher || !this.ui.panel) return;
         this.applyBranding();
         if (this.ui.input) {
@@ -72,6 +74,7 @@ const CASMAssistant = {
     },
 
     applyBranding() {
+        // Choose the correct browser state branch before continuing.
         if (this.ui.launcher) {
             const label = `Open ${this.ASSISTANT_NAME} chat`;
             this.ui.launcher.setAttribute('aria-label', label);
@@ -83,6 +86,7 @@ const CASMAssistant = {
         if (this.ui.kicker) {
             this.ui.kicker.textContent = this.ASSISTANT_ROLE;
         }
+        // Choose the correct browser state branch before continuing.
         if (this.ui.subtitle) {
             this.ui.subtitle.textContent = this.ASSISTANT_SUBTITLE;
         }
@@ -105,6 +109,7 @@ const CASMAssistant = {
         });
         this.ui.input.addEventListener('input', () => this.autosizeInput());
         this.ui.input.addEventListener('keydown', (event) => {
+            // Choose the correct browser state branch before continuing.
             if (event.key === 'Enter' && !event.shiftKey) {
                 event.preventDefault();
                 this.handleSubmit();
@@ -112,12 +117,14 @@ const CASMAssistant = {
         });
         this.ui.messages.addEventListener('click', (event) => this.handleActionClick(event));
         this.ui.shortcutStrip.addEventListener('click', (event) => this.handleActionClick(event));
+        // Choose the correct browser state branch before continuing.
         if (this.ui.promptDeck) {
             this.ui.promptDeck.addEventListener('click', (event) => this.handleActionClick(event));
         }
         this.ui.panel.addEventListener('wheel', (event) => this.handlePanelWheel(event), { passive: false });
         this.ui.sessionList.addEventListener('click', (event) => this.handleSessionRailClick(event));
         document.addEventListener('keydown', (event) => {
+            // Choose the correct browser state branch before continuing.
             if (event.key === 'Escape' && this.panelOpen) {
                 this.togglePanel(false);
             }
@@ -130,6 +137,7 @@ const CASMAssistant = {
     },
 
     handleResize() {
+        // Choose the correct browser state branch before continuing.
         if (window.innerWidth > 900) {
             this.railOpen = true;
         } else if (!this.panelOpen) {
@@ -140,6 +148,7 @@ const CASMAssistant = {
     },
 
     handlePanelWheel(event) {
+        // Choose the correct browser state branch before continuing.
         if (!this.panelOpen || !this.ui.messages) return;
         if (window.innerWidth <= 900) return;
         const messages = this.ui.messages;
@@ -153,6 +162,7 @@ const CASMAssistant = {
             target.closest('.assistant-shortcut-strip') ||
             target.closest('.assistant-prompt-chip-row')
         ) {
+            // Return the prepared value to the caller.
             return;
         }
         messages.scrollTop += event.deltaY;
@@ -160,10 +170,12 @@ const CASMAssistant = {
     },
 
     loadState() {
+        // Keep this browser operation recoverable if it fails.
         try {
             const rawSessions = localStorage.getItem(this.STORAGE_KEY);
             if (rawSessions) {
                 const parsed = JSON.parse(rawSessions);
+                // Choose the correct browser state branch before continuing.
                 if (Array.isArray(parsed)) {
                     this.sessions = parsed
                         .filter((session) => session && session.id)
@@ -175,9 +187,11 @@ const CASMAssistant = {
             this.sessions = [];
         }
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const rawPanelState = localStorage.getItem(this.PANEL_STATE_KEY);
             const parsedPanelState = rawPanelState ? JSON.parse(rawPanelState) : null;
+            // Choose the correct browser state branch before continuing.
             if (parsedPanelState && typeof parsedPanelState === 'object') {
                 this.activeSessionId = String(parsedPanelState.activeSessionId || '').trim();
                 this.railOpen = parsedPanelState.railOpen !== false;
@@ -188,6 +202,7 @@ const CASMAssistant = {
     },
 
     saveState() {
+        // Keep this browser operation recoverable if it fails.
         try {
             localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.sessions.slice(0, this.MAX_SESSIONS)));
         } catch (_) {
@@ -208,6 +223,7 @@ const CASMAssistant = {
 
     normalizeSession(session) {
         const id = String(session?.id || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!id) return null;
         const messages = Array.isArray(session.messages) ? session.messages.slice(-this.MAX_MESSAGES) : [];
         return {
@@ -249,6 +265,7 @@ const CASMAssistant = {
     },
 
     normalizeMessage(message) {
+        // Choose the correct browser state branch before continuing.
         if (!message || !message.id || !message.role) return null;
         return {
             id: String(message.id),
@@ -268,8 +285,10 @@ const CASMAssistant = {
 
     normalizeMessageRole(role) {
         const normalized = String(role || '').trim().toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (!normalized) return 'assistant';
         if (['assistant', 'mira', 'moira', 'bot', 'copilot', 'system'].includes(normalized)) {
+            // Return the prepared value to the caller.
             return 'assistant';
         }
         if (['user', 'human', 'me', 'you'].includes(normalized)) {
@@ -278,6 +297,7 @@ const CASMAssistant = {
         if (normalized.includes('user') || normalized.includes('human')) {
             return 'user';
         }
+        // Return the prepared value to the caller.
         return 'assistant';
     },
 
@@ -290,6 +310,7 @@ const CASMAssistant = {
         }
 
         const active = this.sessions.find((session) => session.id === this.activeSessionId);
+        // Choose the correct browser state branch before continuing.
         if (!active) {
             this.activeSessionId = this.sessions[0].id;
         }
@@ -318,6 +339,7 @@ const CASMAssistant = {
             },
             messages: []
         };
+        // Choose the correct browser state branch before continuing.
         if (welcome) {
             session.messages.push({
                 id: `msg-${Date.now()}-welcome`,
@@ -342,6 +364,7 @@ const CASMAssistant = {
                 ]
             });
         }
+        // Return the prepared value to the caller.
         return session;
     },
 
@@ -356,6 +379,7 @@ const CASMAssistant = {
         this.renderSessionRail();
         this.renderMessages();
         this.saveState();
+        // Choose the correct browser state branch before continuing.
         if (options.focusInput) {
             this.togglePanel(true);
             this.ui.input.focus();
@@ -368,6 +392,7 @@ const CASMAssistant = {
 
     setActiveSession(sessionId) {
         const target = this.sessions.find((session) => session.id === sessionId);
+        // Choose the correct browser state branch before continuing.
         if (!target) return;
         this.activeSessionId = target.id;
         target.updatedAt = Date.now();
@@ -380,6 +405,7 @@ const CASMAssistant = {
     togglePanel(force) {
         const next = typeof force === 'boolean' ? force : !this.panelOpen;
         this.panelOpen = next;
+        // Choose the correct browser state branch before continuing.
         if (next && window.innerWidth > 900) {
             this.railOpen = true;
         }
@@ -406,6 +432,7 @@ const CASMAssistant = {
         this.ui.sessionRail.classList.toggle('is-open', this.railOpen);
         document.body.classList.toggle('assistant-open', this.panelOpen);
         document.body.classList.toggle('assistant-rail-open', this.panelOpen && this.railOpen);
+        // Choose the correct browser state branch before continuing.
         if (updateLauncher) {
             this.ui.launcher.setAttribute('aria-expanded', this.panelOpen ? 'true' : 'false');
         }
@@ -437,6 +464,7 @@ const CASMAssistant = {
     },
 
     buildPromptSuggestion(label, prompt) {
+        // Return the prepared value to the caller.
         return {
             type: 'prompt',
             label: String(label || '').trim(),
@@ -452,6 +480,7 @@ const CASMAssistant = {
         const userMessages = messages.filter((message) => message.role === 'user');
         const lastAssistantMessage = [...messages].reverse().find((message) => message.role === 'assistant') || null;
         const tutorialFlow = String(session?.context?.tutorialFlow || 'cloud') === 'local' ? 'local' : 'cloud';
+        // Prepare tutorial steps for the next UI or data step.
         const tutorialSteps = (window.CASM_TUTORIAL_FLOWS && window.CASM_TUTORIAL_FLOWS[tutorialFlow]) || [];
         const tutorialIndex = Math.max(0, Math.min(
             Number(session?.context?.tutorialIndex || 0),
@@ -465,6 +494,7 @@ const CASMAssistant = {
             actions: []
         };
 
+        // Choose the correct browser state branch before continuing.
         if (!userMessages.length) {
             promptModel.actions = [
                 this.buildPromptSuggestion('What is CASM?', 'what is this system for'),
@@ -473,9 +503,11 @@ const CASMAssistant = {
                 this.buildPromptSuggestion('Check image', 'can you check if this image has violations'),
                 { type: 'guided-start', label: 'Guided Analytics', guidedKind: 'analytics' }
             ];
+            // Return the prepared value to the caller.
             return promptModel;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (this.isOnboardingIntent(lastUserPrompt)) {
             promptModel.headline = 'Start here';
             promptModel.subline = 'If the system is new to you, these prompts walk through the safest first actions without assuming prior context.';
@@ -487,9 +519,11 @@ const CASMAssistant = {
                 this.buildPromptSuggestion('Recommend settings', 'recommend settings'),
                 this.buildPromptSuggestion('Open handbook', 'open handbook')
             ];
+            // Return the prepared value to the caller.
             return promptModel;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (lastAssistantMessage && lastAssistantMessage.tutorial) {
             const nextStepIndex = Math.min(Math.max(0, tutorialSteps.length - 1), tutorialIndex + 1);
             const previousStepIndex = Math.max(0, tutorialIndex - 1);
@@ -513,12 +547,14 @@ const CASMAssistant = {
                     this.buildPromptSuggestion('Explain Cloud Tag', 'what should cloud tag mean'),
                     this.buildPromptSuggestion('Export cloud CSV', 'export cloud reports csv month')
                 ];
+            // Choose the correct browser state branch before continuing.
             if (!tutorialSteps.length || nextStepIndex === tutorialIndex && previousStepIndex === tutorialIndex) {
                 promptModel.actions = promptModel.actions.filter((action) => action.prompt !== 'previous step');
             }
             return promptModel;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (this.isDocsIntent(lastUserPrompt) || (lastAssistantMessage && Array.isArray(lastAssistantMessage.docs) && lastAssistantMessage.docs.length)) {
             promptModel.headline = 'Keep exploring';
             promptModel.subline = 'You just searched the handbook. These prompts keep the explanation and follow-up close by.';
@@ -530,9 +566,11 @@ const CASMAssistant = {
                 this.buildPromptSuggestion('Explain Local Tag', 'what does local synced mean'),
                 this.buildPromptSuggestion('Open checkup', 'open settings checkup')
             ];
+            // Return the prepared value to the caller.
             return promptModel;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (String(session?.context?.lastExportKind || '') === 'reports') {
             promptModel.headline = 'After report export';
             promptModel.subline = 'You exported report rows. These are the usual next questions people ask.';
@@ -544,9 +582,11 @@ const CASMAssistant = {
                 this.buildPromptSuggestion('Export cloud CSV', 'export cloud reports csv month'),
                 this.buildPromptSuggestion('Open analytics', 'open analytics')
             ];
+            // Return the prepared value to the caller.
             return promptModel;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (String(session?.context?.lastExportKind || '') === 'analytics') {
             promptModel.headline = 'After analytics export';
             promptModel.subline = 'You just exported metrics. These prompts help connect the numbers back to operations.';
@@ -558,9 +598,11 @@ const CASMAssistant = {
                 this.buildPromptSuggestion('Explain Cloud Tag', 'what should cloud tag mean'),
                 this.buildPromptSuggestion('Show cloud tutorial', 'show cloud tutorial')
             ];
+            // Return the prepared value to the caller.
             return promptModel;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (/wifi|reconnect|sync|offline|checkup|provision/i.test(lastUserPrompt) || currentPage === 'settings') {
             promptModel.headline = 'Local readiness follow-up';
             promptModel.subline = 'These prompts usually help once someone is checking local mode health or reconnect behavior.';
@@ -572,9 +614,11 @@ const CASMAssistant = {
                 this.buildPromptSuggestion('Explain Local Tag', 'what does local synced mean'),
                 this.buildPromptSuggestion('Export local reports CSV', 'export local reports csv')
             ];
+            // Return the prepared value to the caller.
             return promptModel;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (/caption|gemini|gemma|cloud|report tag|reports?/i.test(lastUserPrompt) || currentPage === 'reports') {
             promptModel.headline = 'Report follow-up';
             promptModel.subline = 'These prompts keep the report-review flow moving without making the user restate the context.';
@@ -586,9 +630,11 @@ const CASMAssistant = {
                 this.buildPromptSuggestion('Export cloud CSV', 'export cloud reports csv month'),
                 this.buildPromptSuggestion('Show cloud tutorial', 'show cloud tutorial')
             ];
+            // Return the prepared value to the caller.
             return promptModel;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (/overview|metric|analytics|trend|ready rate/i.test(lastUserPrompt) || currentPage === 'analytics') {
             promptModel.headline = 'Analytics follow-up';
             promptModel.subline = 'The user is in metrics mode, so these prompts stay close to summary and export tasks.';
@@ -600,9 +646,11 @@ const CASMAssistant = {
                 this.buildPromptSuggestion('Open reports', 'open reports'),
                 this.buildPromptSuggestion('Explain Local Tag', 'what does local synced mean')
             ];
+            // Return the prepared value to the caller.
             return promptModel;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (currentPage === 'live') {
             promptModel.headline = 'Live monitoring follow-up';
             promptModel.subline = 'These prompts help after a monitoring run or before closing a live session.';
@@ -614,6 +662,7 @@ const CASMAssistant = {
                 this.buildPromptSuggestion('Show cloud tutorial', 'show cloud tutorial'),
                 this.buildPromptSuggestion('Open checkup', 'open settings checkup')
             ];
+            // Return the prepared value to the caller.
             return promptModel;
         }
 
@@ -627,6 +676,7 @@ const CASMAssistant = {
             this.buildPromptSuggestion('Find handbook docs', 'find docs about report tags'),
             this.buildPromptSuggestion('Export analytics CSV', 'export analytics csv')
         ];
+        // Return the prepared value to the caller.
         return promptModel;
     },
 
@@ -663,6 +713,7 @@ const CASMAssistant = {
 
     renderMessages() {
         const session = this.getActiveSession();
+        // Choose the correct browser state branch before continuing.
         if (!session) return;
         this.renderPromptDeck();
         const messageHtml = session.messages.map((message) => this.renderMessage(message)).join('');
@@ -707,6 +758,7 @@ const CASMAssistant = {
             ? `<div class="assistant-detail-sections">${message.sections.map((section) => {
                 const items = Array.isArray(section.items) ? section.items : [];
                 if (!items.length) return '';
+                // Return the prepared value to the caller.
                 return `
                     <section class="assistant-detail-section">
                         <h4>${this.escapeHtml(section.title || 'Detail')}</h4>
@@ -822,6 +874,7 @@ const CASMAssistant = {
 
     async handleSubmit() {
         const raw = String(this.ui.input.value || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!raw) return;
         if (this.handleBusyInteraction()) return;
         this.ui.input.value = '';
@@ -838,6 +891,7 @@ const CASMAssistant = {
 
     pickResponseFeedback(raw) {
         const query = this.normalizeText(raw);
+        // Choose the correct browser state branch before continuing.
         if (/\b(export|download|csv)\b/.test(query)) return 'Preparing the export...';
         if (/\b(reports?|report id|violation records?|case records?|evidence|latest reports?|recent reports?|local synced|synced local)\b/.test(query)) return 'Reading reports...';
         if (/\b(analytics|metric|metrics|trend|filter|severity|week|month|today)\b/.test(query)) return 'Checking the analytics view...';
@@ -848,6 +902,7 @@ const CASMAssistant = {
 
     pickActionFeedback(action = {}) {
         const type = String(action.type || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (type === 'route') return `Opening ${action.label || 'the page'}...`;
         if (type === 'handbook' || type === 'doc-result') return 'Opening the handbook...';
         if (type === 'tutorial') return 'Loading the tutorial...';
@@ -855,10 +910,12 @@ const CASMAssistant = {
         if (type === 'overview') return 'Checking current metrics...';
         if (type === 'guided-start') return `Starting guided ${this.getGuidedKind(action.guidedKind)}...`;
         if (type === 'guided-finish') {
+            // Return the prepared value to the caller.
             return this.getGuidedKind(action.guidedKind) === 'reports'
                 ? 'Reading reports...'
                 : 'Building the guided result...';
         }
+        // Choose the correct browser state branch before continuing.
         if (type === 'settings-profile') return 'Applying the selected settings...';
         if (type === 'report-review-explain') return 'Reading the selected report...';
         if (type === 'open-report') return 'Opening the selected report...';
@@ -867,6 +924,7 @@ const CASMAssistant = {
 
     waitForFeedbackFrame() {
         return new Promise((resolve) => {
+            // Prepare finish for the next UI or data step.
             const finish = () => window.setTimeout(resolve, 140);
             if (typeof window.requestAnimationFrame === 'function') {
                 window.requestAnimationFrame(finish);
@@ -879,6 +937,7 @@ const CASMAssistant = {
     setResponseFeedback(active, label = '') {
         const next = !!active;
         this.isResponding = next;
+        // Choose the correct browser state branch before continuing.
         if (label) {
             this.responseFeedbackText = label;
         }
@@ -890,6 +949,7 @@ const CASMAssistant = {
         this.activeResponseJobId += 1;
         const jobId = this.activeResponseJobId;
         this.setResponseFeedback(true, label || 'Thinking...');
+        // Return the prepared value to the caller.
         return jobId;
     },
 
@@ -901,6 +961,7 @@ const CASMAssistant = {
 
     updateResponseFeedback(label = '') {
         const nextLabel = String(label || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!this.isResponding || !nextLabel) return;
         this.responseFeedbackText = nextLabel;
         this.renderMessages();
@@ -912,6 +973,7 @@ const CASMAssistant = {
         this.updateResponseFeedback(current && current !== 'Thinking...'
             ? current
             : 'Still working on your last request...');
+        // Return the prepared value to the caller.
         return true;
     },
 
@@ -923,6 +985,7 @@ const CASMAssistant = {
             this.ui.input.disabled = this.isResponding;
             this.ui.input.setAttribute('aria-busy', this.isResponding ? 'true' : 'false');
         }
+        // Choose the correct browser state branch before continuing.
         if (this.ui.send) {
             this.ui.send.disabled = this.isResponding;
             this.ui.send.setAttribute('aria-busy', this.isResponding ? 'true' : 'false');
@@ -933,7 +996,9 @@ const CASMAssistant = {
         const query = this.normalizeText(raw);
         const session = this.getActiveSession();
         if (!session) return;
+        // Choose the correct browser state branch before continuing.
         if (await this.handlePendingGuidedDateInput(raw)) {
+            // Return the prepared value to the caller.
             return;
         }
         const localIntent = this.resolveLocalIntent(raw);
@@ -943,6 +1008,7 @@ const CASMAssistant = {
         const languageGuardrail = this.resolveLanguageGuardrail(raw, query);
         const negativePreference = this.resolveNegativePreference(raw, query);
 
+        // Choose the correct browser state branch before continuing.
         if (!docsIntent) {
             session.context.lastDocsQuery = '';
             session.context.lastDocsResults = [];
@@ -953,9 +1019,11 @@ const CASMAssistant = {
 
         if (safetyGuardrail) {
             this.handleSafetyGuardrail(safetyGuardrail);
+            // Return the prepared value to the caller.
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (languageGuardrail) {
             this.handleLanguageGuardrail(languageGuardrail);
             return;
@@ -963,10 +1031,12 @@ const CASMAssistant = {
 
         if (negativePreference) {
             this.handleNegativePreference(negativePreference);
+            // Return the prepared value to the caller.
             return;
         }
 
         const reportReviewIntent = !exportIntent ? this.resolveReportReviewIntent(raw, query) : null;
+        // Choose the correct browser state branch before continuing.
         if (reportReviewIntent) {
             await this.handleReportReviewIntent(reportReviewIntent);
             return;
@@ -979,9 +1049,11 @@ const CASMAssistant = {
                 text: explanation.text,
                 actions: explanation.actions || []
             });
+            // Return the prepared value to the caller.
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (docsIntent && !exportIntent) {
             this.handleDocsSearch(raw);
             return;
@@ -990,10 +1062,12 @@ const CASMAssistant = {
         const semanticAnswer = this.resolveSemanticAnswer(raw, query);
         if (semanticAnswer) {
             this.handleSemanticAnswer(semanticAnswer);
+            // Return the prepared value to the caller.
             return;
         }
 
         const compoundIntent = !exportIntent ? this.resolveCompoundIntent(raw, query, localIntent) : null;
+        // Choose the correct browser state branch before continuing.
         if (compoundIntent) {
             this.handleCompoundIntent(compoundIntent);
             return;
@@ -1001,9 +1075,11 @@ const CASMAssistant = {
 
         if (localIntent && localIntent.confidence >= localIntent.directThreshold) {
             const handled = await this.handleLocalIntent(localIntent, raw, query);
+            // Choose the correct browser state branch before continuing.
             if (handled) return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (exportIntent) {
             await this.handleExportIntent(raw, query);
             return;
@@ -1011,9 +1087,11 @@ const CASMAssistant = {
 
         if (this.isOverviewIntent(query) && !this.isTargetedStatusIntent(query)) {
             await this.handleOverviewIntent();
+            // Return the prepared value to the caller.
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (docsIntent) {
             this.handleDocsSearch(raw);
             return;
@@ -1021,9 +1099,11 @@ const CASMAssistant = {
 
         if (this.isOnboardingIntent(query)) {
             this.handleOnboardingIntent();
+            // Return the prepared value to the caller.
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (this.isCapabilityIntent(query)) {
             this.handleCapabilityIntent();
             return;
@@ -1031,10 +1111,12 @@ const CASMAssistant = {
 
         if (this.isTutorialIntent(query)) {
             this.handleTutorialIntent(query);
+            // Return the prepared value to the caller.
             return;
         }
 
         const workflowIntent = this.resolveWorkflowIntent(query);
+        // Choose the correct browser state branch before continuing.
         if (workflowIntent) {
             this.handleWorkflowIntent(workflowIntent);
             return;
@@ -1043,10 +1125,12 @@ const CASMAssistant = {
         const settingsIntent = this.resolveSettingsIntent(query);
         if (settingsIntent) {
             await this.handleSettingsIntent(settingsIntent);
+            // Return the prepared value to the caller.
             return;
         }
 
         const analyticsIntent = this.resolveAnalyticsIntent(raw, query);
+        // Choose the correct browser state branch before continuing.
         if (analyticsIntent) {
             await this.handleAnalyticsIntent(analyticsIntent);
             return;
@@ -1055,9 +1139,11 @@ const CASMAssistant = {
         const destination = this.resolveDestination(query);
         if (destination) {
             this.handleDestination(destination);
+            // Return the prepared value to the caller.
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (explanation) {
             this.pushMessage({
                 role: 'assistant',
@@ -1069,6 +1155,7 @@ const CASMAssistant = {
 
         if (localIntent && localIntent.confidence >= localIntent.clarifyThreshold) {
             this.handleIntentClarification(raw, localIntent);
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -1077,6 +1164,7 @@ const CASMAssistant = {
     },
 
     getLocalIntentModels() {
+        // Return the prepared value to the caller.
         return [
             {
                 id: 'start-live',
@@ -1217,6 +1305,7 @@ const CASMAssistant = {
     resolveLocalIntent(raw) {
         const normalized = this.normalizeForNlu(raw);
         const tokens = this.tokenizeForIntent(normalized);
+        // Choose the correct browser state branch before continuing.
         if (!tokens.length) return null;
         const entities = this.extractLocalIntentEntities(raw, normalized);
         const scored = this.getLocalIntentModels()
@@ -1234,8 +1323,10 @@ const CASMAssistant = {
     scoreLocalIntentModel(model, normalized, tokens, entities = {}) {
         const tokenSet = new Set(tokens);
         const expandedTokenSet = new Set(this.expandIntentTokens(tokens));
+        // Prepare example scores for the next UI or data step.
         const exampleScores = (model.examples || []).map((example) => {
             const exampleTokens = this.tokenizeForIntent(this.normalizeForNlu(example));
+            // Choose the correct browser state branch before continuing.
             if (!exampleTokens.length) return 0;
             const exampleSet = new Set(this.expandIntentTokens(exampleTokens));
             const overlap = Array.from(exampleSet).filter((token) => expandedTokenSet.has(token)).length;
@@ -1245,6 +1336,7 @@ const CASMAssistant = {
             return Math.min(1, (coverage * 0.68) + (jaccard * 0.32) + phrase);
         });
         const exampleScore = Math.max(0, ...exampleScores);
+        // Prepare keyword tokens for the next UI or data step.
         const keywordTokens = (model.keywords || []).flatMap((keyword) => this.tokenizeForIntent(this.normalizeForNlu(keyword)));
         const keywordMatches = keywordTokens.filter((token) => expandedTokenSet.has(token) || tokenSet.has(token));
         const keywordScore = keywordTokens.length
@@ -1255,6 +1347,7 @@ const CASMAssistant = {
         let confidence = Math.min(0.99, (exampleScore * 0.58) + (keywordScore * 0.28) + entityBoost + actionBoost);
         const actionfulSettings = /\b(switch|apply|use|set|prepare|change|enable|turn on|move to)\b/.test(normalized);
         const explanatoryQuestion = this.isExplanationQuestion(normalized);
+        // Choose the correct browser state branch before continuing.
         if ((model.id === 'settings-local' || model.id === 'settings-cloud') && !actionfulSettings) {
             confidence *= 0.56;
         }
@@ -1275,6 +1368,7 @@ const CASMAssistant = {
     getIntentEntityBoost(intentId, entities = {}, normalized = '') {
         const hasFilters = entities.analyticsFilters && this.hasActiveAnalyticsFilters(entities.analyticsFilters);
         const exportMention = entities.exportKind || /\b(export|download|csv)\b/.test(normalized);
+        // Choose the correct browser state branch before continuing.
         if (intentId === 'analytics-snapshot' && (hasFilters || entities.analyticsMention)) return hasFilters ? 0.24 : 0.1;
         if (intentId === 'open-analytics' && entities.page === 'analytics') return 0.16;
         if (intentId === 'open-reports' && entities.page === 'reports') return 0.16;
@@ -1285,6 +1379,7 @@ const CASMAssistant = {
         if (intentId === 'tutorial' && entities.tutorialMention) return 0.14;
         if (intentId === 'settings-recommend' && entities.settingsProfile === 'recommended') return 0.16;
         if (intentId === 'settings-local' && entities.settingsProfile === 'local') return 0.16;
+        // Choose the correct browser state branch before continuing.
         if (intentId === 'settings-cloud' && entities.settingsProfile === 'api') return 0.16;
         if (intentId === 'docs-search' && entities.docsMention) return 0.15;
         return 0;
@@ -1322,6 +1417,7 @@ const CASMAssistant = {
                     ? 'docs'
                     : 'reports')
             : '';
+        // Return the prepared value to the caller.
         return {
             analyticsFilters,
             page,
@@ -1337,9 +1433,11 @@ const CASMAssistant = {
     },
 
     async handleLocalIntent(intent, raw, query) {
+        // Route the current value to the matching UI behaviour.
         switch (intent.id) {
             case 'start-live':
                 this.handleWorkflowIntent(this.buildLiveMonitoringIntent());
+                // Return the prepared value to the caller.
                 return true;
             case 'image-analysis':
                 this.handleWorkflowIntent(this.buildImageAnalysisIntent());
@@ -1351,6 +1449,7 @@ const CASMAssistant = {
                     filters: intent.entities.analyticsFilters || this.buildAnalyticsFilters(raw),
                     filterSummary: this.describeAnalyticsFilters(intent.entities.analyticsFilters || this.buildAnalyticsFilters(raw))
                 });
+                // Return the prepared value to the caller.
                 return true;
             case 'open-analytics': {
                 const filters = intent.entities.analyticsFilters || this.buildAnalyticsFilters(raw);
@@ -1364,6 +1463,7 @@ const CASMAssistant = {
                 } else {
                     this.handleDestination({ type: 'route', page: 'analytics', label: 'Analytics' });
                 }
+                // Return the prepared value to the caller.
                 return true;
             }
             case 'open-reports':
@@ -1374,6 +1474,7 @@ const CASMAssistant = {
                 return true;
             case 'export-reports':
                 await this.handleExportIntent(`${raw} reports csv`, `${query} reports csv`);
+                // Return the prepared value to the caller.
                 return true;
             case 'tutorial':
                 this.handleTutorialIntent(`${intent.entities.tutorialFlow || ''} ${query} tutorial`);
@@ -1386,6 +1487,7 @@ const CASMAssistant = {
                 return true;
             case 'settings-cloud':
                 await this.handleSettingsIntent({ type: 'apply-api' });
+                // Return the prepared value to the caller.
                 return true;
             case 'docs-search':
                 this.handleDocsSearch(raw);
@@ -1399,6 +1501,7 @@ const CASMAssistant = {
     },
 
     buildLiveMonitoringIntent() {
+        // Return the prepared value to the caller.
         return {
             text: 'I read that as starting site supervision, so the Live Monitor workflow is the right place. I can take you there and collapse the chat so the camera controls stay usable.',
             bullets: [
@@ -1415,6 +1518,7 @@ const CASMAssistant = {
     },
 
     buildImageAnalysisIntent() {
+        // Return the prepared value to the caller.
         return {
             text: 'For still-image checks, use Live Monitor in Analyze Image mode. I can open that view and land you right on the upload area.',
             bullets: [
@@ -1431,6 +1535,7 @@ const CASMAssistant = {
     },
 
     getGuidedKind(kind = '') {
+        // Return the prepared value to the caller.
         return String(kind || '').trim() === 'reports' ? 'reports' : 'analytics';
     },
 
@@ -1441,6 +1546,7 @@ const CASMAssistant = {
     normalizeFilterValues(values, allowedValues = []) {
         const allowed = new Set(allowedValues);
         const rawValues = Array.isArray(values) ? values : [values];
+        // Return the prepared value to the caller.
         return Array.from(new Set(
             rawValues
                 .map((value) => String(value || '').trim().toLowerCase().replace(/-/g, '_'))
@@ -1451,6 +1557,7 @@ const CASMAssistant = {
     normalizeSourceFilterValues(filters = {}, includeShared = false) {
         const rawValues = [];
         if (Array.isArray(filters.sources)) rawValues.push(...filters.sources);
+        // Choose the correct browser state branch before continuing.
         if (filters.source) rawValues.push(filters.source);
         return this.normalizeFilterValues(
             rawValues,
@@ -1461,6 +1568,7 @@ const CASMAssistant = {
     normalizeSeverityFilterValues(filters = {}) {
         const rawValues = [];
         if (Array.isArray(filters.severities)) rawValues.push(...filters.severities);
+        // Choose the correct browser state branch before continuing.
         if (filters.severity) rawValues.push(filters.severity);
         return this.normalizeFilterValues(rawValues, ['high', 'medium', 'low']);
     },
@@ -1479,6 +1587,7 @@ const CASMAssistant = {
             synced_local: 'Local Synced',
             shared: 'Shared'
         };
+        // Return the prepared value to the caller.
         return labels[String(value || '').trim()] || String(value || '').replace(/_/g, ' ');
     },
 
@@ -1492,7 +1601,9 @@ const CASMAssistant = {
     },
 
     sanitizeGuidedFilters(kind = '', filters = {}) {
+        // Choose the correct browser state branch before continuing.
         if (this.getGuidedKind(kind) === 'analytics') {
+            // Return the prepared value to the caller.
             return this.sanitizeAnalyticsFilters(filters);
         }
 
@@ -1505,6 +1616,7 @@ const CASMAssistant = {
         }
 
         const severities = this.normalizeSeverityFilterValues(filters);
+        // Choose the correct browser state branch before continuing.
         if (severities.length === 1) {
             cleaned.severity = severities[0];
         } else if (severities.length > 1) {
@@ -1519,10 +1631,12 @@ const CASMAssistant = {
         const dateExact = this.normalizeDateKey(filters.dateExact);
         const dateFrom = this.normalizeDateKey(filters.dateFrom);
         const dateTo = this.normalizeDateKey(filters.dateTo);
+        // Choose the correct browser state branch before continuing.
         if (dateExact) {
             cleaned.dateExact = dateExact;
             delete cleaned.dateRange;
         } else {
+            // Choose the correct browser state branch before continuing.
             if (dateFrom) {
                 cleaned.dateFrom = dateFrom;
                 delete cleaned.dateRange;
@@ -1546,6 +1660,7 @@ const CASMAssistant = {
                 .map((label) => this.normalizePpeFilterLabel(label))
                 .filter((label) => validPpe.has(label))
         ));
+        // Choose the correct browser state branch before continuing.
         if (normalizedPpe.length) {
             cleaned.ppeTypes = normalizedPpe;
         }
@@ -1559,6 +1674,7 @@ const CASMAssistant = {
             ...this.sanitizeGuidedFilters(kind, filters)
         };
         const updateKeys = Object.keys(update || {});
+        // Choose the correct browser state branch before continuing.
         if (updateKeys.some((key) => ['dateRange', 'dateExact', 'dateFrom', 'dateTo'].includes(key))) {
             delete next.dateRange;
             delete next.dateExact;
@@ -1570,22 +1686,26 @@ const CASMAssistant = {
             delete next.source;
             delete next.sources;
         }
+        // Choose the correct browser state branch before continuing.
         if (update.toggleSource) {
             const sources = this.normalizeSourceFilterValues(next, guidedKind === 'reports');
             const value = this.normalizeFilterValues(update.toggleSource, guidedKind === 'reports'
                 ? ['cloud', 'local', 'synced_local', 'shared']
                 : ['cloud', 'local', 'synced_local'])[0];
+            // Choose the correct browser state branch before continuing.
             if (value) {
                 const nextSources = sources.includes(value)
                     ? sources.filter((item) => item !== value)
                     : [...sources, value];
                 delete next.source;
                 delete next.sources;
+                // Choose the correct browser state branch before continuing.
                 if (nextSources.length === 1) next.source = nextSources[0];
                 if (nextSources.length > 1) next.sources = nextSources;
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (update.resetSeverities) {
             delete next.severity;
             delete next.severities;
@@ -1593,17 +1713,20 @@ const CASMAssistant = {
         if (update.toggleSeverity) {
             const severities = this.normalizeSeverityFilterValues(next);
             const value = this.normalizeFilterValues(update.toggleSeverity, ['high', 'medium', 'low'])[0];
+            // Choose the correct browser state branch before continuing.
             if (value) {
                 const nextSeverities = severities.includes(value)
                     ? severities.filter((item) => item !== value)
                     : [...severities, value];
                 delete next.severity;
                 delete next.severities;
+                // Choose the correct browser state branch before continuing.
                 if (nextSeverities.length === 1) next.severity = nextSeverities[0];
                 if (nextSeverities.length > 1) next.severities = nextSeverities;
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (update.togglePpe) {
             const validPpe = new Set([
                 'NO-Hardhat',
@@ -1614,20 +1737,24 @@ const CASMAssistant = {
             ]);
             const currentPpe = Array.isArray(next.ppeTypes) ? next.ppeTypes : [];
             const value = this.normalizePpeFilterLabel(update.togglePpe);
+            // Choose the correct browser state branch before continuing.
             if (validPpe.has(value)) {
                 const nextPpe = currentPpe.includes(value)
                     ? currentPpe.filter((item) => item !== value)
                     : [...currentPpe, value];
+                // Choose the correct browser state branch before continuing.
                 if (nextPpe.length) next.ppeTypes = nextPpe;
                 else delete next.ppeTypes;
             }
         }
 
         Object.entries(update || {}).forEach(([key, value]) => {
+            // Choose the correct browser state branch before continuing.
             if (['toggleSource', 'toggleSeverity', 'togglePpe', 'resetSources', 'resetSeverities'].includes(key)) {
                 return;
             }
             if (key === 'ppeTypes') {
+                // Choose the correct browser state branch before continuing.
                 if (Array.isArray(value) && value.length) {
                     next.ppeTypes = value.slice(0, 6);
                 } else {
@@ -1635,22 +1762,26 @@ const CASMAssistant = {
                 }
                 return;
             }
+            // Choose the correct browser state branch before continuing.
             if (key === 'sources') {
                 const sources = this.normalizeFilterValues(value, guidedKind === 'reports'
                     ? ['cloud', 'local', 'synced_local', 'shared']
                     : ['cloud', 'local', 'synced_local']);
                 delete next.source;
                 delete next.sources;
+                // Choose the correct browser state branch before continuing.
                 if (sources.length === 1) next.source = sources[0];
                 if (sources.length > 1) next.sources = sources;
                 return;
             }
+            // Choose the correct browser state branch before continuing.
             if (key === 'severities') {
                 const severities = this.normalizeFilterValues(value, ['high', 'medium', 'low']);
                 delete next.severity;
                 delete next.severities;
                 if (severities.length === 1) next.severity = severities[0];
                 if (severities.length > 1) next.severities = severities;
+                // Return the prepared value to the caller.
                 return;
             }
             if (value) {
@@ -1659,6 +1790,7 @@ const CASMAssistant = {
                 delete next[key];
             }
         });
+        // Return the prepared value to the caller.
         return this.sanitizeGuidedFilters(kind, next);
     },
 
@@ -1671,6 +1803,7 @@ const CASMAssistant = {
     },
 
     buildGuidedAction(label, kind, step, filters, update = {}, nextStep = '') {
+        // Return the prepared value to the caller.
         return {
             type: 'guided-select',
             label,
@@ -1683,6 +1816,7 @@ const CASMAssistant = {
     },
 
     buildGuidedToggleAction(label, kind, step, filters, update = {}) {
+        // Return the prepared value to the caller.
         return {
             type: 'guided-toggle',
             label,
@@ -1694,6 +1828,7 @@ const CASMAssistant = {
     },
 
     buildGuidedContinueAction(label, kind, nextStep, filters) {
+        // Return the prepared value to the caller.
         return {
             type: 'guided-continue',
             label,
@@ -1730,6 +1865,7 @@ const CASMAssistant = {
             actions: []
         };
 
+        // Choose the correct browser state branch before continuing.
         if (step === 'source') {
             base.actions = [
                 this.buildGuidedToggleAction('All sources', guidedKind, step, safeFilters, { resetSources: true }),
@@ -1742,9 +1878,11 @@ const CASMAssistant = {
                 )),
                 this.buildGuidedContinueAction('Continue', guidedKind, 'severity', safeFilters)
             ];
+            // Return the prepared value to the caller.
             return base;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (step === 'severity') {
             base.actions = [
                 this.buildGuidedToggleAction('All severities', guidedKind, step, safeFilters, { resetSeverities: true }),
@@ -1757,9 +1895,11 @@ const CASMAssistant = {
                 )),
                 this.buildGuidedContinueAction('Continue', guidedKind, 'date', safeFilters)
             ];
+            // Return the prepared value to the caller.
             return base;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (step === 'date') {
             base.bullets.push('For a typed date, use YYYY-MM-DD or YYYY-MM-DD..YYYY-MM-DD.');
             base.actions = [
@@ -1770,9 +1910,11 @@ const CASMAssistant = {
                 this.buildGuidedAction('Last 30 days', guidedKind, step, safeFilters, { dateRange: 'month' }, 'ppe'),
                 { type: 'guided-date-request', label: 'Type strict date', guidedKind, guidedFilters: safeFilters }
             ];
+            // Return the prepared value to the caller.
             return base;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (step === 'ppe') {
             base.actions = [
                 this.buildGuidedToggleAction('All violations', guidedKind, step, safeFilters, { ppeTypes: [] }),
@@ -1791,6 +1933,7 @@ const CASMAssistant = {
                 )),
                 this.buildGuidedContinueAction('Continue', guidedKind, 'review', safeFilters)
             ];
+            // Return the prepared value to the caller.
             return base;
         }
 
@@ -1812,6 +1955,7 @@ const CASMAssistant = {
                 { type: 'guided-finish', label: 'Open filtered dashboard', guidedKind, guidedFilters: safeFilters, guidedMode: 'dashboard' },
                 { type: 'guided-start', label: 'Start over', guidedKind }
             ];
+        // Return the prepared value to the caller.
         return base;
     },
 
@@ -1830,6 +1974,7 @@ const CASMAssistant = {
 
     clearGuidedFlowState() {
         const session = this.getActiveSession();
+        // Choose the correct browser state branch before continuing.
         if (!session) return;
         session.context.guidedFlow = null;
         this.saveState();
@@ -1867,11 +2012,14 @@ const CASMAssistant = {
     },
 
     getLatestGuidedMessageIndex(session, kind = '') {
+        // Choose the correct browser state branch before continuing.
         if (!session || !Array.isArray(session.messages)) return -1;
         const guidedKind = this.getGuidedKind(kind);
         for (let index = session.messages.length - 1; index >= 0; index -= 1) {
             const message = session.messages[index];
+            // Choose the correct browser state branch before continuing.
             if (message && message.role === 'assistant' && message.guided && message.guided.kind === guidedKind) {
+                // Return the prepared value to the caller.
                 return index;
             }
         }
@@ -1880,6 +2028,7 @@ const CASMAssistant = {
 
     upsertGuidedStepMessage(kind = 'analytics', step = 'source', filters = {}) {
         const session = this.getActiveSession();
+        // Choose the correct browser state branch before continuing.
         if (!session) return;
         const guidedKind = this.getGuidedKind(kind);
         const nextMessage = this.buildGuidedStepMessage(guidedKind, step, filters);
@@ -1894,6 +2043,7 @@ const CASMAssistant = {
             });
             session.updatedAt = Date.now();
             this.refreshSessionUi();
+            // Return the prepared value to the caller.
             return;
         }
         this.pushMessage(nextMessage);
@@ -1920,8 +2070,10 @@ const CASMAssistant = {
     parseGuidedDateInput(raw = '') {
         const source = String(raw || '').trim();
         const single = source.match(/^(20\d{2}-\d{2}-\d{2})$/);
+        // Choose the correct browser state branch before continuing.
         if (single) {
             const dateExact = this.normalizeDateKey(single[1]);
+            // Return the prepared value to the caller.
             return dateExact ? { success: true, filters: { dateExact } } : { success: false };
         }
 
@@ -1930,10 +2082,12 @@ const CASMAssistant = {
             const dateFrom = this.normalizeDateKey(range[1]);
             const dateTo = this.normalizeDateKey(range[2]);
             if (dateFrom && dateTo && dateFrom <= dateTo) {
+                // Return the prepared value to the caller.
                 return { success: true, filters: { dateFrom, dateTo } };
             }
         }
 
+        // Return the prepared value to the caller.
         return { success: false };
     },
 
@@ -1944,10 +2098,12 @@ const CASMAssistant = {
 
         const guidedKind = this.getGuidedKind(flow.kind);
         const normalized = this.normalizeText(raw);
+        // Choose the correct browser state branch before continuing.
         if (/\b(cancel|skip|all dates|no date)\b/.test(normalized)) {
             const filters = this.mergeGuidedFilters(guidedKind, flow.filters || {}, { dateRange: '', dateExact: '', dateFrom: '', dateTo: '' });
             this.setGuidedFlowState(guidedKind, 'ppe', filters);
             this.upsertGuidedStepMessage(guidedKind, 'ppe', filters);
+            // Return the prepared value to the caller.
             return true;
         }
 
@@ -1965,12 +2121,14 @@ const CASMAssistant = {
                     this.buildGuidedAction('Back to date choices', guidedKind, 'date', flow.filters || {}, {}, 'date')
                 ]
             });
+            // Return the prepared value to the caller.
             return true;
         }
 
         const filters = this.mergeGuidedFilters(guidedKind, flow.filters || {}, parsed.filters);
         this.setGuidedFlowState(guidedKind, 'ppe', filters);
         this.upsertGuidedStepMessage(guidedKind, 'ppe', filters);
+        // Return the prepared value to the caller.
         return true;
     },
 
@@ -1990,6 +2148,7 @@ const CASMAssistant = {
                 selection: action.guidedMode === 'explain' ? 'latest' : '',
                 autoExplain: action.guidedMode === 'explain'
             });
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2000,6 +2159,7 @@ const CASMAssistant = {
             filterSummary: filterSummary === 'all rows' ? '' : filterSummary
         });
 
+        // Choose the correct browser state branch before continuing.
         if (action.guidedMode === 'dashboard') {
             this.performRouteNavigation({
                 type: 'route',
@@ -2034,10 +2194,12 @@ const CASMAssistant = {
     },
 
     buildActionForIntentCandidate(intent, raw) {
+        // Choose the correct browser state branch before continuing.
         if (!intent || !intent.id) return null;
         const filters = intent.entities?.analyticsFilters || this.buildAnalyticsFilters(raw);
         switch (intent.id) {
             case 'start-live':
+                // Return the prepared value to the caller.
                 return { type: 'route', label: 'Start live monitoring', page: 'live', liveMode: 'live', liveFocus: 'start', collapsePanel: true };
             case 'image-analysis':
                 return { type: 'route', label: 'Check image', page: 'live', liveMode: 'upload', liveFocus: 'upload', collapsePanel: true };
@@ -2049,6 +2211,7 @@ const CASMAssistant = {
             case 'open-reports':
                 return { type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true };
             case 'export-analytics':
+                // Return the prepared value to the caller.
                 return { type: 'export', label: 'Export analytics CSV', exportKind: 'analytics' };
             case 'export-reports':
                 return { type: 'export', label: 'Export reports CSV', exportKind: 'reports' };
@@ -2059,6 +2222,7 @@ const CASMAssistant = {
             case 'settings-local':
                 return { type: 'settings-profile', label: 'Apply local profile', profile: 'local' };
             case 'settings-cloud':
+                // Return the prepared value to the caller.
                 return { type: 'settings-profile', label: 'Apply API mode', profile: 'api' };
             case 'docs-search':
                 return { type: 'handbook', label: 'Open handbook', pageKey: 'intro' };
@@ -2071,6 +2235,7 @@ const CASMAssistant = {
 
     resolveSafetyGuardrail(raw, query = '') {
         const normalized = query || this.normalizeText(raw);
+        // Choose the correct browser state branch before continuing.
         if (!normalized) return null;
         const secretOrCredential = /\b(password|passcode|api key|secret|sync secret|token|jwt|service role|private key|database url|connection string|env|environment variable|credential|cookie|session id|auth header)\b/.test(normalized);
         const bypassRequest = /\b(bypass|skip|disable|turn off|override|remove|ignore)\b/.test(normalized)
@@ -2081,6 +2246,7 @@ const CASMAssistant = {
         const privacyQuestion = /\b(private|public|sensitive|confidential|personal data|permission|allowed|anonymi[sz]e|redact|hide sensitive|safe version|remove names|what parts.*confidential|data should not be shared|without exposing)\b/.test(normalized);
 
         if (secretOrCredential || bypassRequest || crossUserData || unsafeAdminAction) {
+            // Return the prepared value to the caller.
             return {
                 type: 'deny-sensitive',
                 reason: secretOrCredential
@@ -2090,7 +2256,9 @@ const CASMAssistant = {
                         : 'cross-user-data'
             };
         }
+        // Choose the correct browser state branch before continuing.
         if (privacyQuestion) {
+            // Return the prepared value to the caller.
             return { type: 'privacy-guidance' };
         }
         return null;
@@ -2113,6 +2281,7 @@ const CASMAssistant = {
                     { type: 'route', label: 'Open settings checkup', page: 'settings', focusLocalCheckup: true, collapsePanel: true }
                 ]
             });
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2133,6 +2302,7 @@ const CASMAssistant = {
     },
 
     getAssistantTopicModels() {
+        // Return the prepared value to the caller.
         return [
             {
                 id: 'reports',
@@ -2190,6 +2360,7 @@ const CASMAssistant = {
         const labels = ids
             .map((id) => models.find((model) => model.id === id)?.label)
             .filter(Boolean);
+        // Choose the correct browser state branch before continuing.
         if (!labels.length) return 'that area';
         if (labels.length === 1) return labels[0];
         return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
@@ -2211,12 +2382,14 @@ const CASMAssistant = {
         ];
         const actions = [];
         orderedIds.forEach((id) => {
+            // Choose the correct browser state branch before continuing.
             if (avoid.has(id) || seen.has(id)) return;
             const model = models.find((item) => item.id === id);
             if (!model) return;
             seen.add(id);
             actions.push(model.action);
         });
+        // Return the prepared value to the caller.
         return actions.slice(0, 3);
     },
 
@@ -2228,6 +2401,7 @@ const CASMAssistant = {
         const topicIds = this.getAssistantTopicModels()
             .filter((model) => model.pattern.test(normalized))
             .map((model) => model.id);
+        // Return the prepared value to the caller.
         return {
             type: topicIds.length || this.hasCasmDomainSignal(normalized) ? 'frustrated-task' : 'abusive-only',
             topicIds
@@ -2248,6 +2422,7 @@ const CASMAssistant = {
                 ],
                 actions: this.buildAlternativeActions([], intent.topicIds)
             });
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2264,6 +2439,7 @@ const CASMAssistant = {
 
     resolveNegativePreference(raw, query = '') {
         const normalized = this.normalizeForNlu(raw || query);
+        // Choose the correct browser state branch before continuing.
         if (!normalized) return null;
         const avoidedIds = [];
         const models = this.getAssistantTopicModels();
@@ -2271,6 +2447,7 @@ const CASMAssistant = {
         const topicMatches = models
             .map((model) => {
                 const match = normalized.match(model.pattern);
+                // Return the prepared value to the caller.
                 return match && typeof match.index === 'number'
                     ? { id: model.id, index: match.index }
                     : null;
@@ -2282,6 +2459,7 @@ const CASMAssistant = {
         Array.from(normalized.matchAll(negativeCuePattern)).forEach((match) => {
             const cueIndex = Number(match.index || 0);
             const nearest = topicMatches.find((topic) => topic.index >= cueIndex && topic.index - cueIndex <= 72);
+            // Choose the correct browser state branch before continuing.
             if (nearest) avoidedIds.push(nearest.id);
         });
 
@@ -2296,6 +2474,7 @@ const CASMAssistant = {
         });
 
         const avoidedUnique = Array.from(new Set(avoidedIds));
+        // Choose the correct browser state branch before continuing.
         if (!avoidedUnique.length) return null;
         const requestedIds = topicMatches
             .map((topic) => topic.id)
@@ -2324,6 +2503,7 @@ const CASMAssistant = {
     },
 
     getSemanticAnswerModels() {
+        // Return the prepared value to the caller.
         return [
             {
                 id: 'system-purpose',
@@ -2535,6 +2715,7 @@ const CASMAssistant = {
     },
 
     isNaturalLanguageQuestion(query) {
+        // Return the prepared value to the caller.
         return /\b(what|how|why|where|when|which|who|can|could|does|do|is|are|explain|describe|tell me|meaning|mean|purpose|used for|about)\b/.test(query);
     },
 
@@ -2545,6 +2726,7 @@ const CASMAssistant = {
     resolveSemanticAnswer(raw, query = '') {
         const normalized = this.normalizeForNlu(raw || query);
         if (!normalized) return null;
+        // Choose the correct browser state branch before continuing.
         if (this.isExportIntent(normalized)) return null;
 
         const questionLike = this.isNaturalLanguageQuestion(normalized);
@@ -2556,6 +2738,7 @@ const CASMAssistant = {
 
         const actionOnly = /\b(open|go|start|begin|export|download|switch|apply|use recommended|run checkup)\b/.test(normalized)
             && !questionLike;
+        // Choose the correct browser state branch before continuing.
         if (actionOnly) return null;
 
         const tokens = this.expandIntentTokens(this.tokenizeForIntent(normalized));
@@ -2564,12 +2747,15 @@ const CASMAssistant = {
             .sort((a, b) => b.confidence - a.confidence);
         const best = scored[0] || null;
         if (best && best.confidence >= 0.46) {
+            // Return the prepared value to the caller.
             return best;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (questionLike && this.hasCasmDomainSignal(normalized)) {
             const docs = this.searchDocs(raw).slice(0, 3);
             if (docs.length) {
+                // Return the prepared value to the caller.
                 return {
                     id: 'handbook-semantic-fallback',
                     label: 'handbook answer',
@@ -2596,6 +2782,7 @@ const CASMAssistant = {
                 };
             }
 
+            // Return the prepared value to the caller.
             return {
                 id: 'casm-domain-fallback',
                 label: 'CASM domain fallback',
@@ -2612,6 +2799,7 @@ const CASMAssistant = {
             };
         }
 
+        // Return the prepared value to the caller.
         return null;
     },
 
@@ -2620,6 +2808,7 @@ const CASMAssistant = {
         const examples = Array.isArray(model.examples) ? model.examples : [];
         const exactExample = examples.some((example) => {
             const normalizedExample = this.normalizeForNlu(example);
+            // Return the prepared value to the caller.
             return normalized === normalizedExample || normalized.includes(normalizedExample);
         });
         const exampleScores = examples.map((example) => {
@@ -2639,6 +2828,7 @@ const CASMAssistant = {
         const questionBoost = questionLike ? 0.08 : 0;
         const exactBoost = exactExample ? 0.54 : 0;
         const modelBoost = this.getSemanticModelCueBoost(model.id, normalized);
+        // Prepare confidence for the next UI or data step.
         let confidence = Math.min(0.99, exactBoost + (Math.max(0, ...exampleScores) * 0.34) + (keywordScore * 0.28) + questionBoost + modelBoost);
         if (model.id === 'page-map'
             && !exactExample
@@ -2652,9 +2842,11 @@ const CASMAssistant = {
     },
 
     getSemanticModelCueBoost(modelId, normalized) {
+        // Choose the correct browser state branch before continuing.
         if (modelId === 'ppe-detection'
             && /\b(detect|check|missing|ppe|equipment|gear|helmet|hardhat|vest|gloves?|mask|boots?|shoes?|worker|image|upload)\b/.test(normalized)
             && /\b(image|upload|camera|worksite|worker|helmet|hardhat|vest|gloves?|mask|boots?|shoes?|ppe|equipment|gear)\b/.test(normalized)) {
+            // Return the prepared value to the caller.
             return 0.18;
         }
         if (modelId === 'local-cloud-offline'
@@ -2666,8 +2858,10 @@ const CASMAssistant = {
             && /\b(assistant|mira|you|your|inside|browser|without|need|use|call|calling|model|service|api)\b/.test(normalized)) {
             return 0.2;
         }
+        // Choose the correct browser state branch before continuing.
         if (modelId === 'page-map'
             && /\b(where|which page|what page|pages?|open first|go first|start|begin|navigate)\b/.test(normalized)) {
+            // Return the prepared value to the caller.
             return 0.14;
         }
         if (modelId === 'system-purpose'
@@ -2689,6 +2883,7 @@ const CASMAssistant = {
     },
 
     resolveCompoundIntent(raw, query = '', localIntent = null) {
+        // Choose the correct browser state branch before continuing.
         if (!query) return null;
         const hasCompoundCue = /\b(and|also|plus|then|after that|both|together|all together|at the same time|first|next|with)\b/.test(query)
             || /[,;]/.test(String(raw || ''));
@@ -2698,6 +2893,7 @@ const CASMAssistant = {
         const actions = [];
         const bullets = [];
         const addAction = (key, action, bullet = '') => {
+            // Choose the correct browser state branch before continuing.
             if (!action || actions.some((item) => item.key === key)) return;
             actions.push({ key, action });
             if (bullet && !bullets.includes(bullet)) bullets.push(bullet);
@@ -2713,6 +2909,7 @@ const CASMAssistant = {
         const filters = this.buildAnalyticsFilters(raw);
         const filterSummary = this.describeAnalyticsFilters(filters);
 
+        // Choose the correct browser state branch before continuing.
         if (wantsLive || localIntent?.id === 'start-live') {
             addAction(
                 'live',
@@ -2727,6 +2924,7 @@ const CASMAssistant = {
                 'Use Analyze Image when the request is about uploaded photos or snapshots.'
             );
         }
+        // Choose the correct browser state branch before continuing.
         if (wantsAnalytics || localIntent?.id === 'analytics-snapshot') {
             addAction(
                 'analytics',
@@ -2743,6 +2941,7 @@ const CASMAssistant = {
                 'Use Reports when you need the underlying incident rows, records, or evidence list.'
             );
         }
+        // Choose the correct browser state branch before continuing.
         if (wantsAdmin) {
             addAction(
                 'admin',
@@ -2757,6 +2956,7 @@ const CASMAssistant = {
                 'Use Settings Checkup for local/cloud readiness and operating profile decisions.'
             );
         }
+        // Choose the correct browser state branch before continuing.
         if (wantsGuide || localIntent?.id === 'tutorial' || localIntent?.id === 'docs-search') {
             addAction(
                 'guide',
@@ -2787,6 +2987,7 @@ const CASMAssistant = {
 
     recordUnmatchedPrompt(raw, query, intent = null) {
         const text = String(raw || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!text) return;
         try {
             const current = JSON.parse(localStorage.getItem(this.UNMATCHED_PROMPTS_KEY) || '[]');
@@ -2814,6 +3015,7 @@ const CASMAssistant = {
     },
 
     normalizeForNlu(value) {
+        // Prepare text for the next UI or data step.
         let text = this.normalizeText(value);
         const replacements = [
             [/\bwanna\b/g, 'want to'],
@@ -2846,6 +3048,7 @@ const CASMAssistant = {
         replacements.forEach(([pattern, replacement]) => {
             text = text.replace(pattern, replacement);
         });
+        // Return the prepared value to the caller.
         return text.replace(/\s+/g, ' ').trim();
     },
 
@@ -2887,6 +3090,7 @@ const CASMAssistant = {
         tokens.forEach((token) => {
             (synonyms[token] || []).forEach((value) => expanded.add(value));
         });
+        // Return the prepared value to the caller.
         return Array.from(expanded);
     },
 
@@ -2898,6 +3102,7 @@ const CASMAssistant = {
 
     handleDocsSearch(raw) {
         const session = this.getActiveSession();
+        // Choose the correct browser state branch before continuing.
         if (!session) return;
         const docs = this.searchDocs(raw);
         session.context.lastDocsQuery = raw;
@@ -2910,6 +3115,7 @@ const CASMAssistant = {
             tutorialStep: Number(doc.tutorialStep || 0)
         }));
 
+        // Choose the correct browser state branch before continuing.
         if (!docs.length) {
             this.pushMessage({
                 role: 'assistant',
@@ -2919,6 +3125,7 @@ const CASMAssistant = {
                     { type: 'tutorial', label: 'Show cloud tutorial', flow: 'cloud', stepIndex: 0 }
                 ]
             });
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2947,6 +3154,7 @@ const CASMAssistant = {
     },
 
     isExportIntent(query) {
+        // Return the prepared value to the caller.
         return /\b(export|download|csv)\b/.test(query);
     },
 
@@ -2960,6 +3168,7 @@ const CASMAssistant = {
     },
 
     isOnboardingIntent(query) {
+        // Return the prepared value to the caller.
         return /\b(i m new|new here|where do i start|what should i do|dont know|do not know|not sure|what can you do|how do i use this|how do i start|first time|help me understand)\b/.test(query);
     },
 
@@ -2972,6 +3181,7 @@ const CASMAssistant = {
     },
 
     isCapabilityIntent(query) {
+        // Return the prepared value to the caller.
         return /\b(what can you do|what can you help me with|what can you help with|what kinds of things|what data do you have access to|explain your limitations|your limitations|do you understand|can you handle|how do you decide|what if i ask|use you for a beginner)\b/.test(query);
     },
 
@@ -3015,6 +3225,7 @@ const CASMAssistant = {
     },
 
     async handleExportIntent(raw, query) {
+        // Choose the correct browser state branch before continuing.
         if (/\b(analytics|metrics|overview)\b/.test(query)) {
             this.updateResponseFeedback('Preparing the analytics export...');
             const outcome = await this.exportAnalyticsCsv();
@@ -3027,9 +3238,11 @@ const CASMAssistant = {
                     { type: 'route', label: 'Open Analytics', page: 'analytics' }
                 ]
             });
+            // Return the prepared value to the caller.
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (/\b(docs|manual|handbook|documentation)\b/.test(query)) {
             this.updateResponseFeedback('Preparing the handbook export...');
             const outcome = await this.exportDocsCsv(raw);
@@ -3042,6 +3255,7 @@ const CASMAssistant = {
                     { type: 'handbook', label: 'Open handbook', pageKey: 'intro' }
                 ]
             });
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -3074,11 +3288,13 @@ const CASMAssistant = {
 
     async handleOverviewIntent() {
         const payload = await this.fetchOverview();
+        // Choose the correct browser state branch before continuing.
         if (!payload.success) {
             this.pushMessage({
                 role: 'assistant',
                 text: payload.message
             });
+            // Return the prepared value to the caller.
             return;
         }
         this.pushMessage({
@@ -3094,6 +3310,7 @@ const CASMAssistant = {
 
     handleTutorialIntent(query) {
         const session = this.getActiveSession();
+        // Choose the correct browser state branch before continuing.
         if (!session) return;
         const flow = /\blocal\b/.test(query)
             ? 'local'
@@ -3106,9 +3323,11 @@ const CASMAssistant = {
                 role: 'assistant',
                 text: 'Tutorial data is unavailable right now.'
             });
+            // Return the prepared value to the caller.
             return;
         }
 
+        // Prepare index for the next UI or data step.
         let index = Number(session.context.tutorialIndex || 0);
         if (/\b(start over|restart|first step)\b/.test(query)) {
             index = 0;
@@ -3131,6 +3350,7 @@ const CASMAssistant = {
             { type: 'tutorial', label: 'Next step', flow, stepIndex: Math.min(steps.length - 1, index + 1) }
         ];
 
+        // Choose the correct browser state branch before continuing.
         if (flow === 'local' && index === 0) {
             actions.push({ type: 'route', label: 'Open settings checkup', page: 'settings', focusLocalCheckup: true, collapsePanel: true });
         } else if (flow === 'local' && (index === 1 || index === 2)) {
@@ -3144,6 +3364,7 @@ const CASMAssistant = {
         }
 
         actions.push({ type: 'handbook', label: 'Open in handbook', pageKey: 'workflow', tutorialFlow: flow, tutorialStep: index, collapsePanel: true });
+        // Return the prepared value to the caller.
         return actions;
     },
 
@@ -3166,10 +3387,13 @@ const CASMAssistant = {
     },
 
     getLatestTutorialMessageIndex(session) {
+        // Choose the correct browser state branch before continuing.
         if (!session || !Array.isArray(session.messages)) return -1;
         for (let index = session.messages.length - 1; index >= 0; index -= 1) {
             const message = session.messages[index];
+            // Choose the correct browser state branch before continuing.
             if (message && message.role === 'assistant' && message.tutorial) {
+                // Return the prepared value to the caller.
                 return index;
             }
         }
@@ -3183,6 +3407,7 @@ const CASMAssistant = {
     },
 
     shouldUpdateInteractiveMessageInPlace(session, existingIndex) {
+        // Choose the correct browser state branch before continuing.
         if (!session || !Array.isArray(session.messages)) return false;
         return existingIndex >= 0 && existingIndex === session.messages.length - 1;
     },
@@ -3202,6 +3427,7 @@ const CASMAssistant = {
             });
             session.updatedAt = Date.now();
             this.refreshSessionUi();
+            // Return the prepared value to the caller.
             return;
         }
         this.pushMessage(tutorialMessage);
@@ -3238,6 +3464,7 @@ const CASMAssistant = {
                 ]
             }
         ];
+        // Return the prepared value to the caller.
         return intents.find((intent) => intent.match.test(query)) || null;
     },
 
@@ -3257,6 +3484,7 @@ const CASMAssistant = {
             { match: /\b(switch to api mode|switch to cloud mode|apply api mode|apply cloud profile|cloud profile)\b/, type: 'apply-api' },
             { match: /\b(switch to local mode|apply local profile|local profile)\b/, type: 'apply-local' }
         ];
+        // Return the prepared value to the caller.
         return intents.find((intent) => intent.match.test(query)) || null;
     },
 
@@ -3278,6 +3506,7 @@ const CASMAssistant = {
                     { type: 'route', label: 'Open settings', page: 'settings', collapsePanel: true }
                 ]
             });
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -3290,6 +3519,7 @@ const CASMAssistant = {
     },
 
     resolveAnalyticsIntent(raw, query) {
+        // Choose the correct browser state branch before continuing.
         if (!query) return null;
         const offTopicOnly = /\b(weather|pizza|joke|game|capital|bored|banana|universe|homework|recipe|song|movie)\b/.test(query)
             && !/\b(camera|report|reports|analytics|metric|violation|violations|incident|alert|ppe|helmet|hardhat|vest|site|safety|safe|compliance|dashboard|system)\b/.test(query);
@@ -3299,8 +3529,10 @@ const CASMAssistant = {
         const filterMatch = /\b(cloud|local|local synced|high|medium|low|today|yesterday|last 24 hours|week|seven days|7 days|month|helmet|hardhat|vest|gloves?|mask|boots?|shoes?)\b/.test(query);
         const queryMatch = /\b(show|give|see|summari[sz]e|snapshot|compare|compared|comparison|tell me|what is|what happened|what happen|how many|count|find|list|filter|only|just|latest|any|did|have|had|data|highlight|main|important|more|fewer|need|want)\b/.test(query);
         if (directOpen && !filterMatch) {
+            // Return the prepared value to the caller.
             return null;
         }
+        // Choose the correct browser state branch before continuing.
         if (!analyticsMatch && !(filterMatch && queryMatch)) {
             return null;
         }
@@ -3316,6 +3548,7 @@ const CASMAssistant = {
     buildAnalyticsFilters(rawQuery = '') {
         const base = this.sanitizeAnalyticsFilters(this.buildReportFilters(rawQuery));
         const ppeTypes = this.extractAnalyticsPpeTypes(rawQuery);
+        // Return the prepared value to the caller.
         return this.sanitizeAnalyticsFilters({
             ...base,
             ppeTypes
@@ -3332,6 +3565,7 @@ const CASMAssistant = {
         }
 
         const severities = this.normalizeSeverityFilterValues(filters);
+        // Choose the correct browser state branch before continuing.
         if (severities.length === 1) {
             cleaned.severity = severities[0];
         } else if (severities.length > 1) {
@@ -3346,10 +3580,12 @@ const CASMAssistant = {
         const dateExact = this.normalizeDateKey(filters.dateExact);
         const dateFrom = this.normalizeDateKey(filters.dateFrom);
         const dateTo = this.normalizeDateKey(filters.dateTo);
+        // Choose the correct browser state branch before continuing.
         if (dateExact) {
             cleaned.dateExact = dateExact;
             delete cleaned.dateRange;
         } else {
+            // Choose the correct browser state branch before continuing.
             if (dateFrom) {
                 cleaned.dateFrom = dateFrom;
                 delete cleaned.dateRange;
@@ -3373,6 +3609,7 @@ const CASMAssistant = {
                 .map((label) => this.normalizePpeFilterLabel(label))
                 .filter((label) => validPpe.has(label))
         ));
+        // Choose the correct browser state branch before continuing.
         if (normalizedPpe.length) {
             cleaned.ppeTypes = normalizedPpe;
         }
@@ -3401,6 +3638,7 @@ const CASMAssistant = {
     normalizeDateKey(value) {
         const raw = String(value || '').trim();
         const match = raw.match(/^(20\d{2})-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/);
+        // Choose the correct browser state branch before continuing.
         if (!match) return '';
         const [, year, month, day] = match;
         const parsed = new Date(Number(year), Number(month) - 1, Number(day));
@@ -3409,8 +3647,10 @@ const CASMAssistant = {
             || parsed.getMonth() !== Number(month) - 1
             || parsed.getDate() !== Number(day)
         ) {
+            // Return the prepared value to the caller.
             return '';
         }
+        // Return the prepared value to the caller.
         return `${year}-${month}-${day}`;
     },
 
@@ -3422,6 +3662,7 @@ const CASMAssistant = {
 
     normalizePpeFilterLabel(label) {
         const normalized = this.normalizeText(label).replace(/-/g, ' ');
+        // Choose the correct browser state branch before continuing.
         if (/\b(no )?(hardhat|hard hat|helmet|helmets)\b/.test(normalized)) return 'NO-Hardhat';
         if (/\b(no )?(safety )?vests?\b/.test(normalized)) return 'NO-Safety Vest';
         if (/\b(no )?gloves?\b/.test(normalized)) return 'NO-Gloves';
@@ -3433,7 +3674,9 @@ const CASMAssistant = {
     extractAnalyticsPpeTypes(rawQuery = '') {
         const query = this.normalizeText(rawQuery);
         const labels = [];
+        // Prepare add for the next UI or data step.
         const add = (label) => {
+            // Choose the correct browser state branch before continuing.
             if (!labels.includes(label)) labels.push(label);
         };
         if (/\b(hardhat|hard hat|helmet|helmets)\b/.test(query)) add('NO-Hardhat');
@@ -3446,11 +3689,13 @@ const CASMAssistant = {
 
     matchesAnalyticsFilters(row, filters = {}) {
         const safeFilters = this.sanitizeAnalyticsFilters(filters);
+        // Choose the correct browser state branch before continuing.
         if (!this.hasActiveAnalyticsFilters(safeFilters)) return true;
 
         const sourceValues = this.normalizeSourceFilterValues(safeFilters, false);
         if (sourceValues.length) {
             const scope = this.getSourceScope(row);
+            // Choose the correct browser state branch before continuing.
             if (!sourceValues.includes(scope)) return false;
         }
 
@@ -3460,14 +3705,17 @@ const CASMAssistant = {
             if (!severityValues.includes(severity)) return false;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (safeFilters.dateRange) {
             const rowDate = new Date(row?.timestamp || 0);
             const now = new Date();
             const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            // Choose the correct browser state branch before continuing.
             if (safeFilters.dateRange === 'today' && rowDate < today) return false;
             if (safeFilters.dateRange === 'yesterday') {
                 const yesterday = new Date(today);
                 yesterday.setDate(yesterday.getDate() - 1);
+                // Choose the correct browser state branch before continuing.
                 if (rowDate < yesterday || rowDate >= today) return false;
             }
             if (safeFilters.dateRange === 'week') {
@@ -3475,16 +3723,20 @@ const CASMAssistant = {
                 weekAgo.setDate(weekAgo.getDate() - 7);
                 if (rowDate < weekAgo) return false;
             }
+            // Choose the correct browser state branch before continuing.
             if (safeFilters.dateRange === 'month') {
                 const monthAgo = new Date(today);
                 monthAgo.setMonth(monthAgo.getMonth() - 1);
+                // Choose the correct browser state branch before continuing.
                 if (rowDate < monthAgo) return false;
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (safeFilters.dateExact || safeFilters.dateFrom || safeFilters.dateTo) {
             const rowDateKey = this.getRowDateKey(row);
             if (!rowDateKey) return false;
+            // Choose the correct browser state branch before continuing.
             if (safeFilters.dateExact && rowDateKey !== safeFilters.dateExact) return false;
             if (safeFilters.dateFrom && rowDateKey < safeFilters.dateFrom) return false;
             if (safeFilters.dateTo && rowDateKey > safeFilters.dateTo) return false;
@@ -3499,9 +3751,11 @@ const CASMAssistant = {
                     .map(([label]) => label)
                 : [];
             const normalizedLabels = new Set([...missing, ...ppeTags, ...breakdownLabels].map((label) => this.normalizePpeFilterLabel(label)));
+            // Choose the correct browser state branch before continuing.
             if (!safeFilters.ppeTypes.some((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
         }
 
+        // Return the prepared value to the caller.
         return true;
     },
 
@@ -3512,6 +3766,7 @@ const CASMAssistant = {
             parts.push(`${sources.map((value) => this.formatSourceFilterLabel(value)).join(' or ')} rows`);
         }
         const severities = this.normalizeSeverityFilterValues(filters);
+        // Choose the correct browser state branch before continuing.
         if (severities.length) {
             parts.push(`${severities.map((value) => this.formatSeverityFilterLabel(value)).join(' or ')} severity`);
         }
@@ -3523,6 +3778,7 @@ const CASMAssistant = {
         if (filters.dateFrom && filters.dateTo) parts.push(`${filters.dateFrom} to ${filters.dateTo}`);
         else if (filters.dateFrom) parts.push(`from ${filters.dateFrom}`);
         else if (filters.dateTo) parts.push(`until ${filters.dateTo}`);
+        // Choose the correct browser state branch before continuing.
         if (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length) {
             const labels = filters.ppeTypes.map((label) => String(label || '')
                 .replace(/^NO-/, '')
@@ -3534,6 +3790,7 @@ const CASMAssistant = {
     },
 
     async fetchAnalyticsSnapshot(rawQuery = '', overrideFilters = null) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const filters = overrideFilters && typeof overrideFilters === 'object'
                 ? this.sanitizeAnalyticsFilters(overrideFilters)
@@ -3547,7 +3804,9 @@ const CASMAssistant = {
             const filteredRows = hasFilters
                 ? allRows.filter((row) => this.matchesAnalyticsFilters(row, filters))
                 : allRows;
+            // Choose the correct browser state branch before continuing.
             if (!filteredRows.length) {
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     filters,
@@ -3564,6 +3823,7 @@ const CASMAssistant = {
                 : stats;
             const normalizedStats = AnalyticsPage.normalizeStats(baseStats, filteredRows);
             const derived = AnalyticsPage.buildDerivedMetrics(normalizedStats, filteredRows);
+            // Return the prepared value to the caller.
             return {
                 success: true,
                 filters,
@@ -3591,6 +3851,7 @@ const CASMAssistant = {
             const fallbackFilters = overrideFilters && typeof overrideFilters === 'object'
                 ? this.sanitizeAnalyticsFilters(overrideFilters)
                 : this.buildAnalyticsFilters(rawQuery);
+            // Return the prepared value to the caller.
             return {
                 success: false,
                 filters: fallbackFilters,
@@ -3605,6 +3866,7 @@ const CASMAssistant = {
         const outcome = await this.fetchAnalyticsSnapshot(intent.raw || intent.query || '', intent.filters || null);
         const filterSummary = outcome.filterSummary || intent.filterSummary || '';
         const label = filterSummary ? ` for ${filterSummary}` : '';
+        // Choose the correct browser state branch before continuing.
         if (!outcome.success) {
             this.pushMessage({
                 role: 'assistant',
@@ -3615,6 +3877,7 @@ const CASMAssistant = {
                     { type: 'export', label: 'Export analytics CSV', exportKind: 'analytics' }
                 ]
             });
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -3638,11 +3901,13 @@ const CASMAssistant = {
 
     resolveReportReviewIntent(raw, query = '') {
         const normalized = this.normalizeText(raw || query);
+        // Choose the correct browser state branch before continuing.
         if (!normalized || this.isExportIntent(normalized)) return null;
         if (/\b(docs|documentation|manual|handbook|guide)\b/.test(normalized)) return null;
         const session = this.getActiveSession();
         const hasActiveCarousel = !!(session && session.context && session.context.reportReview);
         if (hasActiveCarousel && /\b(explain|summari[sz]e|interpret|what does this mean|tell me about)\b.{0,28}\b(this|current|selected|report|it)\b/.test(normalized)) {
+            // Return the prepared value to the caller.
             return { type: 'explain-current' };
         }
         if (hasActiveCarousel && /\b(next|previous|prev|back)\s+(report|one|item)?\b/.test(normalized)) {
@@ -3650,6 +3915,7 @@ const CASMAssistant = {
         }
 
         const reportCue = /\b(reports?|report id|report #|incident records?|evidence list|violation records?|cases?|case records?|main risks?|risk summary|risk summaries)\b/.test(normalized);
+        // Choose the correct browser state branch before continuing.
         if (!reportCue) return null;
 
         const filters = this.buildReportFilters(raw);
@@ -3662,7 +3928,9 @@ const CASMAssistant = {
             && !/\b(latest|newest|most recent|last)\s+(reports|cases|violations)\b/.test(normalized)
         ) || /\b(explain|summari[sz]e|interpret|open|show|see|view)\s+(the\s+)?(latest|newest|most recent|last)\b/.test(normalized));
         const wantsExplain = /\b(explain|summari[sz]e|interpret|what happened|tell me about|walk me through|read\s+(the\s+)?report|fuller read)\b/.test(normalized);
+        // Choose the correct browser state branch before continuing.
         if (directOpen && !hasFilters && !/\b(show|review|check|browse|inspect|slide|slideshow|list|find|filter|view)\b/.test(normalized)) {
+            // Return the prepared value to the caller.
             return null;
         }
         if (!reviewCue && !hasFilters) return null;
@@ -3679,6 +3947,7 @@ const CASMAssistant = {
     },
 
     hasActiveReportFilters(filters = {}) {
+        // Return the prepared value to the caller.
         return !!(
             filters.source
             || (Array.isArray(filters.sources) && filters.sources.length > 0)
@@ -3695,9 +3964,11 @@ const CASMAssistant = {
     },
 
     async handleReportReviewIntent(intent) {
+        // Choose the correct browser state branch before continuing.
         if (!intent) return;
         if (intent.type === 'explain-current') {
             await this.explainCurrentReportReview();
+            // Return the prepared value to the caller.
             return;
         }
         if (intent.type === 'next' || intent.type === 'previous') {
@@ -3705,11 +3976,13 @@ const CASMAssistant = {
             return;
         }
 
+        // Keep this browser operation recoverable if it fails.
         try {
             this.updateResponseFeedback('Reading report rows...');
             const rows = await API.getViolations({ limit: 1000 });
             this.updateResponseFeedback('Filtering matching reports...');
             const filters = intent.filters || this.buildReportFilters(intent.raw || intent.query || '');
+            // Prepare filtered for the next UI or data step.
             const filtered = (rows || [])
                 .filter((row) => this.matchesReportFilters(row, filters))
                 .sort((a, b) => new Date(b?.timestamp || 0) - new Date(a?.timestamp || 0));
@@ -3728,12 +4001,14 @@ const CASMAssistant = {
                         { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true }
                     ]
                 });
+                // Return the prepared value to the caller.
                 return;
             }
 
             const maxCarouselReports = intent.selection === 'latest' ? 1 : (filtered.length > 15 ? 12 : 50);
             const reports = filtered.slice(0, maxCarouselReports).map((row) => this.normalizeReportPreview(row));
             const session = this.getActiveSession();
+            // Choose the correct browser state branch before continuing.
             if (session) {
                 session.context.reportReview = {
                     reports,
@@ -3747,6 +4022,7 @@ const CASMAssistant = {
                 };
             }
             this.upsertReportReviewMessage();
+            // Choose the correct browser state branch before continuing.
             if (intent.autoExplain && reports.length) {
                 this.updateResponseFeedback('Reading the selected report...');
                 await this.waitForFeedbackFrame();
@@ -3789,6 +4065,7 @@ const CASMAssistant = {
             .map(([key, count]) => `${count} ${key}`)
             .join(', ');
 
+        // Return the prepared value to the caller.
         return {
             activeFilters,
             sourceText,
@@ -3805,6 +4082,7 @@ const CASMAssistant = {
                     ? 'Local'
                     : 'Cloud');
         const timestamp = row.timestamp || row.created_at || row.updated_at || '';
+        // Return the prepared value to the caller.
         return {
             reportId: String(row.report_id || row.id || 'Unknown report').trim(),
             status: String(row.status || 'unknown').trim(),
@@ -3829,8 +4107,11 @@ const CASMAssistant = {
 
     resolveReportThumbnailUrl(row = {}) {
         const directUrl = row.local_image_url || row.thumbnail_url || row.image_url || row.annotated_image_url || row.original_image_url || '';
+        // Choose the correct browser state branch before continuing.
         if (directUrl) {
+            // Choose the correct browser state branch before continuing.
             if (window.API && typeof API.resolveReportAssetUrl === 'function') {
+                // Return the prepared value to the caller.
                 return API.resolveReportAssetUrl(directUrl, row) || '';
             }
             return directUrl;
@@ -3839,7 +4120,9 @@ const CASMAssistant = {
         if (!reportId || !window.API || typeof API.getImageUrl !== 'function') return '';
         const filename = row.has_annotated ? 'annotated.jpg' : row.has_original ? 'original.jpg' : '';
         if (!filename) return '';
+        // Keep this browser operation recoverable if it fails.
         try {
+            // Return the prepared value to the caller.
             return API.getImageUrl(reportId, filename, row) || '';
         } catch (_) {
             return '';
@@ -3850,12 +4133,14 @@ const CASMAssistant = {
         if (!value) return 'time unknown';
         if (typeof TimezoneManager !== 'undefined' && typeof TimezoneManager.formatDateTime === 'function') {
             try {
+                // Return the prepared value to the caller.
                 return TimezoneManager.formatDateTime(value);
             } catch (_) {
                 // Fall through to local formatting.
             }
         }
         const date = new Date(value);
+        // Return the prepared value to the caller.
         return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
     },
 
@@ -3869,6 +4154,7 @@ const CASMAssistant = {
 
     getCurrentReportReview() {
         const context = this.getReportReviewContext();
+        // Choose the correct browser state branch before continuing.
         if (!context) return null;
         return {
             context,
@@ -3904,6 +4190,7 @@ const CASMAssistant = {
             'Select Explain this report when you want Mira to interpret the selected row.',
             'Use Refine by clicking filters if you prefer choosing report filters without typing.'
         ].filter(Boolean);
+        // Return the prepared value to the caller.
         return {
             role: 'assistant',
             text: `I found ${matchedTotal} report${matchedTotal === 1 ? '' : 's'}${filterText}. Here is the report slideshow.`,
@@ -3917,9 +4204,11 @@ const CASMAssistant = {
     },
 
     getLatestReportReviewMessageIndex(session) {
+        // Choose the correct browser state branch before continuing.
         if (!session || !Array.isArray(session.messages)) return -1;
         for (let index = session.messages.length - 1; index >= 0; index -= 1) {
             const message = session.messages[index];
+            // Choose the correct browser state branch before continuing.
             if (message && message.role === 'assistant' && message.reportCarousel) return index;
         }
         return -1;
@@ -3928,6 +4217,7 @@ const CASMAssistant = {
     upsertReportReviewMessage() {
         const session = this.getActiveSession();
         const context = this.getReportReviewContext();
+        // Choose the correct browser state branch before continuing.
         if (!session || !context) return;
         const baseMessage = this.buildReportReviewMessage(context);
         const existingIndex = this.getLatestReportReviewMessageIndex(session);
@@ -3942,6 +4232,7 @@ const CASMAssistant = {
             };
             session.updatedAt = Date.now();
             this.refreshSessionUi();
+            // Return the prepared value to the caller.
             return;
         }
         this.pushMessage(baseMessage);
@@ -3950,12 +4241,14 @@ const CASMAssistant = {
     moveReportReview(delta) {
         const session = this.getActiveSession();
         const context = this.getReportReviewContext();
+        // Choose the correct browser state branch before continuing.
         if (!session || !context) {
             this.pushMessage({
                 role: 'assistant',
                 text: 'There is no active report slideshow yet. Ask me to show filtered reports first.',
                 actions: [{ type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true }]
             });
+            // Return the prepared value to the caller.
             return;
         }
         const total = context.reports.length;
@@ -3965,6 +4258,7 @@ const CASMAssistant = {
     },
 
     normalizeReportExtractedText(value = '') {
+        // Return the prepared value to the caller.
         return this.compactText(String(value || '')
             .replace(/\u00a0/g, ' ')
             .replace(/[•·]/g, ' • ')
@@ -3975,6 +4269,7 @@ const CASMAssistant = {
 
     splitReportListText(value = '', maxItems = 6) {
         const normalized = this.normalizeReportExtractedText(value);
+        // Choose the correct browser state branch before continuing.
         if (!normalized) return [];
         const prepared = normalized
             .replace(/\s*•\s*/g, '\n')
@@ -3991,12 +4286,14 @@ const CASMAssistant = {
         const seen = new Set();
         (Array.isArray(items) ? items : [items]).forEach((item) => {
             const text = this.normalizeReportExtractedText(item);
+            // Choose the correct browser state branch before continuing.
             if (!text) return;
             const key = this.normalizeText(text);
             if (seen.has(key)) return;
             seen.add(key);
             output.push(text);
         });
+        // Return the prepared value to the caller.
         return output.slice(0, maxItems);
     },
 
@@ -4024,6 +4321,7 @@ const CASMAssistant = {
             shoe: 'Safety Shoes',
             footwear: 'Safety Footwear'
         };
+        // Choose the correct browser state branch before continuing.
         if (map[normalized]) return map[normalized];
         return normalized
             ? normalized.replace(/\b\w/g, (char) => char.toUpperCase())
@@ -4034,9 +4332,11 @@ const CASMAssistant = {
         const counts = new Map();
         (Array.isArray(labels) ? labels : [labels]).forEach((label) => {
             const formatted = this.formatPpeLabel(label);
+            // Choose the correct browser state branch before continuing.
             if (!formatted) return;
             counts.set(formatted, (counts.get(formatted) || 0) + 1);
         });
+        // Return the prepared value to the caller.
         return Array.from(counts.entries())
             .map(([label, count]) => count > 1 ? `${label} (x${count})` : label)
             .join(', ');
@@ -4055,17 +4355,20 @@ const CASMAssistant = {
             mitigations: [],
             actions: []
         };
+        // Choose the correct browser state branch before continuing.
         if (!raw || typeof DOMParser === 'undefined') return empty;
 
         let doc = null;
         try {
             doc = new DOMParser().parseFromString(raw, 'text/html');
         } catch (_) {
+            // Return the prepared value to the caller.
             return empty;
         }
         if (!doc || !doc.documentElement) return empty;
 
         doc.querySelectorAll('script, style, noscript, svg, canvas').forEach((node) => node.remove());
+        // Prepare text of for the next UI or data step.
         const textOf = (node) => {
             if (!node) return '';
             let clone = node;
@@ -4082,8 +4385,10 @@ const CASMAssistant = {
             } catch (_) {
                 clone = node;
             }
+            // Return the prepared value to the caller.
             return this.normalizeReportExtractedText(clone ? clone.textContent : '');
         };
+        // Prepare list from for the next UI or data step.
         const listFrom = (nodes, maxItems = 6) => this.uniqueReportItems(
             Array.from(nodes || []).flatMap((node) => this.splitReportListText(textOf(node), maxItems)),
             maxItems
@@ -4102,6 +4407,7 @@ const CASMAssistant = {
 
         const sections = Array.from(doc.querySelectorAll('.section, section, .card'));
         const sceneSection = sections.find((section) => /scene description|ai scene|caption|visual analysis/i.test(textOf(section.querySelector('h1,h2,h3,.section-title,.card-header'))));
+        // Choose the correct browser state branch before continuing.
         if (sceneSection) {
             const contentNode = sceneSection.querySelector('.card-content p, .card-content, p');
             const titleNode = sceneSection.querySelector('h1,h2,h3,.section-title,.card-header');
@@ -4112,6 +4418,7 @@ const CASMAssistant = {
 
         Array.from(doc.querySelectorAll('table tr')).forEach((row) => {
             const cells = Array.from(row.querySelectorAll('th,td'));
+            // Choose the correct browser state branch before continuing.
             if (cells.length < 2) return;
             const key = textOf(cells[0]).toUpperCase();
             const value = textOf(cells[1]);
@@ -4124,6 +4431,7 @@ const CASMAssistant = {
                     ...this.splitReportListText(value, 8)
                 ], 8);
             }
+            // Choose the correct browser state branch before continuing.
             if (key === 'LAW') {
                 evidence.executive.law = value;
                 evidence.regulations = this.uniqueReportItems([
@@ -4139,6 +4447,7 @@ const CASMAssistant = {
             cards.forEach((card) => {
                 const header = textOf(card.querySelector('.card-header, h3, h4'));
                 const requirement = textOf(card.querySelector('.card-content p, p'));
+                // Choose the correct browser state branch before continuing.
                 if (header && !/summary|executive/i.test(header)) {
                     evidence.regulations.push(requirement && requirement !== header ? `${header}: ${requirement}` : header);
                 }
@@ -4153,8 +4462,10 @@ const CASMAssistant = {
             Array.from(card.querySelectorAll('.ppe-item')).forEach((item) => {
                 const label = textOf(item.querySelector('.ppe-label')).replace(/:$/, '');
                 const status = textOf(item.querySelector('.ppe-status'));
+                // Choose the correct browser state branch before continuing.
                 if (/missing|not worn|absent|non-compliant|no\b/i.test(status)) {
                     const formatted = this.formatPpeLabel(label);
+                    // Choose the correct browser state branch before continuing.
                     if (formatted) ppeMissing.push(formatted);
                 }
             });
@@ -4165,6 +4476,7 @@ const CASMAssistant = {
                 const regulation = textOf(riskNode.querySelector('.risk-meta'));
                 const mitigation = listFrom(riskNode.querySelectorAll('.risk-mitigation li'), 5);
                 evidence.mitigations.push(...mitigation);
+                // Return the prepared value to the caller.
                 return this.uniqueReportItems([
                     likelihood ? `${risk} Likelihood: ${likelihood}` : risk,
                     regulation
@@ -4184,6 +4496,7 @@ const CASMAssistant = {
 
         evidence.mitigations = this.uniqueReportItems(evidence.mitigations, 8);
         evidence.actions = this.uniqueReportItems(evidence.actions, 8);
+        // Choose the correct browser state branch before continuing.
         if (!evidence.dangers.length) {
             evidence.dangers = listFrom(doc.querySelectorAll('.hazard-chip, .risk-content'), 8);
         }
@@ -4196,7 +4509,9 @@ const CASMAssistant = {
 
     async fetchReportDocumentEvidence(report = {}) {
         const reportId = String(report.reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!reportId || !window.API || typeof API.getReportUrl !== 'function' || typeof fetch !== 'function') {
+            // Return the prepared value to the caller.
             return this.parseReportDocumentHtml('');
         }
 
@@ -4207,6 +4522,7 @@ const CASMAssistant = {
                 source_label: report.sourceLabel
             };
             const url = API.getReportUrl(reportId, sourceHint);
+            // Choose the correct browser state branch before continuing.
             if (!url) return this.parseReportDocumentHtml('');
             const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
             const timeoutId = controller ? setTimeout(() => controller.abort(), 6000) : 0;
@@ -4217,8 +4533,10 @@ const CASMAssistant = {
                     ...(controller ? { signal: controller.signal } : {})
                 });
             } finally {
+                // Choose the correct browser state branch before continuing.
                 if (timeoutId) clearTimeout(timeoutId);
             }
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) return this.parseReportDocumentHtml('');
             const html = await response.text();
             if (!html) return this.parseReportDocumentHtml('');
@@ -4231,6 +4549,7 @@ const CASMAssistant = {
 
     async fetchReportDocumentText(report = {}) {
         const evidence = await this.fetchReportDocumentEvidence(report);
+        // Return the prepared value to the caller.
         return evidence && evidence.text ? evidence.text : '';
     },
 
@@ -4243,12 +4562,14 @@ const CASMAssistant = {
             .filter((sentence) => sentence.length >= 24 && sentence.length <= 260);
         const picked = [];
         rawSentences.forEach((sentence) => {
+            // Choose the correct browser state branch before continuing.
             if (picked.length >= maxCount) return;
             const normalized = this.normalizeText(sentence);
             if (normalizedKeywords.some((keyword) => normalized.includes(keyword))) {
                 picked.push(sentence.replace(/\s+/g, ' ').trim());
             }
         });
+        // Return the prepared value to the caller.
         return picked;
     },
 
@@ -4306,6 +4627,7 @@ const CASMAssistant = {
             const hazards = this.uniqueReportItems(person.hazards || [], 2).join('; ');
             const risks = this.uniqueReportItems(person.risks || [], 2).join('; ');
             const actions = this.uniqueReportItems(person.actions || [], 2).join('; ');
+            // Return the prepared value to the caller.
             return [
                 `${title}: ${description}`,
                 `Missing/concern: ${personPpe}`,
@@ -4347,6 +4669,7 @@ const CASMAssistant = {
             { title: 'Compliance / Traceability', items: complianceItems.length ? complianceItems : [complianceDetail] }
         ].filter((section) => section && Array.isArray(section.items) && section.items.length);
 
+        // Return the prepared value to the caller.
         return {
             role: 'assistant',
             text: `Here is a fuller read of report ${report.reportId}.`,
@@ -4370,12 +4693,14 @@ const CASMAssistant = {
 
     async explainCurrentReportReview() {
         const current = this.getCurrentReportReview();
+        // Choose the correct browser state branch before continuing.
         if (!current || !current.report) {
             this.pushMessage({
                 role: 'assistant',
                 text: 'There is no selected report to explain yet. Ask me to show filtered reports first.',
                 actions: [{ type: 'route', label: 'Open reports', page: 'reports', collapsePanel: true }]
             });
+            // Return the prepared value to the caller.
             return;
         }
         const report = current.report;
@@ -4386,12 +4711,15 @@ const CASMAssistant = {
 
     async openSelectedReport(reportId = '') {
         const rid = String(reportId || this.getCurrentReportReview()?.report?.reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!rid) return;
         Router.navigate('reports');
         this.collapseAssistantForWorkspaceAction();
         window.setTimeout(async () => {
+            // Prepare source for the next UI or data step.
             let source = null;
             try {
+                // Choose the correct browser state branch before continuing.
                 if (window.ReportsPage && Array.isArray(ReportsPage.violations)) {
                     source = ReportsPage.violations.find((row) => String(row.report_id || '') === rid) || null;
                 }
@@ -4410,6 +4738,7 @@ const CASMAssistant = {
 
     isLowSignalPrompt(raw, query) {
         const compactRaw = String(raw || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!compactRaw) return true;
         if (/^[^a-zA-Z0-9]+$/.test(compactRaw)) return true;
         const queryNoSpace = String(query || '').replace(/\s+/g, '');
@@ -4433,11 +4762,13 @@ const CASMAssistant = {
                     { type: 'route', label: 'Open analytics', page: 'analytics', collapsePanel: true }
                 ]
             });
+            // Return the prepared value to the caller.
             return;
         }
 
         const offTopicOnly = /\b(weather|pizza|joke|game|capital|bored|banana|universe|homework|recipe|song|movie|poem)\b/.test(query)
             && !this.hasCasmDomainSignal(query);
+        // Choose the correct browser state branch before continuing.
         if (offTopicOnly) {
             this.pushMessage({
                 role: 'assistant',
@@ -4452,6 +4783,7 @@ const CASMAssistant = {
                     { type: 'tutorial', label: 'Show local tutorial', flow: 'local', stepIndex: 0 }
                 ]
             });
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -4483,6 +4815,7 @@ const CASMAssistant = {
             { match: /\b(voice|audio)\b/, type: 'handbook', pageKey: 'alerts', label: 'Voice alerts handbook' },
             { match: /\b(admin|device|approve|provision)\b/, type: 'handbook', pageKey: 'admin', label: 'Admin and devices' }
         ];
+        // Return the prepared value to the caller.
         return destinations.find((item) => item.match.test(query)) || null;
     },
 
@@ -4563,6 +4896,7 @@ const CASMAssistant = {
                 ]
             }
         ];
+        // Return the prepared value to the caller.
         return explanations.find((item) => item.match.test(query)) || null;
     },
 
@@ -4580,6 +4914,7 @@ const CASMAssistant = {
 
     queueAnalyticsIntent(detail = {}) {
         const filters = this.sanitizeAnalyticsFilters(detail && typeof detail.filters === 'object' ? detail.filters : {});
+        // Choose the correct browser state branch before continuing.
         if (!this.hasActiveAnalyticsFilters(filters)) return;
         const payload = {
             filters,
@@ -4597,6 +4932,7 @@ const CASMAssistant = {
     },
 
     performRouteNavigation(action) {
+        // Choose the correct browser state branch before continuing.
         if (!action) return;
         const page = action.focusLocalCheckup ? 'settings-checkup' : action.page;
         if (action.page === 'live' && (action.liveMode || action.liveFocus)) {
@@ -4607,6 +4943,7 @@ const CASMAssistant = {
         }
         if (action.page === 'analytics' && action.analyticsFilters) {
             const filters = this.sanitizeAnalyticsFilters(action.analyticsFilters);
+            // Choose the correct browser state branch before continuing.
             if (this.hasActiveAnalyticsFilters(filters)) {
                 this.queueAnalyticsIntent({
                     filters,
@@ -4615,6 +4952,7 @@ const CASMAssistant = {
             }
         }
         Router.navigate(page || 'home');
+        // Choose the correct browser state branch before continuing.
         if (action.collapsePanel !== false) {
             this.collapseAssistantForWorkspaceAction();
         }
@@ -4628,6 +4966,7 @@ const CASMAssistant = {
                 tutorialStep: Number(action.tutorialStep || 0)
             });
         }
+        // Choose the correct browser state branch before continuing.
         if (action.collapsePanel !== false) {
             this.collapseAssistantForWorkspaceAction();
         }
@@ -4641,9 +4980,11 @@ const CASMAssistant = {
                 text: 'I could not reach the settings controller right now.',
                 actions: [{ type: 'route', label: 'Open settings', page: 'settings', collapsePanel: true }]
             });
+            // Return the prepared value to the caller.
             return;
         }
 
+        // Prepare outcome for the next UI or data step.
         let outcome = null;
         let successText = 'I applied the requested settings.';
         let failureText = 'I could not apply that settings profile.';
@@ -4674,6 +5015,7 @@ const CASMAssistant = {
     },
 
     async performAction(action) {
+        // Choose the correct browser state branch before continuing.
         if (!action || !action.type) return;
         const feedbackLabel = this.pickActionFeedback(action);
         const responseJobId = feedbackLabel && !this.isResponding
@@ -4683,9 +5025,11 @@ const CASMAssistant = {
             await this.waitForFeedbackFrame();
         }
         try {
+            // Route the current value to the matching UI behaviour.
             switch (action.type) {
             case 'route': {
                 this.performRouteNavigation(action);
+                // Return the prepared value to the caller.
                 return;
             }
             case 'handbook': {
@@ -4700,6 +5044,7 @@ const CASMAssistant = {
                     this.saveState();
                 }
                 this.handleTutorialIntent(`${action.flow || 'cloud'} tutorial`);
+                // Return the prepared value to the caller.
                 return;
             }
             case 'export': {
@@ -4715,11 +5060,13 @@ const CASMAssistant = {
                 const prepared = exportId ? this.preparedCsvDownloads[exportId] : null;
                 const filename = String((prepared && prepared.filename) || action.filename || `casm-assistant-export-${this.buildTimestampToken()}.csv`);
                 const content = prepared && prepared.content ? prepared.content : action.content;
+                // Choose the correct browser state branch before continuing.
                 if (!content) {
                     this.pushMessage({
                         role: 'assistant',
                         text: 'That prepared CSV is no longer available in this chat session. Ask me to prepare the export again and I will rebuild it.'
                     });
+                    // Return the prepared value to the caller.
                     return;
                 }
                 this.downloadCsv(filename, content);
@@ -4727,6 +5074,7 @@ const CASMAssistant = {
             }
             case 'overview': {
                 await this.handleOverviewIntent();
+                // Return the prepared value to the caller.
                 return;
             }
             case 'guided-start': {
@@ -4739,6 +5087,7 @@ const CASMAssistant = {
             }
             case 'guided-toggle': {
                 this.handleGuidedToggle(action);
+                // Return the prepared value to the caller.
                 return;
             }
             case 'guided-continue': {
@@ -4751,6 +5100,7 @@ const CASMAssistant = {
             }
             case 'guided-finish': {
                 await this.finishGuidedFlow(action);
+                // Return the prepared value to the caller.
                 return;
             }
             case 'settings-profile': {
@@ -4763,6 +5113,7 @@ const CASMAssistant = {
             }
             case 'report-review-prev': {
                 this.moveReportReview(-1);
+                // Return the prepared value to the caller.
                 return;
             }
             case 'report-review-next': {
@@ -4775,12 +5126,14 @@ const CASMAssistant = {
             }
             case 'open-report': {
                 await this.openSelectedReport(action.reportId || '');
+                // Return the prepared value to the caller.
                 return;
             }
             default:
                 return;
             }
         } finally {
+            // Choose the correct browser state branch before continuing.
             if (responseJobId) {
                 this.finishResponseFeedback(responseJobId);
             }
@@ -4789,8 +5142,10 @@ const CASMAssistant = {
 
     handleActionClick(event) {
         const guardedButton = event.target.closest('[data-prompt-index], [data-shortcut-index], [data-message-id][data-action-index]');
+        // Choose the correct browser state branch before continuing.
         if (guardedButton && this.handleBusyInteraction()) {
             event.preventDefault();
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -4799,16 +5154,19 @@ const CASMAssistant = {
             const index = Number(promptButton.dataset.promptIndex || -1);
             if (Number.isFinite(index) && this.promptActions && this.promptActions[index]) {
                 const action = this.promptActions[index];
+                // Choose the correct browser state branch before continuing.
                 if (action.type && action.type !== 'prompt') {
                     this.runActionAsUserPrompt(action);
                 } else {
                     this.runSuggestedPrompt(action.prompt || '');
                 }
             }
+            // Return the prepared value to the caller.
             return;
         }
 
         const shortcutButton = event.target.closest('[data-shortcut-index]');
+        // Choose the correct browser state branch before continuing.
         if (shortcutButton) {
             const index = Number(shortcutButton.dataset.shortcutIndex || -1);
             if (Number.isFinite(index) && this.shortcutActions && this.shortcutActions[index]) {
@@ -4822,6 +5180,7 @@ const CASMAssistant = {
         const messageId = String(actionButton.dataset.messageId || '');
         const actionIndex = Number(actionButton.dataset.actionIndex || -1);
         const session = this.getActiveSession();
+        // Choose the correct browser state branch before continuing.
         if (!session) return;
         const message = session.messages.find((item) => item.id === messageId);
         if (!message || !Array.isArray(message.actions) || !message.actions[actionIndex]) return;
@@ -4836,6 +5195,7 @@ const CASMAssistant = {
 
     async runSuggestedPrompt(prompt) {
         const text = String(prompt || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!text) return;
         if (this.handleBusyInteraction()) return;
         this.ui.input.value = text;
@@ -4847,8 +5207,10 @@ const CASMAssistant = {
         const text = String(raw || '').trim();
         if (!text) return;
         const session = this.getActiveSession();
+        // Choose the correct browser state branch before continuing.
         if (session) {
             session.context.lastUserPrompt = text;
+            // Choose the correct browser state branch before continuing.
             if (session.title === 'New session' || session.title === 'Getting started') {
                 session.title = this.deriveSessionTitle(text);
             }
@@ -4863,9 +5225,11 @@ const CASMAssistant = {
 
     buildPromptForAction(action = {}) {
         const explicit = String(action.prompt || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (explicit) return explicit;
         const type = String(action.type || '').trim();
         if (type === 'route') {
+            // Choose the correct browser state branch before continuing.
             if (action.focusLocalCheckup) return 'open settings checkup';
             if (action.page === 'live' && action.liveMode === 'upload') return 'open image analysis';
             if (action.page === 'live') return 'open camera';
@@ -4873,6 +5237,7 @@ const CASMAssistant = {
         }
         if (type === 'handbook' || type === 'doc-result') return 'open handbook';
         if (type === 'tutorial') return `show ${action.flow === 'local' ? 'local' : 'cloud'} tutorial`;
+        // Choose the correct browser state branch before continuing.
         if (type === 'guided-start') return `guided ${this.getGuidedKind(action.guidedKind)}`;
         if (type === 'export') {
             return `export ${String(action.exportKind || 'reports').trim().toLowerCase() === 'analytics' ? 'analytics' : 'reports'} csv`;
@@ -4880,10 +5245,12 @@ const CASMAssistant = {
         if (type === 'overview') return 'system overview';
         if (type === 'settings-profile') {
             const profile = String(action.profile || 'recommended').trim().toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (profile === 'api') return 'switch to api mode';
             if (profile === 'local') return 'apply local profile';
             return 'recommend settings';
         }
+        // Return the prepared value to the caller.
         return String(action.label || '').trim();
     },
 
@@ -4891,11 +5258,13 @@ const CASMAssistant = {
         const label = String(action.label || action.page || 'That action').trim();
         const preserved = prompt ? ` I also saved "${prompt}" as your prompt in this chat.` : '';
         if (action.type === 'route') {
+            // Return the prepared value to the caller.
             return `${label} is ready. I am opening it now.${preserved}`;
         }
         if (action.type === 'handbook' || action.type === 'doc-result') {
             return `${label} is ready in the handbook. I am opening it now.${preserved}`;
         }
+        // Return the prepared value to the caller.
         return '';
     },
 
@@ -4908,9 +5277,11 @@ const CASMAssistant = {
         }
         const feedbackLabel = this.pickActionFeedback(action) || this.pickResponseFeedback(prompt) || 'Working on that...';
         const responseJobId = this.beginResponseFeedback(feedbackLabel);
+        // Keep this browser operation recoverable if it fails.
         try {
             await this.waitForFeedbackFrame();
             const acknowledgement = this.buildActionAcknowledgement(action, prompt);
+            // Choose the correct browser state branch before continuing.
             if (acknowledgement) {
                 this.pushMessage({
                     role: 'assistant',
@@ -4926,6 +5297,7 @@ const CASMAssistant = {
 
     pushMessage(message) {
         const session = this.getActiveSession();
+        // Choose the correct browser state branch before continuing.
         if (!session) return;
         const normalized = this.normalizeMessage({
             ...message,
@@ -4947,6 +5319,7 @@ const CASMAssistant = {
             const titleNode = page.querySelector('h3');
             const title = String(titleNode?.textContent || pageKey || 'Handbook').trim();
             const text = this.compactText(page.innerText || page.textContent || '');
+            // Choose the correct browser state branch before continuing.
             if (text) {
                 entries.push({
                     id: `page-${pageKey}`,
@@ -4963,6 +5336,7 @@ const CASMAssistant = {
             const stageKey = String(panel.dataset.stagePanel || '').trim();
             const title = String(panel.querySelector('h4')?.textContent || stageKey || 'Workflow').trim();
             const text = this.compactText(panel.innerText || panel.textContent || '');
+            // Choose the correct browser state branch before continuing.
             if (text) {
                 entries.push({
                     id: `workflow-${stageKey}`,
@@ -5056,6 +5430,7 @@ const CASMAssistant = {
             }
         ];
 
+        // Return the prepared value to the caller.
         return entries.concat(glossary);
     },
 
@@ -5065,8 +5440,10 @@ const CASMAssistant = {
         return this.docsIndex
             .map((entry) => {
                 const haystack = this.normalizeText(`${entry.title} ${entry.text} ${(entry.keywords || []).join(' ')}`);
+                // Prepare score for the next UI or data step.
                 let score = 0;
                 tokens.forEach((token) => {
+                    // Choose the correct browser state branch before continuing.
                     if (this.normalizeText(entry.title).includes(token)) score += 7;
                     if ((entry.keywords || []).some((keyword) => this.normalizeText(keyword).includes(token))) score += 4;
                     if (haystack.includes(token)) score += 2;
@@ -5100,6 +5477,7 @@ const CASMAssistant = {
         tokens.forEach((token) => {
             (synonyms[token] || []).forEach((value) => expanded.add(value));
         });
+        // Return the prepared value to the caller.
         return Array.from(expanded);
     },
 
@@ -5112,6 +5490,7 @@ const CASMAssistant = {
         if (!match) return source.slice(0, 180);
         const start = Math.max(0, normalized.indexOf(match) - 56);
         const snippet = source.slice(start, start + 180).trim();
+        // Return the prepared value to the caller.
         return snippet.length < source.length ? `${snippet}...` : snippet;
     },
 
@@ -5123,6 +5502,7 @@ const CASMAssistant = {
             ]);
             const normalizedStats = AnalyticsPage.normalizeStats(stats, violations);
             const derived = AnalyticsPage.buildDerivedMetrics(normalizedStats, violations);
+            // Return the prepared value to the caller.
             return {
                 success: true,
                 metrics: [
@@ -5136,6 +5516,7 @@ const CASMAssistant = {
             };
         } catch (error) {
             console.error('Assistant overview fetch failed:', error);
+            // Return the prepared value to the caller.
             return {
                 success: false,
                 message: 'I could not fetch the current pipeline metrics right now.'
@@ -5144,11 +5525,14 @@ const CASMAssistant = {
     },
 
     async exportReportsCsv(rawQuery = '') {
+        // Keep this browser operation recoverable if it fails.
         try {
             const rows = await API.getViolations({ limit: 1000 });
             const filters = this.buildReportFilters(rawQuery);
+            // Prepare filtered for the next UI or data step.
             const filtered = (rows || []).filter((row) => this.matchesReportFilters(row, filters));
             if (!filtered.length) {
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     message: 'No report rows matched that export request.'
@@ -5193,6 +5577,7 @@ const CASMAssistant = {
             };
             const summary = this.describeReportFilters(filters);
             const session = this.getActiveSession();
+            // Choose the correct browser state branch before continuing.
             if (session) session.context.lastExportKind = 'reports';
             return {
                 success: true,
@@ -5212,6 +5597,7 @@ const CASMAssistant = {
             };
         } catch (error) {
             console.error('Assistant reports CSV export failed:', error);
+            // Return the prepared value to the caller.
             return {
                 success: false,
                 message: 'Reports CSV export failed.'
@@ -5245,6 +5631,7 @@ const CASMAssistant = {
                                 ? 'partial'
                                 : '';
         const dateExact = this.extractReportExactDateFilter(rawQuery);
+        // Return the prepared value to the caller.
         return {
             source,
             severity: /\bhigh\b/.test(query)
@@ -5298,8 +5685,10 @@ const CASMAssistant = {
         const normalized = this.normalizeText(source);
 
         const isoMatch = lowerSource.match(/\b(20\d{2})[-/](0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])\b/);
+        // Choose the correct browser state branch before continuing.
         if (isoMatch) {
             const [, year, month, day] = isoMatch;
+            // Return the prepared value to the caller.
             return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         }
 
@@ -5325,8 +5714,10 @@ const CASMAssistant = {
         };
         const monthPattern = Object.keys(monthNames).join('|');
         const namedMonthFirst = normalized.match(new RegExp(`\\b(${monthPattern})\\s+(0?[1-9]|[12]\\d|3[01])(?:st|nd|rd|th)?\\s+(20\\d{2})\\b`));
+        // Choose the correct browser state branch before continuing.
         if (namedMonthFirst) {
             const [, monthName, day, year] = namedMonthFirst;
+            // Return the prepared value to the caller.
             return `${year}-${monthNames[monthName]}-${String(day).padStart(2, '0')}`;
         }
         const namedDayFirst = normalized.match(new RegExp(`\\b(0?[1-9]|[12]\\d|3[01])(?:st|nd|rd|th)?\\s+(${monthPattern})\\s+(20\\d{2})\\b`));
@@ -5335,6 +5726,7 @@ const CASMAssistant = {
             return `${year}-${monthNames[monthName]}-${String(day).padStart(2, '0')}`;
         }
 
+        // Return the prepared value to the caller.
         return '';
     },
 
@@ -5342,10 +5734,12 @@ const CASMAssistant = {
         const sourceValues = this.normalizeSourceFilterValues(filters, true);
         if (sourceValues.length) {
             const scope = this.getSourceScope(row);
+            // Choose the correct browser state branch before continuing.
             if (!sourceValues.includes(scope)) return false;
         }
 
         const severityValues = this.normalizeSeverityFilterValues(filters);
+        // Choose the correct browser state branch before continuing.
         if (severityValues.length) {
             const severity = String(row?.severity || '').trim().toLowerCase();
             if (!severityValues.includes(severity)) return false;
@@ -5357,6 +5751,7 @@ const CASMAssistant = {
                 : status === 'queued' || status === 'waiting' ? 'pending'
                     : status === 'processing' || status === 'running' ? 'generating'
                         : status;
+            // Choose the correct browser state branch before continuing.
             if (filters.status === 'pending' && normalizedStatus !== 'pending') return false;
             if (filters.status === 'generating' && normalizedStatus !== 'generating') return false;
             if (filters.status === 'completed' && normalizedStatus !== 'completed') return false;
@@ -5365,8 +5760,10 @@ const CASMAssistant = {
             if (filters.status === 'partial' && normalizedStatus !== 'partial') return false;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (filters.dateExact) {
             const rowDateKey = this.getRowDateKey(row);
+            // Choose the correct browser state branch before continuing.
             if (!rowDateKey) return false;
             if (rowDateKey !== filters.dateExact) return false;
         }
@@ -5379,8 +5776,10 @@ const CASMAssistant = {
             if (filters.dateRange === 'yesterday') {
                 const yesterday = new Date(today);
                 yesterday.setDate(yesterday.getDate() - 1);
+                // Choose the correct browser state branch before continuing.
                 if (rowDate < yesterday || rowDate >= today) return false;
             }
+            // Choose the correct browser state branch before continuing.
             if (filters.dateRange === 'week') {
                 const weekAgo = new Date(today);
                 weekAgo.setDate(weekAgo.getDate() - 7);
@@ -5389,12 +5788,15 @@ const CASMAssistant = {
             if (filters.dateRange === 'month') {
                 const monthAgo = new Date(today);
                 monthAgo.setMonth(monthAgo.getMonth() - 1);
+                // Choose the correct browser state branch before continuing.
                 if (rowDate < monthAgo) return false;
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (filters.dateFrom || filters.dateTo) {
             const rowDateKey = this.getRowDateKey(row);
+            // Choose the correct browser state branch before continuing.
             if (!rowDateKey) return false;
             if (filters.dateFrom && rowDateKey < filters.dateFrom) return false;
             if (filters.dateTo && rowDateKey > filters.dateTo) return false;
@@ -5413,9 +5815,11 @@ const CASMAssistant = {
                 row?.source_scope,
                 row?.source_label
             ].join(' '));
+            // Choose the correct browser state branch before continuing.
             if (!filters.searchTokens.every((token) => haystack.includes(token))) return false;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (Array.isArray(filters.ppeTypes) && filters.ppeTypes.length) {
             const missing = Array.isArray(row?.missing_ppe) ? row.missing_ppe : [];
             const ppeTags = Array.isArray(row?.ppe_tags) ? row.ppe_tags : [];
@@ -5425,9 +5829,11 @@ const CASMAssistant = {
                     .map(([label]) => label)
                 : [];
             const normalizedLabels = new Set([...missing, ...ppeTags, ...breakdownLabels].map((label) => this.normalizePpeFilterLabel(label)));
+            // Choose the correct browser state branch before continuing.
             if (!filters.ppeTypes.some((label) => normalizedLabels.has(this.normalizePpeFilterLabel(label)))) return false;
         }
 
+        // Return the prepared value to the caller.
         return true;
     },
 
@@ -5438,6 +5844,7 @@ const CASMAssistant = {
             parts.push(`${sources.map((value) => this.formatSourceFilterLabel(value)).join(' or ')} rows`);
         }
         const severities = this.normalizeSeverityFilterValues(filters);
+        // Choose the correct browser state branch before continuing.
         if (severities.length) {
             parts.push(`${severities.map((value) => this.formatSeverityFilterLabel(value)).join(' or ')} severity`);
         }
@@ -5454,6 +5861,7 @@ const CASMAssistant = {
                 .toLowerCase());
             parts.push(`missing ${labels.join(', ')}`);
         }
+        // Return the prepared value to the caller.
         return parts.join(', ');
     },
 
@@ -5481,6 +5889,7 @@ const CASMAssistant = {
             ].map((row, index) => index === 0 ? row : row.map((cell) => this.escapeCsv(cell)).join(','));
             this.downloadCsv(`casm-assistant-analytics-${this.buildTimestampToken()}.csv`, '\uFEFF' + lines.join('\r\n'));
             const session = this.getActiveSession();
+            // Choose the correct browser state branch before continuing.
             if (session) session.context.lastExportKind = 'analytics';
             return {
                 success: true,
@@ -5497,7 +5906,9 @@ const CASMAssistant = {
 
     async exportDocsCsv(rawQuery = '') {
         const results = this.searchDocs(rawQuery);
+        // Choose the correct browser state branch before continuing.
         if (!results.length) {
+            // Return the prepared value to the caller.
             return {
                 success: false,
                 message: 'No handbook results matched that documentation export request.'
@@ -5514,6 +5925,7 @@ const CASMAssistant = {
             ].map((cell) => this.escapeCsv(cell)).join(','))
         ];
         this.downloadCsv(`casm-assistant-docs-${this.buildTimestampToken()}.csv`, '\uFEFF' + lines.join('\r\n'));
+        // Return the prepared value to the caller.
         return {
             success: true,
             rowCount: results.length
@@ -5530,6 +5942,7 @@ const CASMAssistant = {
         anchor.click();
         document.body.removeChild(anchor);
         window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        // Choose the correct browser state branch before continuing.
         if (typeof notifyApp === 'function') {
             notifyApp(`Downloaded ${filename}.`, 'success');
         }
@@ -5537,10 +5950,13 @@ const CASMAssistant = {
 
     ensureClientIdentity() {
         const randomToken = (size = 16) => {
+            // Keep this browser operation recoverable if it fails.
             try {
+                // Choose the correct browser state branch before continuing.
                 if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
                     const bytes = new Uint8Array(size);
                     window.crypto.getRandomValues(bytes);
+                    // Return the prepared value to the caller.
                     return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
                 }
             } catch (_) {
@@ -5549,6 +5965,7 @@ const CASMAssistant = {
             return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 2 + size)}`;
         };
 
+        // Prepare client id for the next UI or data step.
         let clientId = '';
         let syncSecret = '';
         try { clientId = String(localStorage.getItem(this.CLIENT_ID_KEY) || '').trim(); } catch (_) {}
@@ -5556,6 +5973,7 @@ const CASMAssistant = {
 
         if (!clientId) {
             clientId = `assistant-${randomToken(12)}`;
+            // Keep this browser operation recoverable if it fails.
             try { localStorage.setItem(this.CLIENT_ID_KEY, clientId); } catch (_) {}
         }
         if (!syncSecret) {
@@ -5563,6 +5981,7 @@ const CASMAssistant = {
             try { localStorage.setItem(this.SYNC_SECRET_KEY, syncSecret); } catch (_) {}
         }
 
+        // Prepare machine id for the next UI or data step.
         let machineId = '';
         try {
             if (typeof getOrCreateDeviceMachineId === 'function') {
@@ -5574,6 +5993,7 @@ const CASMAssistant = {
             machineId = '';
         }
 
+        // Return the prepared value to the caller.
         return {
             clientId,
             syncSecret,
@@ -5614,6 +6034,7 @@ const CASMAssistant = {
             }))
         }));
 
+        // Return the prepared value to the caller.
         return {
             client_id: identity.clientId,
             machine_id: identity.machineId,
@@ -5626,8 +6047,10 @@ const CASMAssistant = {
     },
 
     async syncSessionsToAdminLog() {
+        // Choose the correct browser state branch before continuing.
         if (this.syncInFlight) {
             this.syncQueued = true;
+            // Return the prepared value to the caller.
             return;
         }
         this.syncInFlight = true;
@@ -5640,6 +6063,7 @@ const CASMAssistant = {
                 body: JSON.stringify(payload),
                 cache: 'no-store'
             });
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) {
                 console.debug('Assistant session sync skipped:', response.status);
             }
@@ -5656,6 +6080,7 @@ const CASMAssistant = {
 
     trackRoute(page) {
         const session = this.getActiveSession();
+        // Choose the correct browser state branch before continuing.
         if (!session) return;
         const recentPages = Array.isArray(session.context.recentPages) ? session.context.recentPages : [];
         const nextPages = [page, ...recentPages.filter((entry) => entry !== page)].slice(0, 8);
@@ -5667,6 +6092,7 @@ const CASMAssistant = {
 
     deriveSessionTitle(prompt) {
         const compact = String(prompt || '').replace(/\s+/g, ' ').trim();
+        // Choose the correct browser state branch before continuing.
         if (!compact) return 'New session';
         const words = compact.split(' ').slice(0, 6).join(' ');
         return words.length > 42 ? `${words.slice(0, 39)}...` : words;
@@ -5683,6 +6109,7 @@ const CASMAssistant = {
     },
 
     scrollMessagesToBottom() {
+        // Choose the correct browser state branch before continuing.
         if (!this.ui.messages) return;
         const messages = this.ui.messages;
         const settle = () => {
@@ -5699,6 +6126,7 @@ const CASMAssistant = {
     },
 
     buildTimestampToken() {
+        // Return the prepared value to the caller.
         return new Date().toISOString().replace(/[:.]/g, '-');
     },
 
@@ -5711,6 +6139,7 @@ const CASMAssistant = {
     },
 
     normalizeText(value) {
+        // Prepare text for the next UI or data step.
         let text = String(value || '')
             .toLowerCase()
             .replace(/\bdon't\b/g, 'dont')
@@ -5738,6 +6167,7 @@ const CASMAssistant = {
             .replace(/[^a-z0-9\s-]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
+        // Return the prepared value to the caller.
         return text;
     },
 
@@ -5754,6 +6184,7 @@ const CASMAssistant = {
     },
 
     escapeHtml(value) {
+        // Return the prepared value to the caller.
         return String(value || '')
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
@@ -5764,6 +6195,7 @@ const CASMAssistant = {
 
     escapeCsv(value) {
         const normalized = String(value === null || value === undefined ? '' : value).replace(/\r?\n/g, ' ');
+        // Return the prepared value to the caller.
         return /[",]/.test(normalized)
             ? `"${normalized.replace(/"/g, '""')}"`
             : normalized;

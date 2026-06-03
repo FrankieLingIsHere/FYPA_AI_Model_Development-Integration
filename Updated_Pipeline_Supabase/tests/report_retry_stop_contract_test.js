@@ -1,3 +1,4 @@
+// Readability: Test setup: document the contract this file protects.
 /*
  * Contract tests for report retry stop behavior.
  *
@@ -13,18 +14,22 @@ const vm = require('vm');
 const ROOT = path.resolve(__dirname, '..');
 const REPORTS_JS = path.join(ROOT, 'frontend', 'js', 'pages', 'reports.js');
 
+// Section: handle the assert workflow.
 function assert(condition, message) {
+  // Choose the correct browser state branch before continuing.
   if (!condition) {
     throw new Error(message);
   }
 }
 
+// Section: handle the assert equal workflow.
 function assertEqual(actual, expected, message) {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${expected}, got ${actual}`);
   }
 }
 
+// Section: handle the load reports page workflow.
 function loadReportsPage(overrides = {}) {
   const context = {
     console,
@@ -41,6 +46,7 @@ function loadReportsPage(overrides = {}) {
       dispatchEvent: () => true,
     },
     CustomEvent: function CustomEvent(type, init = {}) {
+      // Return the prepared value to the caller.
       return { type, detail: init.detail || {} };
     },
     setTimeout,
@@ -55,9 +61,11 @@ function loadReportsPage(overrides = {}) {
     context,
     { filename: REPORTS_JS },
   );
+  // Return the prepared value to the caller.
   return context.ReportsPage;
 }
 
+// Section: handle the test stale pending cache does not revive failed report workflow.
 function testStalePendingCacheDoesNotReviveFailedReport() {
   const ReportsPage = loadReportsPage();
   const merged = ReportsPage.mergePendingReports(
@@ -85,6 +93,7 @@ function testStalePendingCacheDoesNotReviveFailedReport() {
   assertEqual(row.status, 'failed', 'stale pending cache must not override failed status');
 }
 
+// Section: handle the test worker503 generate now stops as failed without polling workflow.
 async function testWorker503GenerateNowStopsAsFailedWithoutPolling() {
   const calls = {
     cooldowns: 0,
@@ -104,6 +113,7 @@ async function testWorker503GenerateNowStopsAsFailedWithoutPolling() {
       }),
       upsertPendingReportCache: async (record) => {
         calls.cacheUpserts.push(record);
+        // Return the prepared value to the caller.
         return record;
       },
     },
@@ -140,13 +150,16 @@ async function testWorker503GenerateNowStopsAsFailedWithoutPolling() {
   assert(calls.notifications.some((item) => item.level === 'error'), 'error notification should be emitted');
 }
 
+// Section: handle the main workflow.
 async function main() {
   const tests = [
     testStalePendingCacheDoesNotReviveFailedReport,
     testWorker503GenerateNowStopsAsFailedWithoutPolling,
   ];
   const failures = [];
+  // Walk through the active items and update each one consistently.
   for (const testFn of tests) {
+    // Keep this browser operation recoverable if it fails.
     try {
       await testFn();
       console.log(`PASS: ${testFn.name}`);
@@ -156,6 +169,7 @@ async function main() {
     }
   }
 
+  // Choose the correct browser state branch before continuing.
   if (failures.length) {
     process.exit(1);
   }

@@ -1,3 +1,4 @@
+// Readability: Test setup: document the contract this file protects.
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
@@ -7,10 +8,12 @@ const port = Number(process.env.MIRA_BOTIUM_PORT || 47823);
 const repoRoot = path.resolve(__dirname, '..', '..', '..');
 const assistantPath = path.join(repoRoot, 'Updated_Pipeline_Supabase', 'frontend', 'js', 'assistant.js');
 
+// Section: handle the to iso at day offset workflow.
 function toIsoAtDayOffset(offsetDays, hour = 9) {
   const date = new Date();
   date.setHours(hour, 0, 0, 0);
   date.setDate(date.getDate() + offsetDays);
+  // Return the prepared value to the caller.
   return date.toISOString();
 }
 
@@ -53,16 +56,19 @@ const fixtureRows = [
   }
 ];
 
+// Section: handle the build stats workflow.
 function buildStats(rows = fixtureRows) {
   const severity = { high: 0, medium: 0, low: 0 };
   const breakdown = {};
   rows.forEach((row) => {
     const level = String(row.severity || '').toLowerCase();
+    // Choose the correct browser state branch before continuing.
     if (severity[level] !== undefined) severity[level] += 1;
     (row.missing_ppe || []).forEach((label) => {
       breakdown[label] = (breakdown[label] || 0) + 1;
     });
   });
+  // Return the prepared value to the caller.
   return {
     total: rows.length,
     today: rows.filter((row) => new Date(row.timestamp).toDateString() === new Date().toDateString()).length,
@@ -72,6 +78,7 @@ function buildStats(rows = fixtureRows) {
   };
 }
 
+// Section: handle the create sandbox workflow.
 function createSandbox() {
   const localStore = new Map();
   const sandbox = {
@@ -102,6 +109,7 @@ function createSandbox() {
     },
     API: {
       async getStats() {
+        // Return the prepared value to the caller.
         return buildStats();
       },
       async getViolations() {
@@ -114,6 +122,7 @@ function createSandbox() {
       },
       normalizeStats(stats, rows) {
         const sourceRows = Array.isArray(rows) ? rows : fixtureRows;
+        // Return the prepared value to the caller.
         return {
           ...buildStats(sourceRows),
           ...(stats || {})
@@ -124,6 +133,7 @@ function createSandbox() {
         const completed = sourceRows.filter((row) => String(row.status || '').toLowerCase() === 'completed').length;
         const total = Math.max(1, sourceRows.length);
         const high = Number(stats?.severity?.high || 0);
+        // Return the prepared value to the caller.
         return {
           readyRate: Math.round((completed / total) * 100),
           pending: Math.max(0, sourceRows.length - completed),
@@ -145,9 +155,11 @@ function createSandbox() {
   vm.createContext(sandbox);
   const code = `${fs.readFileSync(assistantPath, 'utf8')}\n;globalThis.CASMAssistant = CASMAssistant;`;
   vm.runInContext(code, sandbox, { filename: assistantPath });
+  // Return the prepared value to the caller.
   return sandbox;
 }
 
+// Section: handle the message to text workflow.
 function messageToText(message) {
   const parts = [];
   if (message.text) parts.push(message.text);
@@ -156,6 +168,7 @@ function messageToText(message) {
     parts.push(`${metric.label}: ${metric.value} ${metric.note || ''}`.trim());
   });
   (message.docs || []).forEach((doc) => parts.push(`${doc.title || ''} ${doc.snippet || ''}`.trim()));
+  // Choose the correct browser state branch before continuing.
   if (message.tutorial) {
     parts.push(`${message.tutorial.title || ''} ${message.tutorial.summary || ''}`.trim());
   }
@@ -171,12 +184,14 @@ function messageToText(message) {
       Array.isArray(report.missingPpe) ? report.missingPpe.join(' ') : ''
     ].filter(Boolean).join(' '));
   }
+  // Choose the correct browser state branch before continuing.
   if (Array.isArray(message.actions) && message.actions.length) {
     parts.push(`Actions: ${message.actions.map((action) => action.label || action.type || 'action').join(', ')}`);
   }
   return parts.filter(Boolean).join(' | ');
 }
 
+// Section: handle the ask mira workflow.
 async function askMira(text) {
   const sandbox = createSandbox();
   const assistant = sandbox.CASMAssistant;
@@ -205,17 +220,21 @@ async function askMira(text) {
   };
 
   await assistant.answer(String(text || ''));
+  // Return the prepared value to the caller.
   return {
     text: replies.map(messageToText).join(' | ') || 'NO_RESPONSE',
     context: session.context
   };
 }
 
+// Section: handle the create server workflow.
 function createServer() {
   return http.createServer((req, res) => {
+    // Choose the correct browser state branch before continuing.
     if (req.method === 'GET' && req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
+      // Return the prepared value to the caller.
       return;
     }
 
@@ -225,11 +244,13 @@ function createServer() {
       return;
     }
 
+    // Prepare body for the next UI or data step.
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
     });
     req.on('end', async () => {
+      // Keep this browser operation recoverable if it fails.
       try {
         const payload = body ? JSON.parse(body) : {};
         console.log(`[mira-botium] received: ${String(payload.text || payload.messageText || '').slice(0, 120)}`);
@@ -245,11 +266,13 @@ function createServer() {
   });
 }
 
+// Section: handle the start server workflow.
 function startServer() {
   const server = createServer();
   server.listen(port, '127.0.0.1', () => {
     console.log(`Mira Botium SimpleRest wrapper listening on http://127.0.0.1:${port}`);
   });
+  // Return the prepared value to the caller.
   return server;
 }
 

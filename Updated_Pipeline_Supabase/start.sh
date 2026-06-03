@@ -1,4 +1,5 @@
 #!/bin/bash
+# Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 # CASM Supabase Edition - Startup Script
 # ========================================
 # 
@@ -13,6 +14,7 @@ echo "=========================================="
 echo ""
 
 # Check if .env file exists
+# Section: perform this operational step before continuing.
 if [ ! -f .env ]; then
     echo "❌ Error: .env file not found!"
     echo ""
@@ -24,6 +26,7 @@ if [ ! -f .env ]; then
 fi
 
 # Check if venv exists
+# Section: perform this operational step before continuing.
 if [ ! -d venv ]; then
     echo "⚠️  Warning: Virtual environment not found."
     echo ""
@@ -43,6 +46,7 @@ fi
 echo ""
 echo "Running dependency preflight check..."
 python tests/preflight_check.py --install
+# Section: perform this operational step before continuing.
 if [ $? -ne 0 ]; then
     echo "❌ Dependency preflight failed"
     exit 1

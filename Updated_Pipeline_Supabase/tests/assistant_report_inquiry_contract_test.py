@@ -1,7 +1,9 @@
+# Readability: Test setup: document the contract this file protects.
 from pathlib import Path
 
 import pytest
 
+# Trigger the side effect required for this stage.
 pytest.importorskip("playwright.sync_api")
 from playwright.sync_api import sync_playwright
 
@@ -10,7 +12,9 @@ ROOT = Path(__file__).resolve().parent.parent
 ASSISTANT_JS = ROOT / "frontend" / "js" / "assistant.js"
 
 
+# Section: run the build page html workflow with clear inputs and outputs.
 def _build_page_html() -> str:
+    # Prepare script for the next step.
     script = ASSISTANT_JS.read_text(encoding="utf-8")
     style = """
     .hidden { display: none; }
@@ -58,6 +62,7 @@ def _build_page_html() -> str:
         border-radius: 12px;
     }
     """
+    # Return the prepared result to the caller.
     return f"""
 <!doctype html>
 <html>
@@ -172,11 +177,14 @@ def _build_page_html() -> str:
 """
 
 
+# Section: run the submit prompt workflow with clear inputs and outputs.
 def _submit_prompt(page, prompt: str) -> None:
+    # Trigger the side effect required for this stage.
     page.locator("#assistantInput").fill(prompt)
     page.locator("#assistantSend").click()
 
 
+# Section: run the wait for idle after workflow with clear inputs and outputs.
 def _wait_for_idle_after(page, prompt: str) -> None:
     page.wait_for_function(
         "(prompt) => window.CASMAssistant.getActiveSession()?.context?.lastUserPrompt === prompt "
@@ -186,8 +194,11 @@ def _wait_for_idle_after(page, prompt: str) -> None:
     )
 
 
+# Section: run the test assistant explains likelihood and browses report risks workflow with clear inputs and outputs.
 def test_assistant_explains_likelihood_and_browses_report_risks():
+    # Open the managed resource only for the block that needs it.
     with sync_playwright() as p:
+        # Prepare browser for the next step.
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1280, "height": 720})
         page.set_content(_build_page_html(), wait_until="domcontentloaded")
@@ -198,6 +209,7 @@ def test_assistant_explains_likelihood_and_browses_report_risks():
         page.get_by_text("Likelihood in a report means", exact=False).wait_for(timeout=10000)
         _wait_for_idle_after(page, "what does likelihood mean in the report")
 
+        # Trigger the side effect required for this stage.
         _submit_prompt(page, "i wanna know what is the main risks of each case")
         page.get_by_text("Report 1 of 2", exact=False).wait_for(timeout=10000)
         _wait_for_idle_after(page, "i wanna know what is the main risks of each case")
@@ -207,6 +219,7 @@ def test_assistant_explains_likelihood_and_browses_report_risks():
         page.get_by_text("Report 1 of 2", exact=False).wait_for(timeout=10000)
         _wait_for_idle_after(page, "what/how is the latest reports so far, can i have a look?")
 
+        # Trigger the side effect required for this stage.
         _submit_prompt(page, "i want to see latest report")
         _wait_for_idle_after(page, "i want to see latest report")
         page.wait_for_function(
@@ -216,6 +229,7 @@ def test_assistant_explains_likelihood_and_browses_report_risks():
         )
 
         _submit_prompt(page, "i wanna see cloud reports")
+        # Trigger the side effect required for this stage.
         _wait_for_idle_after(page, "i wanna see cloud reports")
         page.wait_for_function(
             "() => window.CASMAssistant.getReportReviewContext()?.reports?.length === 1 && "
@@ -225,6 +239,7 @@ def test_assistant_explains_likelihood_and_browses_report_risks():
 
         _submit_prompt(page, "export cloud medium mask reports csv")
         page.get_by_text("Reports CSV is prepared", exact=False).wait_for(timeout=10000)
+        # Trigger the side effect required for this stage.
         page.locator(".assistant-action-btn", has_text="Download CSV").last.wait_for(timeout=10000)
         _wait_for_idle_after(page, "export cloud medium mask reports csv")
         export_preview = page.locator("#assistantMessages").inner_text()
@@ -239,6 +254,7 @@ def test_assistant_explains_likelihood_and_browses_report_risks():
             timeout=10000,
         )
 
+        # Trigger the side effect required for this stage.
         page.locator(".assistant-action-btn", has_text="Explain this report").last.click()
         page.wait_for_function(
             "() => window.CASMAssistant.getActiveSession().messages.some((message) => "
@@ -252,6 +268,7 @@ def test_assistant_explains_likelihood_and_browses_report_risks():
         assert "Person 2" in explanation_text
         assert "Mitigation Steps" in explanation_text
 
+        # Trigger the side effect required for this stage.
         _submit_prompt(page, "explain report today")
         _wait_for_idle_after(page, "explain report today")
         page.wait_for_function(
@@ -263,15 +280,19 @@ def test_assistant_explains_likelihood_and_browses_report_risks():
         assert "Person 2" in today_explanation
         assert "Move the worker away from the access lane" in today_explanation
 
+        # Trigger the side effect required for this stage.
         _submit_prompt(page, "i wanna check reports on no-such-zone-999")
         page.get_by_text("I could not find report rows", exact=False).wait_for(timeout=10000)
         browser.close()
 
 
+# Section: run the test assistant shortcuts preserve user prompt and reports show progress workflow with clear inputs and outputs.
 def test_assistant_shortcuts_preserve_user_prompt_and_reports_show_progress():
+    # Open the managed resource only for the block that needs it.
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1280, "height": 720})
+        # Trigger the side effect required for this stage.
         page.set_content(_build_page_html(), wait_until="domcontentloaded")
         page.wait_for_selector("#assistantTitle", state="attached")
         page.locator("#assistantLauncher").click()
@@ -289,8 +310,10 @@ def test_assistant_shortcuts_preserve_user_prompt_and_reports_show_progress():
         assert any(message["role"] == "user" and message["text"] == "open reports" for message in shortcut_messages)
         assert any("I am opening it now" in message["text"] for message in shortcut_messages if message["role"] == "assistant")
 
+        # Trigger the side effect required for this stage.
         page.wait_for_timeout(250)
         if not page.locator("#assistantPanel").is_visible():
+            # Trigger the side effect required for this stage.
             page.locator("#assistantLauncher").click()
             page.locator("#assistantPanel").wait_for(state="visible", timeout=10000)
 
@@ -317,6 +340,7 @@ def test_assistant_shortcuts_preserve_user_prompt_and_reports_show_progress():
             }
             """
         )
+        # Trigger the side effect required for this stage.
         _submit_prompt(page, "shows reports")
         page.get_by_text("Reading report rows", exact=False).wait_for(timeout=10000)
         assert page.evaluate("() => window.CASMAssistant.isResponding === true")
@@ -326,15 +350,19 @@ def test_assistant_shortcuts_preserve_user_prompt_and_reports_show_progress():
         assert "shows reports" in user_prompts
 
         page.evaluate("window.__resolveAssistantViolations()")
+        # Trigger the side effect required for this stage.
         _wait_for_idle_after(page, "shows reports")
         page.get_by_text("Report 1 of 1", exact=False).wait_for(timeout=10000)
         assert "progress-report-001" in page.locator("#assistantMessages").inner_text()
         browser.close()
 
 
+# Section: run the test assistant revisited report controls append at conversation bottom workflow with clear inputs and outputs.
 def test_assistant_revisited_report_controls_append_at_conversation_bottom():
+    # Open the managed resource only for the block that needs it.
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
+        # Prepare page for the next step.
         page = browser.new_page(viewport={"width": 1280, "height": 720})
         page.set_content(_build_page_html(), wait_until="domcontentloaded")
         page.wait_for_selector("#assistantTitle", state="attached")
@@ -346,6 +374,7 @@ def test_assistant_revisited_report_controls_append_at_conversation_bottom():
             timeout=10000,
         )
 
+        # Trigger the side effect required for this stage.
         _submit_prompt(page, "i wanna know what is the main risks of each case")
         page.get_by_text("Report 1 of 2", exact=False).wait_for(timeout=10000)
         _wait_for_idle_after(page, "i wanna know what is the main risks of each case")
@@ -356,6 +385,7 @@ def test_assistant_revisited_report_controls_append_at_conversation_bottom():
             timeout=10000,
         )
 
+        # Trigger the side effect required for this stage.
         page.locator(".assistant-action-btn", has_text="Next report").last.click()
         page.wait_for_function(
             "() => window.CASMAssistant.getActiveSession().messages.at(-1)?.reportCarousel?.report?.reportId === 'loading-bay-002'",
@@ -367,6 +397,7 @@ def test_assistant_revisited_report_controls_append_at_conversation_bottom():
             "() => window.CASMAssistant.getActiveSession().messages.at(-1)?.guided?.kind === 'reports'",
             timeout=10000,
         )
+        # Prepare last text for the next step.
         last_text = page.evaluate("() => window.CASMAssistant.getActiveSession().messages.at(-1)?.text || ''")
         assert "Guided reports" in last_text
         page.wait_for_timeout(950)
@@ -379,15 +410,19 @@ def test_assistant_revisited_report_controls_append_at_conversation_bottom():
             """
         )
         assert distance_from_bottom <= 4
+        # Trigger the side effect required for this stage.
         browser.close()
 
 
+# Section: run the test assistant role aliases and busy guard keep chat order clear workflow with clear inputs and outputs.
 def test_assistant_role_aliases_and_busy_guard_keep_chat_order_clear():
+    # Open the managed resource only for the block that needs it.
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1280, "height": 720})
         page.set_content(_build_page_html(), wait_until="domcontentloaded")
         page.wait_for_selector("#assistantTitle", state="attached")
+        # Trigger the side effect required for this stage.
         page.locator("#assistantLauncher").click()
 
         page.evaluate(
@@ -403,6 +438,7 @@ def test_assistant_role_aliases_and_busy_guard_keep_chat_order_clear():
         )
         assert page.locator(".assistant-message-assistant").count() == 2
         assert page.locator(".assistant-message-user").count() == 1
+        # Prepare user box for the next step.
         user_box = page.locator(".assistant-message-user .assistant-bubble").last.bounding_box()
         messages_box = page.locator("#assistantMessages").bounding_box()
         assert user_box and messages_box
@@ -414,6 +450,7 @@ def test_assistant_role_aliases_and_busy_guard_keep_chat_order_clear():
         assert page.locator("#assistantInput").is_disabled()
         assert page.locator("#assistantSend").is_disabled()
 
+        # Trigger the side effect required for this stage.
         page.evaluate("void window.CASMAssistant.runSuggestedPrompt('export reports csv')")
         user_prompts = page.evaluate(
             "window.CASMAssistant.getActiveSession().messages.filter((message) => message.role === 'user').map((message) => message.text)"
@@ -440,6 +477,7 @@ def test_assistant_role_aliases_and_busy_guard_keep_chat_order_clear():
             ];
             """
         )
+        # Trigger the side effect required for this stage.
         _submit_prompt(page, "i wanna see cloud reports")
         page.get_by_text("Report 1 of 1", exact=False).wait_for(timeout=10000)
         _wait_for_idle_after(page, "i wanna see cloud reports")

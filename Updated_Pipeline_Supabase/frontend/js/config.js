@@ -1,3 +1,4 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 // API Configuration
 // BASE_URL auto-detects: same-origin when served by Flask,
 // or set window.PPE_API_URL before this script loads for custom backend URL.
@@ -5,11 +6,14 @@
 const normalizeApiBaseUrl = (value) => {
     const raw = String(value || '').trim();
     if (!raw || raw === window.location.origin) {
+        // Return the prepared value to the caller.
         return '';
     }
+    // Return the prepared value to the caller.
     return raw.replace(/\/+$/, '');
 };
 
+// Prepare runtime api base override for the next UI or data step.
 let runtimeApiBaseOverride = null;
 
 const isFrontendServedFromLocalHost = () => {
@@ -27,7 +31,9 @@ const API_CONFIG = {
         if (typeof navigator !== 'undefined' && navigator.onLine === false) {
             return this.LOCAL_BACKEND_URL;
         }
+        // Choose the correct browser state branch before continuing.
         if (runtimeApiBaseOverride !== null) {
+            // Return the prepared value to the caller.
             return runtimeApiBaseOverride;
         }
         if (!window.PPE_API_URL && isFrontendServedFromLocalHost()) {
@@ -38,6 +44,7 @@ const API_CONFIG = {
     set BASE_URL(value) {
         if (value === null || value === undefined) {
             runtimeApiBaseOverride = null;
+            // Return the prepared value to the caller.
             return;
         }
 

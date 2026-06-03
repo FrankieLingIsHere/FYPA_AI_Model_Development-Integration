@@ -1,6 +1,8 @@
 @echo off
+REM Readability: Utility script: keep operational maintenance steps visible and repeatable.
 setlocal EnableExtensions
 
+REM Section: perform this operational step before continuing.
 echo ==========================================
 echo CASM Local RealSense Relay
 echo ==========================================

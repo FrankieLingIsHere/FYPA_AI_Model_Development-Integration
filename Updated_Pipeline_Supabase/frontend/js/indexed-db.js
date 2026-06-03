@@ -1,3 +1,4 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 /**
  * IndexedDB Manager for PPE CASM
  * Provides a simple Promise-based key-value store for local persistence.
@@ -14,11 +15,13 @@ const IndexedDBManager = {
     async init() {
         if (this.db) return this.db;
 
+        // Return the prepared value to the caller.
         return new Promise((resolve, reject) => {
             const request = indexedDB.open(this.DB_NAME, this.VERSION);
 
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
+                // Choose the correct browser state branch before continuing.
                 if (!db.objectStoreNames.contains(this.STORE_NAME)) {
                     db.createObjectStore(this.STORE_NAME);
                 }
@@ -42,6 +45,7 @@ const IndexedDBManager = {
     async getItem(key) {
         try {
             const db = await this.init();
+            // Return the prepared value to the caller.
             return new Promise((resolve, reject) => {
                 const transaction = db.transaction([this.STORE_NAME], 'readonly');
                 const store = transaction.objectStore(this.STORE_NAME);
@@ -52,6 +56,7 @@ const IndexedDBManager = {
             });
         } catch (error) {
             console.warn('[IndexedDB] getItem failed:', error);
+            // Return the prepared value to the caller.
             return null;
         }
     },
@@ -62,6 +67,7 @@ const IndexedDBManager = {
     async setItem(key, value) {
         try {
             const db = await this.init();
+            // Return the prepared value to the caller.
             return new Promise((resolve, reject) => {
                 const transaction = db.transaction([this.STORE_NAME], 'readwrite');
                 const store = transaction.objectStore(this.STORE_NAME);
@@ -72,6 +78,7 @@ const IndexedDBManager = {
             });
         } catch (error) {
             console.warn('[IndexedDB] setItem failed:', error);
+            // Return the prepared value to the caller.
             return false;
         }
     },
@@ -82,6 +89,7 @@ const IndexedDBManager = {
     async removeItem(key) {
         try {
             const db = await this.init();
+            // Return the prepared value to the caller.
             return new Promise((resolve, reject) => {
                 const transaction = db.transaction([this.STORE_NAME], 'readwrite');
                 const store = transaction.objectStore(this.STORE_NAME);
@@ -92,6 +100,7 @@ const IndexedDBManager = {
             });
         } catch (error) {
             console.warn('[IndexedDB] removeItem failed:', error);
+            // Return the prepared value to the caller.
             return false;
         }
     },
@@ -102,6 +111,7 @@ const IndexedDBManager = {
     async clear() {
         try {
             const db = await this.init();
+            // Return the prepared value to the caller.
             return new Promise((resolve, reject) => {
                 const transaction = db.transaction([this.STORE_NAME], 'readwrite');
                 const store = transaction.objectStore(this.STORE_NAME);
@@ -112,6 +122,7 @@ const IndexedDBManager = {
             });
         } catch (error) {
             console.warn('[IndexedDB] clear failed:', error);
+            // Return the prepared value to the caller.
             return false;
         }
     }

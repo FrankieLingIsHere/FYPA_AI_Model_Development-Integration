@@ -5,6 +5,7 @@ These tests deliberately avoid Supabase, hosted endpoints, cameras, and real
 model providers. They exercise the local hot paths with fakes so continuous
 camera detections cannot bypass queue limits or multiply model calls.
 """
+# Readability: Test setup: document the contract this file protects.
 
 import os
 import sys
@@ -18,6 +19,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+# Prepare root for the next step.
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -27,6 +29,7 @@ os.makedirs(TEST_STATE_DIR, exist_ok=True)
 os.makedirs(TEST_ULTRALYTICS_DIR, exist_ok=True)
 
 os.environ.setdefault("FLASK_DEBUG", "false")
+# Trigger the side effect required for this stage.
 os.environ.setdefault("SERVE_FRONTEND", "false")
 os.environ.setdefault("ADMIN_PASSWORD", "test-magic-password")
 os.environ.setdefault("BOOTSTRAP_TOKEN_SECRET", "test-bootstrap-secret")
@@ -36,6 +39,7 @@ os.environ.setdefault("CASM_ROUTING_PROFILE", "local")
 os.environ.setdefault("SUPABASE_DB_URL", "postgres://test:test@localhost:5432/test")
 os.environ.setdefault("SUPABASE_URL", "https://projtest123.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "service-role-test-key")
+# Trigger the side effect required for this stage.
 os.environ.setdefault("REPORT_GENERATION_TIMEOUT_SECONDS", "30")
 
 import infer_image
@@ -44,11 +48,15 @@ from pipeline.backend.core.violation_queue import QueuedViolation, ViolationQueu
 from threading import Semaphore
 
 
+# Section: run the assert workflow with clear inputs and outputs.
 def _assert(condition, message):
+    # Choose the correct branch before the workflow continues.
     if not condition:
+        # Surface the failure with enough context for the caller.
         raise AssertionError(message)
 
 
+# Section: run the moving live detections workflow with clear inputs and outputs.
 def _moving_live_detections(index: int):
     x1 = 20 + (index * 80)
     return [
@@ -66,7 +74,9 @@ def _moving_live_detections(index: int):
     ]
 
 
+# Section: run the test live default interval blocks same violation but allows new spatial violation workflow with clear inputs and outputs.
 def test_live_default_interval_blocks_same_violation_but_allows_new_spatial_violation():
+    # Prepare frame for the next step.
     frame = np.zeros((180, 520, 3), dtype=np.uint8)
     queue = ViolationQueueManager(max_size=50, rate_limit_per_device=20, rate_limit_window=60)
 
@@ -76,6 +86,7 @@ def test_live_default_interval_blocks_same_violation_but_allows_new_spatial_viol
     old_cooldown = casm_app.VIOLATION_COOLDOWN
     old_dedup_window = casm_app.LIVE_VIOLATION_DEDUP_WINDOW_SECONDS
     old_last_violation = casm_app.last_violation_time
+    # Prepare old ensure worker for the next step.
     old_ensure_worker = casm_app.ensure_queue_worker_running
     old_local_runtime_fn = casm_app._is_local_pipeline_runtime_active
     old_get_local_time = casm_app.get_local_time
@@ -84,13 +95,16 @@ def test_live_default_interval_blocks_same_violation_but_allows_new_spatial_viol
     base_time = datetime(2026, 5, 18, 11, 0, 0, tzinfo=timezone.utc)
     tick = {"value": 0}
 
+    # Section: run the fake local time workflow with clear inputs and outputs.
     def fake_local_time():
+        # Prepare current for the next step.
         current = base_time + timedelta(seconds=tick["value"])
         tick["value"] += 1
         return current
 
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
+            # Prepare violations dir for the next step.
             casm_app.VIOLATIONS_DIR = Path(tmpdir)
             casm_app.violation_queue = queue
             casm_app.db_manager = None
@@ -100,8 +114,10 @@ def test_live_default_interval_blocks_same_violation_but_allows_new_spatial_viol
             casm_app.ensure_queue_worker_running = lambda: True
             casm_app._is_local_pipeline_runtime_active = lambda: False
             casm_app.get_local_time = fake_local_time
+            # Prepare time for the next step.
             casm_app.time.time = lambda: 1000.0
             with casm_app.recent_live_violation_lock:
+                # Trigger the side effect required for this stage.
                 casm_app.recent_live_violation_signatures.clear()
 
             first = casm_app.enqueue_violation(
@@ -110,6 +126,7 @@ def test_live_default_interval_blocks_same_violation_but_allows_new_spatial_viol
                 trigger_source="live",
                 annotated_frame=frame.copy(),
             )
+            # Prepare duplicate for the next step.
             duplicate = casm_app.enqueue_violation(
                 frame.copy(),
                 _moving_live_detections(0),
@@ -123,6 +140,7 @@ def test_live_default_interval_blocks_same_violation_but_allows_new_spatial_viol
                 annotated_frame=frame.copy(),
             )
 
+            # Prepare created dirs for the next step.
             created_dirs = [item for item in Path(tmpdir).iterdir() if item.is_dir()]
             _assert(first, "first live violation should queue")
             _assert(duplicate is None, "same live violation should be suppressed inside 10s")
@@ -132,6 +150,7 @@ def test_live_default_interval_blocks_same_violation_but_allows_new_spatial_viol
         finally:
             casm_app.VIOLATIONS_DIR = old_dir
             casm_app.violation_queue = old_queue
+            # Prepare db manager for the next step.
             casm_app.db_manager = old_db
             casm_app.VIOLATION_COOLDOWN = old_cooldown
             casm_app.LIVE_VIOLATION_DEDUP_WINDOW_SECONDS = old_dedup_window
@@ -141,10 +160,13 @@ def test_live_default_interval_blocks_same_violation_but_allows_new_spatial_viol
             casm_app.get_local_time = old_get_local_time
             casm_app.time.time = old_time_fn
             with casm_app.recent_live_violation_lock:
+                # Trigger the side effect required for this stage.
                 casm_app.recent_live_violation_signatures.clear()
 
 
+# Section: run the test live capture flood respects device rate limit without fallback bypass workflow with clear inputs and outputs.
 def test_live_capture_flood_respects_device_rate_limit_without_fallback_bypass():
+    # Prepare frame for the next step.
     frame = np.zeros((180, 240, 3), dtype=np.uint8)
     queue = ViolationQueueManager(max_size=50, rate_limit_per_device=3, rate_limit_window=60)
 
@@ -154,19 +176,23 @@ def test_live_capture_flood_respects_device_rate_limit_without_fallback_bypass()
     old_cooldown = casm_app.VIOLATION_COOLDOWN
     old_last_violation = casm_app.last_violation_time
     old_ensure_worker = casm_app.ensure_queue_worker_running
+    # Prepare old local runtime fn for the next step.
     old_local_runtime_fn = casm_app._is_local_pipeline_runtime_active
     old_get_local_time = casm_app.get_local_time
 
     base_time = datetime(2026, 5, 18, 9, 0, 0, tzinfo=timezone.utc)
     tick = {"value": 0}
 
+    # Section: run the fake local time workflow with clear inputs and outputs.
     def fake_local_time():
+        # Prepare current for the next step.
         current = base_time + timedelta(seconds=tick["value"])
         tick["value"] += 1
         return current
 
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
+            # Prepare violations dir for the next step.
             casm_app.VIOLATIONS_DIR = Path(tmpdir)
             casm_app.violation_queue = queue
             casm_app.db_manager = None
@@ -176,8 +202,10 @@ def test_live_capture_flood_respects_device_rate_limit_without_fallback_bypass()
             casm_app._is_local_pipeline_runtime_active = lambda: False
             casm_app.get_local_time = fake_local_time
             with casm_app.recent_live_violation_lock:
+                # Trigger the side effect required for this stage.
                 casm_app.recent_live_violation_signatures.clear()
 
+            # Prepare accepted for the next step.
             accepted = []
             for idx in range(12):
                 report_id = casm_app.enqueue_violation(
@@ -186,9 +214,12 @@ def test_live_capture_flood_respects_device_rate_limit_without_fallback_bypass()
                     trigger_source="live",
                     annotated_frame=frame.copy(),
                 )
+                # Choose the correct branch before the workflow continues.
                 if report_id:
+                    # Trigger the side effect required for this stage.
                     accepted.append(str(report_id))
 
+            # Prepare stats for the next step.
             stats = queue.get_stats()
             preview = queue.get_queue_preview(limit=20)
             created_dirs = [item for item in Path(tmpdir).iterdir() if item.is_dir()]
@@ -201,6 +232,7 @@ def test_live_capture_flood_respects_device_rate_limit_without_fallback_bypass()
                 len(created_dirs) == 3,
                 f"rate-limited live flood wrote extra report folders: {[p.name for p in created_dirs]}",
             )
+            # Trigger the side effect required for this stage.
             _assert(
                 all(item.get("device_id") == "webcam_0" for item in preview),
                 f"live flood used fallback device ids instead of backpressure: {preview}",
@@ -210,27 +242,35 @@ def test_live_capture_flood_respects_device_rate_limit_without_fallback_bypass()
             casm_app.violation_queue = old_queue
             casm_app.db_manager = old_db
             casm_app.VIOLATION_COOLDOWN = old_cooldown
+            # Prepare last violation time for the next step.
             casm_app.last_violation_time = old_last_violation
             casm_app.ensure_queue_worker_running = old_ensure_worker
             casm_app._is_local_pipeline_runtime_active = old_local_runtime_fn
             casm_app.get_local_time = old_get_local_time
             with casm_app.recent_live_violation_lock:
+                # Trigger the side effect required for this stage.
                 casm_app.recent_live_violation_signatures.clear()
 
 
+# Section: group fake yolo model state and behaviour in one readable unit.
 class _FakeYoloModel:
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self):
+        # Prepare names for the next step.
         self.names = {}
         self.lock = threading.Lock()
         self.active = 0
         self.max_active = 0
         self.calls = 0
 
+    # Section: run the predict workflow with clear inputs and outputs.
     def predict(self, *_args, **_kwargs):
         with self.lock:
             self.active += 1
             self.calls += 1
+            # Prepare max active for the next step.
             self.max_active = max(self.max_active, self.active)
+        # Protect this step so expected failures can fall back cleanly.
         try:
             time.sleep(0.05)
             return []
@@ -239,22 +279,27 @@ class _FakeYoloModel:
                 self.active -= 1
 
 
+# Section: run the test yolo model calls are serialized under local request flood workflow with clear inputs and outputs.
 def test_yolo_model_calls_are_serialized_under_local_request_flood():
+    # Prepare fake model for the next step.
     fake_model = _FakeYoloModel()
     old_resolve = infer_image.resolve_model_path
     old_ensure = infer_image._ensure_model_loaded
     old_semaphore = infer_image._yolo_predict_semaphore
 
     try:
+        # Prepare resolve model path for the next step.
         infer_image.resolve_model_path = lambda model_path=None: "fake-yolo.pt"
         infer_image._ensure_model_loaded = lambda resolved_model_path, device=None: fake_model
         infer_image._yolo_predict_semaphore = Semaphore(1)
 
         frame = np.zeros((64, 64, 3), dtype=np.uint8)
         with ThreadPoolExecutor(max_workers=5) as executor:
+            # Trigger the side effect required for this stage.
             list(executor.map(lambda _: infer_image.predict_image(frame), range(5)))
 
         _assert(fake_model.calls == 5, f"expected 5 fake YOLO calls, got {fake_model.calls}")
+        # Trigger the side effect required for this stage.
         _assert(fake_model.max_active == 1, f"YOLO calls overlapped under flood: {fake_model.max_active}")
     finally:
         infer_image.resolve_model_path = old_resolve
@@ -262,21 +307,29 @@ def test_yolo_model_calls_are_serialized_under_local_request_flood():
         infer_image._yolo_predict_semaphore = old_semaphore
 
 
+# Section: group fake caption generator state and behaviour in one readable unit.
 class _FakeCaptionGenerator:
+    # Section: run the generate caption workflow with clear inputs and outputs.
     def generate_caption(self, image_path):
+        # Return the prepared result to the caller.
         return f"Construction worker missing hardhat near equipment: {Path(image_path).name}"
 
 
+# Section: group fake report generator state and behaviour in one readable unit.
 class _FakeReportGenerator:
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self):
         self.lock = threading.Lock()
         self.active = 0
         self.max_active = 0
         self.calls = []
 
+    # Section: run the generate report workflow with clear inputs and outputs.
     def generate_report(self, report_data):
+        # Open the managed resource only for the block that needs it.
         with self.lock:
             self.active += 1
+            # Prepare max active for the next step.
             self.max_active = max(self.max_active, self.active)
             self.calls.append(report_data.get("report_id"))
         try:
@@ -287,6 +340,7 @@ class _FakeReportGenerator:
                 f"<html><body>offline report {report_data.get('report_id')}</body></html>",
                 encoding="utf-8",
             )
+            # Return the prepared result to the caller.
             return {
                 "html": str(report_html),
                 "nlp_analysis": {"provider": "offline_fake", "model": "fake-report-model"},
@@ -296,7 +350,9 @@ class _FakeReportGenerator:
                 self.active -= 1
 
 
+# Section: run the build queued violation workflow with clear inputs and outputs.
 def _build_queued_violation(tmpdir: str, index: int) -> QueuedViolation:
+    # Prepare report id for the next step.
     report_id = f"model-flood-{index:03d}"
     report_dir = Path(tmpdir) / report_id
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -307,6 +363,7 @@ def _build_queued_violation(tmpdir: str, index: int) -> QueuedViolation:
     cv2.imwrite(str(original), frame)
     cv2.imwrite(str(annotated), frame)
 
+    # Prepare detections for the next step.
     detections = _moving_live_detections(index)
     return QueuedViolation(
         priority=0,
@@ -330,7 +387,9 @@ def _build_queued_violation(tmpdir: str, index: int) -> QueuedViolation:
     )
 
 
+# Section: run the test report model calls are serialized under parallel queue pressure workflow with clear inputs and outputs.
 def test_report_model_calls_are_serialized_under_parallel_queue_pressure():
+    # Prepare fake caption for the next step.
     fake_caption = _FakeCaptionGenerator()
     fake_report = _FakeReportGenerator()
 
@@ -341,8 +400,11 @@ def test_report_model_calls_are_serialized_under_parallel_queue_pressure():
     old_environment_validation = casm_app.ENVIRONMENT_VALIDATION_ENABLED
     old_report_semaphore = casm_app.report_generation_semaphore
 
+    # Open the managed resource only for the block that needs it.
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare caption generator for the next step.
             casm_app.caption_generator = fake_caption
             casm_app.report_generator = fake_report
             casm_app.db_manager = None
@@ -352,8 +414,10 @@ def test_report_model_calls_are_serialized_under_parallel_queue_pressure():
 
             queued = [_build_queued_violation(tmpdir, idx) for idx in range(4)]
             with ThreadPoolExecutor(max_workers=4) as executor:
+                # Trigger the side effect required for this stage.
                 list(executor.map(casm_app.process_queued_violation, queued))
 
+            # Trigger the side effect required for this stage.
             _assert(len(fake_report.calls) == 4, f"not all fake report calls ran: {fake_report.calls}")
             _assert(fake_report.max_active == 1, f"report model calls overlapped: {fake_report.max_active}")
             for item in queued:
@@ -363,12 +427,15 @@ def test_report_model_calls_are_serialized_under_parallel_queue_pressure():
             casm_app.caption_generator = old_caption
             casm_app.report_generator = old_report
             casm_app.db_manager = old_db
+            # Prepare is local pipeline runtime active for the next step.
             casm_app._is_local_pipeline_runtime_active = old_local_runtime_fn
             casm_app.ENVIRONMENT_VALIDATION_ENABLED = old_environment_validation
             casm_app.report_generation_semaphore = old_report_semaphore
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main():
+    # Prepare tests for the next step.
     tests = [
         test_live_default_interval_blocks_same_violation_but_allows_new_spatial_violation,
         test_live_capture_flood_respects_device_rate_limit_without_fallback_bypass,
@@ -377,18 +444,22 @@ def main():
     ]
     failures = []
     for test_fn in tests:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Trigger the side effect required for this stage.
             test_fn()
             print(f"PASS: {test_fn.__name__}")
         except Exception as exc:
             failures.append((test_fn.__name__, str(exc)))
             print(f"FAIL: {test_fn.__name__}: {exc}")
 
+    # Choose the correct branch before the workflow continues.
     if failures:
         raise SystemExit(1)
 
     print("Live flood backpressure contract test passed")
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
     main()

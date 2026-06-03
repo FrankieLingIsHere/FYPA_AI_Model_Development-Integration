@@ -1,3 +1,4 @@
+-- Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 -- =============================================================================
 -- CASM PPE SAFETY MONITOR - SUPABASE DATABASE SCHEMA
 -- =============================================================================
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS public.detection_events (
 );
 
 -- Violations - Detailed violation data with storage keys
+-- Section: apply this database structure or data rule.
 CREATE TABLE IF NOT EXISTS public.violations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     report_id VARCHAR(50) NOT NULL REFERENCES public.detection_events(report_id) ON DELETE CASCADE,
@@ -57,6 +59,7 @@ CREATE TABLE IF NOT EXISTS public.violations (
 );
 
 -- Flood Logs - System event logging for audit trail
+-- Section: apply this database structure or data rule.
 CREATE TABLE IF NOT EXISTS public.flood_logs (
     id BIGSERIAL PRIMARY KEY,
     event_type VARCHAR(50) NOT NULL,
@@ -89,6 +92,7 @@ CREATE TABLE IF NOT EXISTS public.devices (
 );
 
 -- API Keys - For device authentication
+-- Section: apply this database structure or data rule.
 CREATE TABLE IF NOT EXISTS public.api_keys (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     key_hash VARCHAR(64) UNIQUE NOT NULL,  -- SHA-256 hash
@@ -104,6 +108,7 @@ CREATE TABLE IF NOT EXISTS public.api_keys (
 );
 
 -- Rate Limiting - Track API usage per device/key
+-- Section: apply this database structure or data rule.
 CREATE TABLE IF NOT EXISTS public.rate_limits (
     id BIGSERIAL PRIMARY KEY,
     key_hash VARCHAR(64) NOT NULL,
@@ -114,6 +119,7 @@ CREATE TABLE IF NOT EXISTS public.rate_limits (
 );
 
 -- User Roles - Role-based access control
+-- Section: apply this database structure or data rule.
 CREATE TABLE IF NOT EXISTS public.user_roles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -126,6 +132,7 @@ CREATE TABLE IF NOT EXISTS public.user_roles (
 );
 
 -- Security Events - Track security-related events
+-- Section: apply this database structure or data rule.
 CREATE TABLE IF NOT EXISTS public.security_events (
     id BIGSERIAL PRIMARY KEY,
     event_type VARCHAR(50) NOT NULL,  -- login_failed, api_key_created, permission_denied, etc.
@@ -146,6 +153,7 @@ CREATE TABLE IF NOT EXISTS public.security_events (
 CREATE INDEX IF NOT EXISTS idx_detection_events_timestamp ON public.detection_events(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_detection_events_status ON public.detection_events(status);
 CREATE INDEX IF NOT EXISTS idx_detection_events_device ON public.detection_events(device_id);
+-- Section: apply this database structure or data rule.
 CREATE INDEX IF NOT EXISTS idx_detection_events_severity ON public.detection_events(severity);
 
 -- Violations
@@ -157,6 +165,7 @@ CREATE INDEX IF NOT EXISTS idx_violations_created_at ON public.violations(create
 CREATE INDEX IF NOT EXISTS idx_flood_logs_event_type ON public.flood_logs(event_type);
 CREATE INDEX IF NOT EXISTS idx_flood_logs_report_id ON public.flood_logs(report_id);
 CREATE INDEX IF NOT EXISTS idx_flood_logs_device_id ON public.flood_logs(device_id);
+-- Section: apply this database structure or data rule.
 CREATE INDEX IF NOT EXISTS idx_flood_logs_created_at ON public.flood_logs(created_at DESC);
 
 -- Devices
@@ -168,6 +177,7 @@ CREATE INDEX IF NOT EXISTS idx_rate_limits_key_hash ON public.rate_limits(key_ha
 CREATE INDEX IF NOT EXISTS idx_rate_limits_window ON public.rate_limits(window_start);
 
 -- Security Events
+-- Section: apply this database structure or data rule.
 CREATE INDEX IF NOT EXISTS idx_security_events_type ON public.security_events(event_type);
 CREATE INDEX IF NOT EXISTS idx_security_events_user ON public.security_events(user_id);
 CREATE INDEX IF NOT EXISTS idx_security_events_created ON public.security_events(created_at DESC);
@@ -180,6 +190,7 @@ CREATE INDEX IF NOT EXISTS idx_security_events_created ON public.security_events
 ALTER TABLE public.detection_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.violations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.flood_logs ENABLE ROW LEVEL SECURITY;
+-- Section: apply this database structure or data rule.
 ALTER TABLE public.devices ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.api_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
@@ -191,6 +202,7 @@ CREATE POLICY "detection_events_select_authenticated" ON public.detection_events
     FOR SELECT TO authenticated
     USING (true);
 
+-- Section: apply this database structure or data rule.
 CREATE POLICY "detection_events_insert_service" ON public.detection_events
     FOR INSERT TO service_role
     WITH CHECK (true);
@@ -204,6 +216,7 @@ CREATE POLICY "violations_select_authenticated" ON public.violations
     FOR SELECT TO authenticated
     USING (true);
 
+-- Section: apply this database structure or data rule.
 CREATE POLICY "violations_insert_service" ON public.violations
     FOR INSERT TO service_role
     WITH CHECK (true);
@@ -217,6 +230,7 @@ CREATE POLICY "flood_logs_select_authenticated" ON public.flood_logs
     FOR SELECT TO authenticated
     USING (true);
 
+-- Section: apply this database structure or data rule.
 CREATE POLICY "flood_logs_insert_service" ON public.flood_logs
     FOR INSERT TO service_role
     WITH CHECK (true);
@@ -230,6 +244,7 @@ CREATE POLICY "devices_all_admin" ON public.devices
     FOR ALL TO authenticated
     USING (
         EXISTS (
+-- Section: apply this database structure or data rule.
             SELECT 1 FROM public.user_roles
             WHERE user_id = auth.uid() AND role = 'admin'
         )
@@ -240,6 +255,7 @@ CREATE POLICY "api_keys_all_admin" ON public.api_keys
     FOR ALL TO authenticated
     USING (
         EXISTS (
+-- Section: apply this database structure or data rule.
             SELECT 1 FROM public.user_roles
             WHERE user_id = auth.uid() AND role = 'admin'
         )
@@ -250,6 +266,7 @@ CREATE POLICY "user_roles_select_own" ON public.user_roles
     FOR SELECT TO authenticated
     USING (user_id = auth.uid());
 
+-- Section: apply this database structure or data rule.
 CREATE POLICY "user_roles_all_admin" ON public.user_roles
     FOR ALL TO authenticated
     USING (
@@ -260,6 +277,7 @@ CREATE POLICY "user_roles_all_admin" ON public.user_roles
     );
 
 -- Security Events Policies (admin only)
+-- Section: apply this database structure or data rule.
 CREATE POLICY "security_events_select_admin" ON public.security_events
     FOR SELECT TO authenticated
     USING (
@@ -271,6 +289,7 @@ CREATE POLICY "security_events_select_admin" ON public.security_events
 
 CREATE POLICY "security_events_insert_service" ON public.security_events
     FOR INSERT TO service_role
+-- Section: apply this database structure or data rule.
     WITH CHECK (true);
 
 -- Rate Limits Policies (service role only)
@@ -298,6 +317,7 @@ CREATE TRIGGER update_detection_events_timestamp
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 DROP TRIGGER IF EXISTS update_violations_timestamp ON public.violations;
+-- Section: apply this database structure or data rule.
 CREATE TRIGGER update_violations_timestamp
     BEFORE UPDATE ON public.violations
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
@@ -308,6 +328,7 @@ CREATE TRIGGER update_devices_timestamp
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- Function to check rate limit
+-- Section: apply this database structure or data rule.
 CREATE OR REPLACE FUNCTION check_rate_limit(
     p_key_hash VARCHAR(64),
     p_endpoint VARCHAR(200),
@@ -322,6 +343,7 @@ BEGIN
     v_window_start := NOW() - (p_window_minutes || ' minutes')::INTERVAL;
     
     -- Count requests in current window
+-- Section: apply this database structure or data rule.
     SELECT COALESCE(SUM(request_count), 0) INTO v_count
     FROM public.rate_limits
     WHERE key_hash = p_key_hash
@@ -334,6 +356,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Function to increment rate limit counter
+-- Section: apply this database structure or data rule.
 CREATE OR REPLACE FUNCTION increment_rate_limit(
     p_key_hash VARCHAR(64),
     p_endpoint VARCHAR(200)
@@ -344,6 +367,7 @@ BEGIN
     VALUES (p_key_hash, p_endpoint, 1, date_trunc('minute', NOW()))
     ON CONFLICT DO NOTHING;
     
+-- Section: apply this database structure or data rule.
     UPDATE public.rate_limits
     SET request_count = request_count + 1
     WHERE key_hash = p_key_hash 
@@ -365,6 +389,7 @@ RETURNS BIGINT AS $$
 DECLARE
     v_event_id BIGINT;
 BEGIN
+-- Section: apply this database structure or data rule.
     INSERT INTO public.security_events 
         (event_type, user_id, device_id, ip_address, details, severity)
     VALUES 
@@ -376,6 +401,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Function to get report status with fallback
+-- Section: apply this database structure or data rule.
 CREATE OR REPLACE FUNCTION get_report_status(p_report_id VARCHAR(50))
 RETURNS TABLE (
     status VARCHAR(20),
@@ -386,6 +412,7 @@ RETURNS TABLE (
 ) AS $$
 BEGIN
     RETURN QUERY
+-- Section: apply this database structure or data rule.
     SELECT 
         de.status,
         (v.report_html_key IS NOT NULL) AS has_report,
@@ -399,6 +426,7 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Function to get device statistics
+-- Section: apply this database structure or data rule.
 CREATE OR REPLACE FUNCTION get_device_stats(p_device_id VARCHAR(50))
 RETURNS TABLE (
     total BIGINT,
@@ -411,6 +439,7 @@ RETURNS TABLE (
 ) AS $$
 BEGIN
     RETURN QUERY
+-- Section: apply this database structure or data rule.
     SELECT 
         COUNT(*)::BIGINT as total,
         COUNT(*) FILTER (WHERE de.status = 'completed')::BIGINT as completed,
@@ -440,6 +469,7 @@ ON storage.objects FOR SELECT TO authenticated
 USING (bucket_id = 'violation-images');
 
 -- Allow service role to insert/update/delete in violation-images
+-- Section: apply this database structure or data rule.
 CREATE POLICY "violation_images_all_service"
 ON storage.objects FOR ALL TO service_role
 USING (bucket_id = 'violation-images');
@@ -450,6 +480,7 @@ ON storage.objects FOR SELECT TO authenticated
 USING (bucket_id = 'reports');
 
 -- Allow service role to insert/update/delete in reports
+-- Section: apply this database structure or data rule.
 CREATE POLICY "reports_all_service"
 ON storage.objects FOR ALL TO service_role
 USING (bucket_id = 'reports');

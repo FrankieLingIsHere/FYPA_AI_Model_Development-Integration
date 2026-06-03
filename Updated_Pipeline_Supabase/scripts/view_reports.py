@@ -10,6 +10,7 @@ Usage:
     
     Then open browser to: http://localhost:5001
 """
+# Readability: Utility script: keep operational maintenance steps visible and repeatable.
 
 from flask import Flask, render_template, render_template_string, send_from_directory, jsonify, abort, Response, redirect
 from pathlib import Path
@@ -20,6 +21,7 @@ import os
 from dotenv import load_dotenv
 
 # Load environment variables
+# Trigger the side effect required for this stage.
 load_dotenv()
 
 # Add project root to path so we can import pipeline modules
@@ -33,6 +35,7 @@ from pipeline.backend.core.supabase_db import create_db_manager_from_env
 from pipeline.backend.core.supabase_storage import create_storage_manager_from_env
 
 # Setup logging
+# Trigger the side effect required for this stage.
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,7 @@ app = Flask(__name__,
             static_url_path='/static')
 
 # Initialize Supabase managers
+# Protect this step so expected failures can fall back cleanly.
 try:
     db_manager = create_db_manager_from_env()
     storage_manager = create_storage_manager_from_env()
@@ -60,6 +64,7 @@ except Exception as e:
 def index():
     """Serve the modern frontend application."""
     # Try to serve from frontend directory
+    # Prepare frontend index for the next step.
     frontend_index = Path('frontend/index.html')
     if frontend_index.exists():
         return send_from_directory('frontend', 'index.html')
@@ -68,21 +73,26 @@ def index():
     return render_template_string(SIMPLE_INDEX)
 
 
+# Section: run the web manifest workflow with clear inputs and outputs.
 @app.route('/manifest.json')
 def web_manifest():
     """Serve web app manifest for installable frontend."""
+    # Return the prepared result to the caller.
     return send_from_directory('frontend', 'manifest.json', mimetype='application/manifest+json')
 
 
+# Section: run the service worker workflow with clear inputs and outputs.
 @app.route('/service-worker.js')
 def service_worker():
     """Serve service worker at root scope for offline support."""
     response = send_from_directory('frontend', 'service-worker.js', mimetype='application/javascript')
     response.headers['Cache-Control'] = 'no-cache'
     response.headers['Service-Worker-Allowed'] = '/'
+    # Return the prepared result to the caller.
     return response
 
 
+# Section: run the api violations workflow with clear inputs and outputs.
 @app.route('/api/violations')
 def api_violations():
     """
@@ -90,13 +100,16 @@ def api_violations():
     
     Returns JSON array of violations with metadata.
     """
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare violations for the next step.
         violations = db_manager.get_recent_violations(limit=100)
         
         # Format violations for API response
         formatted_violations = []
         for v in violations:
             # Extract missing PPE from detection data
+            # Prepare missing ppe for the next step.
             missing_ppe = []
             detection_data = v.get('detection_data', {})
             detections = detection_data.get('detections', [])
@@ -106,10 +119,12 @@ def api_violations():
                 class_name = det.get('class_name', det.get('class', ''))
                 if class_name.startswith('NO-'):
                     # Extract PPE item name
+                    # Prepare ppe item for the next step.
                     ppe_item = class_name.replace('NO-', '')
                     if ppe_item not in missing_ppe:
                         missing_ppe.append(ppe_item)
             
+            # Trigger the side effect required for this stage.
             formatted_violations.append({
                 'report_id': v['report_id'],
                 'timestamp': v['timestamp'].isoformat() if v.get('timestamp') else None,
@@ -123,6 +138,7 @@ def api_violations():
                 'has_report': bool(v.get('report_html_key'))
             })
         
+        # Return the prepared result to the caller.
         return jsonify(formatted_violations)
         
     except Exception as e:
@@ -130,6 +146,7 @@ def api_violations():
         return jsonify({'error': 'Failed to fetch violations'}), 500
 
 
+# Section: run the view report workflow with clear inputs and outputs.
 @app.route('/report/<report_id>')
 def view_report(report_id):
     """
@@ -137,11 +154,14 @@ def view_report(report_id):
     
     Fetches report HTML from Supabase Storage via signed URL.
     """
+    # Protect this step so expected failures can fall back cleanly.
     try:
         # Get violation from database
+        # Prepare violation for the next step.
         violation = db_manager.get_violation(report_id)
         
         if not violation:
+            # Trigger the side effect required for this stage.
             abort(404, description="Report not found")
         
         # Get signed URL for HTML report
@@ -150,19 +170,23 @@ def view_report(report_id):
             abort(404, description="Report HTML not found")
         
         # Generate signed URL and redirect
+        # Prepare signed url for the next step.
         signed_url = storage_manager.get_signed_url(report_html_key)
         
         if signed_url:
             # Redirect to signed URL
+            # Return the prepared result to the caller.
             return redirect(signed_url)
         else:
             abort(500, description="Failed to generate signed URL")
             
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error viewing report {report_id}: {e}")
         abort(500, description="Internal server error")
 
 
+# Section: run the get image workflow with clear inputs and outputs.
 @app.route('/image/<report_id>/<filename>')
 def get_image(report_id, filename):
     """
@@ -172,9 +196,12 @@ def get_image(report_id, filename):
         report_id: Report identifier
         filename: Image filename ('original.jpg' or 'annotated.jpg')
     """
+    # Protect this step so expected failures can fall back cleanly.
     try:
         # Validate filename
+        # Choose the correct branch before the workflow continues.
         if filename not in ['original.jpg', 'annotated.jpg']:
+            # Trigger the side effect required for this stage.
             abort(400, description="Invalid filename")
         
         # Get violation from database
@@ -184,6 +211,7 @@ def get_image(report_id, filename):
             abort(404, description="Report not found")
         
         # Get storage key for the requested image
+        # Choose the correct branch before the workflow continues.
         if filename == 'original.jpg':
             image_key = violation.get('original_image_key')
         else:
@@ -193,18 +221,22 @@ def get_image(report_id, filename):
             abort(404, description="Image not found")
         
         # Generate signed URL and redirect
+        # Prepare signed url for the next step.
         signed_url = storage_manager.get_signed_url(image_key)
         
         if signed_url:
+            # Return the prepared result to the caller.
             return redirect(signed_url)
         else:
             abort(500, description="Failed to generate signed URL")
             
     except Exception as e:
         logger.error(f"Error serving image {report_id}/{filename}: {e}")
+        # Trigger the side effect required for this stage.
         abort(500, description="Internal server error")
 
 
+# Section: run the api stats workflow with clear inputs and outputs.
 @app.route('/api/stats')
 def api_stats():
     """
@@ -212,7 +244,9 @@ def api_stats():
     
     Returns summary statistics from the database.
     """
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare violations for the next step.
         violations = db_manager.get_recent_violations(limit=1000)
         
         total_violations = len(violations)
@@ -224,6 +258,7 @@ def api_stats():
             severity = v.get('severity', 'UNKNOWN')
             severity_counts[severity] = severity_counts.get(severity, 0) + 1
         
+        # Prepare stats for the next step.
         stats = {
             'total_violations': total_violations,
             'total_people_detected': total_people,
@@ -234,13 +269,16 @@ def api_stats():
         return jsonify(stats)
         
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error fetching stats: {e}")
         return jsonify({'error': 'Failed to fetch statistics'}), 500
 
 
+# Section: run the system info workflow with clear inputs and outputs.
 @app.route('/api/system/info')
 def system_info():
     """System information endpoint."""
+    # Return the prepared result to the caller.
     return jsonify({
         'system': 'CASM PPE Safety Monitor - Supabase Edition',
         'version': '1.0.0-supabase',
@@ -443,5 +481,6 @@ if __name__ == '__main__':
     logger.info("=" * 60)
     
     # Use debug mode only for development (set via environment variable)
+    # Prepare debug mode for the next step.
     debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     app.run(host='0.0.0.0', port=5001, debug=debug_mode)

@@ -5,6 +5,7 @@ Local Llama Integration - Use local Llama 3 8B model
 This module provides NLP generation using the local Llama model
 instead of Ollama API, for offline operation and better control.
 """
+# Readability: Integration module: isolate external model/provider calls behind stable helpers.
 
 import logging
 import json
@@ -13,14 +14,17 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from typing import Dict, Any, Optional
 from pathlib import Path
 
+# Prepare logger for the next step.
 logger = logging.getLogger(__name__)
 
 
+# Section: group local llama generator state and behaviour in one readable unit.
 class LocalLlamaGenerator:
     """
     Local Llama 3 8B model wrapper for report generation.
     """
     
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, model_path: str):
         """
         Initialize local Llama model.
@@ -28,6 +32,7 @@ class LocalLlamaGenerator:
         Args:
             model_path: Path to local Llama model directory
         """
+        # Prepare model path for the next step.
         self.model_path = Path(model_path)
         self.model = None
         self.tokenizer = None
@@ -42,15 +47,19 @@ class LocalLlamaGenerator:
             self.device = "cpu"
             logger.warning("No GPU detected, using CPU (will be slower)")
         
+        # Trigger the side effect required for this stage.
         logger.info(f"Initializing Local Llama Generator from: {self.model_path}")
         logger.info(f"Using device: {self.device}")
     
+    # Section: run the load model workflow with clear inputs and outputs.
     def load_model(self):
         """Load model and tokenizer."""
         if self.model is not None:
+            # Trigger the side effect required for this stage.
             logger.info("Model already loaded")
             return
         
+        # Protect this step so expected failures can fall back cleanly.
         try:
             logger.info("Loading tokenizer...")
             self.tokenizer = AutoTokenizer.from_pretrained(
@@ -58,6 +67,7 @@ class LocalLlamaGenerator:
                 trust_remote_code=True
             )
             
+            # Trigger the side effect required for this stage.
             logger.info("Loading model (this may take a minute)...")
             
             # GPU configuration
@@ -73,6 +83,7 @@ class LocalLlamaGenerator:
                     bnb_4bit_quant_type="nf4"  # NormalFloat4 quantization
                 )
                 
+                # Prepare model for the next step.
                 self.model = AutoModelForCausalLM.from_pretrained(
                     str(self.model_path),
                     quantization_config=quantization_config,
@@ -83,6 +94,7 @@ class LocalLlamaGenerator:
                 )
                 
                 # Set to evaluation mode
+                # Trigger the side effect required for this stage.
                 self.model.eval()
                 
                 # Log GPU memory usage
@@ -93,6 +105,7 @@ class LocalLlamaGenerator:
                 
             else:
                 # CPU fallback
+                # Trigger the side effect required for this stage.
                 logger.info("Loading model to CPU...")
                 self.model = AutoModelForCausalLM.from_pretrained(
                     str(self.model_path),
@@ -102,12 +115,14 @@ class LocalLlamaGenerator:
                 )
                 self.model = self.model.to(self.device)
             
+            # Trigger the side effect required for this stage.
             logger.info(f"[OK] Model loaded successfully on {self.device}")
             
         except Exception as e:
             logger.error(f"Error loading model: {e}", exc_info=True)
             raise
     
+    # Section: run the generate workflow with clear inputs and outputs.
     def generate(
         self,
         prompt: str,
@@ -127,7 +142,9 @@ class LocalLlamaGenerator:
         Returns:
             Generated text
         """
+        # Choose the correct branch before the workflow continues.
         if self.model is None:
+            # Trigger the side effect required for this stage.
             self.load_model()
         
         try:
@@ -149,6 +166,7 @@ class LocalLlamaGenerator:
                 )
             
             # Decode
+            # Prepare generated text for the next step.
             generated_text = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
             
             # Extract only the new generated part (remove prompt)
@@ -158,9 +176,11 @@ class LocalLlamaGenerator:
             return response
             
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.error(f"Error during generation: {e}", exc_info=True)
             return ""
     
+    # Section: run the generate json workflow with clear inputs and outputs.
     def generate_json(
         self,
         prompt: str,
@@ -178,15 +198,18 @@ class LocalLlamaGenerator:
         Returns:
             Parsed JSON dict or None if parsing failed
         """
+        # Prepare response for the next step.
         response = self.generate(prompt, max_new_tokens, temperature)
         
         try:
             # Try to find JSON in response
             # Look for {...} pattern
+            # Prepare start for the next step.
             start = response.find('{')
             end = response.rfind('}')
             
             if start != -1 and end != -1:
+                # Prepare json str for the next step.
                 json_str = response[start:end+1]
                 return json.loads(json_str)
             else:
@@ -194,19 +217,24 @@ class LocalLlamaGenerator:
                 return None
                 
         except json.JSONDecodeError as e:
+            # Trigger the side effect required for this stage.
             logger.error(f"Failed to parse JSON: {e}")
             logger.debug(f"Response: {response[:500]}...")
             return None
     
+    # Section: run the unload model workflow with clear inputs and outputs.
     def unload_model(self):
         """Free up memory by unloading model."""
+        # Choose the correct branch before the workflow continues.
         if self.model is not None:
             del self.model
             del self.tokenizer
+            # Prepare model for the next step.
             self.model = None
             self.tokenizer = None
             
             if torch.cuda.is_available():
+                # Trigger the side effect required for this stage.
                 torch.cuda.empty_cache()
             
             logger.info("Model unloaded from memory")
@@ -227,6 +255,7 @@ if __name__ == '__main__':
     print("=" * 70)
     
     # Test with local model
+    # Prepare model path for the next step.
     model_path = r"C:\Users\maste\Downloads\FYP Combined\Meta-Llama-3-8B-Instruct"
     
     print(f"\nModel path: {model_path}")
@@ -236,6 +265,7 @@ if __name__ == '__main__':
     
     print("\n--- Testing Simple Generation ---")
     test_prompt = "Hello! Please introduce yourself in one sentence."
+    # Trigger the side effect required for this stage.
     print(f"Prompt: {test_prompt}")
     
     response = generator.generate(test_prompt, max_new_tokens=100)
@@ -253,14 +283,17 @@ if __name__ == '__main__':
     
     Respond ONLY with the JSON object, no other text:"""
     
+    # Trigger the side effect required for this stage.
     print(f"Prompt: {json_prompt}")
     
     json_response = generator.generate_json(json_prompt, max_new_tokens=300)
     if json_response:
+        # Trigger the side effect required for this stage.
         print(f"\nJSON Response:")
         print(json.dumps(json_response, indent=2))
     else:
         print("\n[!] Failed to get valid JSON response")
     
+    # Trigger the side effect required for this stage.
     print("\n[OK] Test completed!")
     print("=" * 70)

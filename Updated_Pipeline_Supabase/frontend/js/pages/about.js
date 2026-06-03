@@ -1,3 +1,4 @@
+// Readability: Page module: organise rendering, user events, and API updates for this view.
 // About Page Component
 const AboutPage = {
     render() {

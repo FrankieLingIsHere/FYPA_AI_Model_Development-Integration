@@ -1,3 +1,4 @@
+# Readability: Test setup: document the contract this file protects.
 import json
 import os
 import sys
@@ -6,6 +7,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 
+# Prepare vercel url for the next step.
 VERCEL_URL = os.environ.get(
     "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
@@ -13,8 +15,11 @@ VERCEL_URL = os.environ.get(
 STRICT_MODE = os.environ.get("CASM_FRONTEND_PARITY_STRICT", "1") != "0"
 
 
+# Section: run the fail workflow with clear inputs and outputs.
 def fail(message: str, code: int = 2) -> int:
+    # Choose the correct branch before the workflow continues.
     if STRICT_MODE:
+        # Trigger the side effect required for this stage.
         print(f"FAIL: {message}")
         return code
 
@@ -22,27 +27,37 @@ def fail(message: str, code: int = 2) -> int:
     return 0
 
 
+# Section: run the find visible nav workflow with clear inputs and outputs.
 def _find_visible_nav(page, nav_selector: str):
+    # Prepare locator for the next step.
     locator = page.locator(nav_selector)
     for index in range(locator.count()):
+        # Prepare candidate for the next step.
         candidate = locator.nth(index)
         if candidate.is_visible():
+            # Return the prepared result to the caller.
             return candidate
     return None
 
 
+# Section: run the wait for visible nav workflow with clear inputs and outputs.
 def _wait_for_visible_nav(page, nav_selector: str, *, attempts: int = 10, pause_ms: int = 200):
+    # Process each item in this collection using the same rule set.
     for _ in range(attempts):
         candidate = _find_visible_nav(page, nav_selector)
+        # Choose the correct branch before the workflow continues.
         if candidate:
             return candidate
         page.wait_for_timeout(pause_ms)
     return None
 
 
+# Section: run the ensure nav visible workflow with clear inputs and outputs.
 def ensure_nav_visible(page, page_name: str):
+    # Prepare nav selector for the next step.
     nav_selector = f"[data-page='{page_name}']"
     if page.locator(nav_selector).count() == 0:
+        # Surface the failure with enough context for the caller.
         raise RuntimeError(f"Navigation link not found in DOM for page={page_name}")
 
     if _wait_for_visible_nav(page, nav_selector):
@@ -51,15 +66,20 @@ def ensure_nav_visible(page, page_name: str):
     for toggle_selector in ("#navToggle", "#navMoreToggle"):
         toggle = page.locator(toggle_selector)
         if toggle.count() > 0 and toggle.first.is_visible():
+            # Trigger the side effect required for this stage.
             toggle.first.click()
             page.wait_for_timeout(220)
             if _wait_for_visible_nav(page, nav_selector, attempts=6, pause_ms=220):
+                # Return the prepared result to the caller.
                 return
 
+    # Choose the correct branch before the workflow continues.
     if not _find_visible_nav(page, nav_selector):
+        # Surface the failure with enough context for the caller.
         raise RuntimeError(f"Navigation link exists but is not visible for page={page_name}")
 
 
+# Section: run the run parity probe workflow with clear inputs and outputs.
 def run_parity_probe(page):
     return page.evaluate(
         """
@@ -206,9 +226,13 @@ def run_parity_probe(page):
     )
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main() -> int:
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Open the managed resource only for the block that needs it.
         with sync_playwright() as p:
+            # Prepare browser for the next step.
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(viewport={"width": 1440, "height": 900})
             page = context.new_page()
@@ -219,6 +243,7 @@ def main() -> int:
                 "() => !document.body.classList.contains('startup-loading')",
                 timeout=120000,
             )
+            # Trigger the side effect required for this stage.
             page.wait_for_function(
                 "() => typeof ReportsPage !== 'undefined' && typeof API !== 'undefined'",
                 timeout=30000,
@@ -228,6 +253,7 @@ def main() -> int:
             page.click("[data-page='reports']")
             page.wait_for_selector("#reports-list", timeout=12000)
 
+            # Prepare result for the next step.
             result = run_parity_probe(page)
 
             summary = {
@@ -239,16 +265,20 @@ def main() -> int:
                 "restoreError": result.get("restoreError"),
             }
 
+            # Trigger the side effect required for this stage.
             print("PASS" if summary["pass"] else "FAIL")
             print(json.dumps(summary, indent=2, ensure_ascii=True))
 
             browser.close()
             return 0 if summary["pass"] else 2
     except PlaywrightTimeoutError as exc:
+        # Return the prepared result to the caller.
         return fail(f"timeout in reports progress parity test: {exc}", 40)
     except Exception as exc:
         return fail(f"reports progress parity test unhandled error: {exc}", 41)
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
+    # Trigger the side effect required for this stage.
     sys.exit(main())

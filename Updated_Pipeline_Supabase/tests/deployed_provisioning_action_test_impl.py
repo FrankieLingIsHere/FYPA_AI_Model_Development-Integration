@@ -1,3 +1,4 @@
+# Readability: Test setup: document the contract this file protects.
 import os
 import sys
 import unittest
@@ -9,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch, Mock
 
 # Ensure we can import casm_app (file is in tests/, project root is parent)
+# Trigger the side effect required for this stage.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Test environment setup
@@ -18,6 +20,7 @@ os.makedirs(TEST_STATE_DIR, exist_ok=True)
 os.makedirs(TEST_ULTRALYTICS_DIR, exist_ok=True)
 
 os.environ['FLASK_DEBUG'] = 'false'
+# Prepare values needed by the next step.
 os.environ['SERVE_FRONTEND'] = 'false'
 os.environ['ADMIN_PASSWORD'] = 'test-magic-password'
 os.environ['PROVISION_ALLOW_SELF_REGISTER'] = 'true'
@@ -43,27 +46,36 @@ from casm_app import (
 )
 
 
+# Section: group provisioning action test state and behaviour in one readable unit.
 class ProvisioningActionTest(unittest.TestCase):
+    # Section: run the set up class workflow with clear inputs and outputs.
     @classmethod
     def setUpClass(cls):
+        # Prepare client for the next step.
         cls.client = app.test_client()
 
+    # Section: run the set up workflow with clear inputs and outputs.
     def setUp(self):
         if PENDING_DEVICES_FILE.exists():
+            # Trigger the side effect required for this stage.
             PENDING_DEVICES_FILE.unlink()
         if BOOTSTRAP_TOKEN_STATE_FILE.exists():
             BOOTSTRAP_TOKEN_STATE_FILE.unlink()
         if LOCAL_MODE_PROVISION_STATE_FILE.exists():
             LOCAL_MODE_PROVISION_STATE_FILE.unlink()
+        # Choose the correct branch before the workflow continues.
         if LOCAL_MODE_MACHINE_ID_FILE.exists():
             LOCAL_MODE_MACHINE_ID_FILE.unlink()
         if LOCAL_MODE_HEARTBEAT_FILE.exists():
             LOCAL_MODE_HEARTBEAT_FILE.unlink()
 
+    # Section: run the tear down class workflow with clear inputs and outputs.
     @classmethod
     def tearDownClass(cls):
         if PENDING_DEVICES_FILE.exists():
+            # Trigger the side effect required for this stage.
             PENDING_DEVICES_FILE.unlink()
+        # Choose the correct branch before the workflow continues.
         if BOOTSTRAP_TOKEN_STATE_FILE.exists():
             BOOTSTRAP_TOKEN_STATE_FILE.unlink()
         if LOCAL_MODE_PROVISION_STATE_FILE.exists():
@@ -73,7 +85,9 @@ class ProvisioningActionTest(unittest.TestCase):
         if LOCAL_MODE_HEARTBEAT_FILE.exists():
             LOCAL_MODE_HEARTBEAT_FILE.unlink()
 
+    # Section: run the mock http response workflow with clear inputs and outputs.
     def _mock_http_response(self, status_code, payload):
+        # Prepare response for the next step.
         response = Mock()
         response.status_code = status_code
         response.ok = 200 <= status_code < 300
@@ -81,10 +95,13 @@ class ProvisioningActionTest(unittest.TestCase):
         response.json.return_value = payload
         return response
 
+    # Section: run the admin auth headers workflow with clear inputs and outputs.
     def _admin_auth_headers(self):
         auth_string = base64.b64encode(b'admin:test-magic-password').decode('utf-8')
+        # Return the prepared result to the caller.
         return {'Authorization': f'Basic {auth_string}'}
 
+    # Section: run the request device workflow with clear inputs and outputs.
     def _request_device(self, machine_id):
         response = self.client.post('/api/provision/request', json={'machine_id': machine_id})
         self.assertEqual(response.status_code, 200)
@@ -92,7 +109,9 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue(secret, 'Provisioning secret should be returned on request')
         return secret
 
+    # Section: run the approve device workflow with clear inputs and outputs.
     def _approve_device(self, machine_id):
+        # Prepare devices for the next step.
         devices = _load_pending_devices()
         self.assertIn(machine_id, devices)
         token = devices[machine_id].get('token')
@@ -102,8 +121,10 @@ class ProvisioningActionTest(unittest.TestCase):
             f'/admin/devices/quick-approve?machine_id={machine_id}&token={token}',
             headers=self._admin_auth_headers(),
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(magic_response.status_code, 200)
 
+    # Section: run the assert no cache headers workflow with clear inputs and outputs.
     def _assert_no_cache_headers(self, response):
         self.assertEqual(
             response.headers.get('Cache-Control'),
@@ -112,7 +133,9 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(response.headers.get('Pragma'), 'no-cache')
         self.assertEqual(response.headers.get('Expires'), '0')
 
+    # Section: run the test status requires provision secret workflow with clear inputs and outputs.
     def test_status_requires_provision_secret(self):
+        # Prepare machine id for the next step.
         machine_id = 'TEST-EDGE-SECRET-001'
         provision_secret = self._request_device(machine_id)
 
@@ -122,6 +145,7 @@ class ProvisioningActionTest(unittest.TestCase):
         wrong_secret = self.client.get(
             f'/api/provision/status?machine_id={machine_id}&provision_secret=wrong-secret'
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(wrong_secret.status_code, 401)
 
         valid_secret = self.client.get(
@@ -130,8 +154,10 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(valid_secret.status_code, 200)
         self.assertEqual(valid_secret.json.get('status'), 'pending')
 
+    # Section: run the test deployed first install bootstrap sequence workflow with clear inputs and outputs.
     def test_deployed_first_install_bootstrap_sequence(self):
         """Regression: deployed UI can bootstrap approval flow before any local backend exists."""
+        # Prepare machine id for the next step.
         machine_id = 'WEB-FIRST-INSTALL-001'
 
         # Step 1: Deployed client submits initial provisioning request.
@@ -143,6 +169,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(request_payload.get('device_status'), 'pending')
 
         # Step 2: Deployed client polls status using header-based secret (not query string).
+        # Prepare pending status for the next step.
         pending_status = self.client.get(
             f'/api/provision/status?machine_id={machine_id}',
             headers={'X-Provision-Secret': provision_secret},
@@ -155,6 +182,7 @@ class ProvisioningActionTest(unittest.TestCase):
             f'/api/bootstrap/installer/request?machine_id={machine_id}',
             follow_redirects=False,
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(pending_installer.status_code, 403)
         self._assert_no_cache_headers(pending_installer)
         pending_installer.close()
@@ -167,6 +195,7 @@ class ProvisioningActionTest(unittest.TestCase):
             f'/api/provision/status?machine_id={machine_id}',
             headers={'X-Provision-Secret': provision_secret},
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(approved_status.status_code, 200)
         approved_payload = approved_status.json or {}
         self.assertEqual(approved_payload.get('status'), 'approved')
@@ -178,15 +207,18 @@ class ProvisioningActionTest(unittest.TestCase):
             f'/api/bootstrap/installer/request?machine_id={machine_id}&provision_secret={provision_secret}',
             follow_redirects=False,
         )
+        # Trigger the side effect required for this stage.
         self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))
         self._assert_no_cache_headers(installer_redirect)
         location = str(installer_redirect.headers.get('Location') or '')
         self.assertIn('/api/bootstrap/installer?token=', location)
         installer_redirect.close()
 
+    # Section: run the test re request for approved device preserves approval status workflow with clear inputs and outputs.
     def test_re_request_for_approved_device_preserves_approval_status(self):
         machine_id = 'TEST-EDGE-REISSUE-001'
         first_secret = self._request_device(machine_id)
+        # Trigger the side effect required for this stage.
         self._approve_device(machine_id)
 
         reissue = self.client.post('/api/provision/request', json={'machine_id': machine_id})
@@ -196,6 +228,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(reissue_payload.get('device_status'), 'approved')
 
         second_secret = str(reissue_payload.get('provision_secret') or '').strip()
+        # Trigger the side effect required for this stage.
         self.assertTrue(second_secret)
         self.assertNotEqual(first_secret, second_secret)
 
@@ -207,15 +240,18 @@ class ProvisioningActionTest(unittest.TestCase):
         new_secret_status = self.client.get(
             f'/api/provision/status?machine_id={machine_id}&provision_secret={second_secret}'
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(new_secret_status.status_code, 200)
         payload = new_secret_status.json or {}
         self.assertEqual(payload.get('status'), 'approved')
         self.assertTrue(payload.get('bootstrap_exchange_ready'))
         self.assertTrue(str(payload.get('bootstrap_token') or '').strip())
 
+    # Section: run the test active heartbeat is terminal provisioning state workflow with clear inputs and outputs.
     def test_active_heartbeat_is_terminal_provisioning_state(self):
         machine_id = 'TEST-EDGE-ACTIVE-001'
         provision_secret = self._request_device(machine_id)
+        # Trigger the side effect required for this stage.
         self._approve_device(machine_id)
 
         heartbeat = self.client.post('/api/local-mode/heartbeat', json={
@@ -229,6 +265,7 @@ class ProvisioningActionTest(unittest.TestCase):
                 'model_available': True,
             },
         })
+        # Trigger the side effect required for this stage.
         self.assertEqual(heartbeat.status_code, 200)
 
         status_response = self.client.get(
@@ -238,6 +275,7 @@ class ProvisioningActionTest(unittest.TestCase):
         status_payload = status_response.json or {}
         self.assertEqual(status_payload.get('status'), 'active')
         self.assertEqual(status_payload.get('device_status'), 'approved')
+        # Trigger the side effect required for this stage.
         self.assertTrue(status_payload.get('active'))
         self.assertTrue(status_payload.get('provisioned'))
         self.assertEqual(
@@ -247,15 +285,18 @@ class ProvisioningActionTest(unittest.TestCase):
 
         rerequest = self.client.post('/api/provision/request', json={'machine_id': machine_id})
         self.assertEqual(rerequest.status_code, 200)
+        # Prepare rerequest payload for the next step.
         rerequest_payload = rerequest.json or {}
         self.assertEqual(rerequest_payload.get('status'), 'stored')
         self.assertEqual(rerequest_payload.get('device_status'), 'active')
         self.assertEqual(rerequest_payload.get('provisioning_status'), 'approved')
         self.assertTrue(rerequest_payload.get('active'))
 
+    # Section: run the test lean heartbeat preserves previous readiness diagnostics workflow with clear inputs and outputs.
     def test_lean_heartbeat_preserves_previous_readiness_diagnostics(self):
         machine_id = 'TEST-EDGE-LEAN-HEARTBEAT-001'
         provision_secret = self._request_device(machine_id)
+        # Trigger the side effect required for this stage.
         self._approve_device(machine_id)
 
         ready_heartbeat = self.client.post('/api/local-mode/heartbeat', json={
@@ -270,6 +311,7 @@ class ProvisioningActionTest(unittest.TestCase):
                 'ollama_model': 'gemma3:4b',
             },
         })
+        # Trigger the side effect required for this stage.
         self.assertEqual(ready_heartbeat.status_code, 200)
 
         lean_heartbeat = self.client.post('/api/local-mode/heartbeat', json={
@@ -280,6 +322,7 @@ class ProvisioningActionTest(unittest.TestCase):
         })
         self.assertEqual(lean_heartbeat.status_code, 200)
 
+        # Prepare status response for the next step.
         status_response = self.client.get(
             f'/api/local-mode/provisioning/status?machine_id={machine_id}'
         )
@@ -289,16 +332,19 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue(heartbeat.get('available'))
         self.assertTrue(heartbeat.get('is_recent'))
         self.assertTrue(heartbeat.get('local_mode_possible'))
+        # Trigger the side effect required for this stage.
         self.assertTrue(heartbeat.get('ollama_running'))
         self.assertTrue(heartbeat.get('model_available'))
         self.assertEqual(payload.get('status'), 'active')
 
+    # Section: run the test cloud heartbeat visible without approving wrong browser machine workflow with clear inputs and outputs.
     def test_cloud_heartbeat_visible_without_approving_wrong_browser_machine(self):
         host_machine_id = 'TEST-EDGE-HOST-HEARTBEAT-001'
         browser_machine_id = 'TEST-WEB-BROWSER-HEARTBEAT-001'
         provision_secret = self._request_device(host_machine_id)
         self._approve_device(host_machine_id)
 
+        # Prepare heartbeat for the next step.
         heartbeat = self.client.post('/api/local-mode/heartbeat', json={
             'machine_id': host_machine_id,
             'provision_secret': provision_secret,
@@ -310,6 +356,7 @@ class ProvisioningActionTest(unittest.TestCase):
                 'model_available': True,
             },
         })
+        # Trigger the side effect required for this stage.
         self.assertEqual(heartbeat.status_code, 200)
 
         snapshot = _get_cloud_local_mode_heartbeat_snapshot(browser_machine_id)
@@ -319,6 +366,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertFalse(snapshot.get('matches_requested_machine'))
         self.assertEqual(snapshot.get('provision_status'), 'idle')
 
+        # Prepare status response for the next step.
         status_response = self.client.get(
             f'/api/local-mode/provisioning/status?machine_id={browser_machine_id}'
         )
@@ -328,18 +376,22 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue(status_heartbeat.get('available'))
         self.assertFalse(status_heartbeat.get('matches_requested_machine'))
         self.assertEqual(status_heartbeat.get('provision_status'), 'idle')
+        # Trigger the side effect required for this stage.
         self.assertNotEqual(status_payload.get('status'), 'active')
         self.assertNotEqual(status_payload.get('device_status'), 'approved')
 
+    # Section: run the test hosted cloud status does not treat cloud credentials as local heartbeat workflow with clear inputs and outputs.
     def test_hosted_cloud_status_does_not_treat_cloud_credentials_as_local_heartbeat(self):
         browser_machine_id = 'TEST-WEB-COLD-NO-HEARTBEAT-001'
 
         with patch('casm_app._is_hosted_runtime_environment', return_value=True), \
              patch('casm_app._local_mode_has_supabase_credentials', return_value=True):
+            # Prepare status response for the next step.
             status_response = self.client.get(
                 f'/api/local-mode/provisioning/status?machine_id={browser_machine_id}'
             )
 
+        # Trigger the side effect required for this stage.
         self.assertEqual(status_response.status_code, 200)
         payload = status_response.json or {}
         self.assertTrue(payload.get('credentials_present'))
@@ -350,17 +402,21 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertFalse(heartbeat.get('available'))
         self.assertEqual(payload.get('status_source'), 'idle')
 
+    # Section: run the test hosted approved device stays provisioned when heartbeat missing workflow with clear inputs and outputs.
     def test_hosted_approved_device_stays_provisioned_when_heartbeat_missing(self):
+        # Prepare machine id for the next step.
         machine_id = 'TEST-WEB-APPROVED-NO-HEARTBEAT-001'
         _ = self._request_device(machine_id)
         self._approve_device(machine_id)
 
         with patch('casm_app._is_hosted_runtime_environment', return_value=True), \
              patch('casm_app._local_mode_has_supabase_credentials', return_value=True):
+            # Prepare status response for the next step.
             status_response = self.client.get(
                 f'/api/local-mode/provisioning/status?machine_id={machine_id}'
             )
 
+        # Trigger the side effect required for this stage.
         self.assertEqual(status_response.status_code, 200)
         payload = status_response.json or {}
         self.assertEqual(payload.get('status'), 'approved')
@@ -371,7 +427,9 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertFalse(heartbeat.get('available'))
         self.assertEqual(payload.get('status_source'), 'cloud')
 
+    # Section: run the test approved heartbeat can reissue missing or stale browser secret workflow with clear inputs and outputs.
     def test_approved_heartbeat_can_reissue_missing_or_stale_browser_secret(self):
+        # Prepare machine id for the next step.
         machine_id = 'TEST-EDGE-HEARTBEAT-REISSUE-001'
         provision_secret = self._request_device(machine_id)
         self._approve_device(machine_id)
@@ -387,15 +445,18 @@ class ProvisioningActionTest(unittest.TestCase):
                 'model_available': True,
             },
         })
+        # Trigger the side effect required for this stage.
         self.assertEqual(heartbeat.status_code, 200)
 
         with patch('casm_app.PROVISION_ALLOW_SELF_REGISTER', False):
+            # Prepare reissue for the next step.
             reissue = self.client.post('/api/provision/request', json={
                 'machine_id': machine_id,
                 'current_provision_secret': 'stale-browser-secret',
             })
 
         self.assertEqual(reissue.status_code, 200)
+        # Prepare payload for the next step.
         payload = reissue.json or {}
         self.assertEqual(payload.get('status'), 'stored')
         self.assertEqual(payload.get('device_status'), 'active')
@@ -403,19 +464,23 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue(str(payload.get('provision_secret') or '').strip())
         self.assertEqual(payload.get('notification_reason'), 'status_preserved')
 
+    # Section: run the test stale browser secret without heartbeat does not demote approved device workflow with clear inputs and outputs.
     @patch('casm_app.notify_admin')
     def test_stale_browser_secret_without_heartbeat_does_not_demote_approved_device(self, mock_notify_admin):
+        # Prepare machine id for the next step.
         machine_id = 'TEST-EDGE-STALE-SECRET-NO-DEMOTE-001'
         _ = self._request_device(machine_id)
         self._approve_device(machine_id)
         mock_notify_admin.reset_mock()
 
         with patch('casm_app.PROVISION_ALLOW_SELF_REGISTER', False):
+            # Prepare reissue for the next step.
             reissue = self.client.post('/api/provision/request', json={
                 'machine_id': machine_id,
                 'current_provision_secret': 'stale-browser-secret',
             })
 
+        # Trigger the side effect required for this stage.
         self.assertEqual(reissue.status_code, 409)
         payload = reissue.json or {}
         self.assertEqual(payload.get('status'), 'approved')
@@ -425,9 +490,11 @@ class ProvisioningActionTest(unittest.TestCase):
 
         devices = _load_pending_devices()
         self.assertEqual((devices.get(machine_id) or {}).get('status'), 'approved')
+        # Trigger the side effect required for this stage.
         self.assertTrue((devices.get(machine_id) or {}).get('approved_at'))
         mock_notify_admin.assert_not_called()
 
+    # Section: run the test admin token can reissue stale secret without demoting approved device workflow with clear inputs and outputs.
     @patch('casm_app.notify_admin')
     def test_admin_token_can_reissue_stale_secret_without_demoting_approved_device(self, mock_notify_admin):
         machine_id = 'TEST-EDGE-ADMIN-STALE-SECRET-REISSUE-001'
@@ -435,7 +502,9 @@ class ProvisioningActionTest(unittest.TestCase):
         self._approve_device(machine_id)
         mock_notify_admin.reset_mock()
 
+        # Open the managed resource only for the block that needs it.
         with patch('casm_app.PROVISION_ALLOW_SELF_REGISTER', False):
+            # Prepare reissue for the next step.
             reissue = self.client.post(
                 '/api/provision/request',
                 json={
@@ -445,6 +514,7 @@ class ProvisioningActionTest(unittest.TestCase):
                 headers={'X-Admin-Token': 'test-magic-password'},
             )
 
+        # Trigger the side effect required for this stage.
         self.assertEqual(reissue.status_code, 200)
         payload = reissue.json or {}
         refreshed_secret = str(payload.get('provision_secret') or '').strip()
@@ -454,6 +524,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(payload.get('provisioning_status'), 'approved')
         self.assertEqual(payload.get('notification_reason'), 'status_preserved')
 
+        # Prepare devices for the next step.
         devices = _load_pending_devices()
         self.assertEqual((devices.get(machine_id) or {}).get('status'), 'approved')
         mock_notify_admin.assert_not_called()
@@ -463,8 +534,10 @@ class ProvisioningActionTest(unittest.TestCase):
         )
         self.assertEqual(status_response.status_code, 200)
 
+    # Section: run the test credential proof can reissue missing secret without heartbeat workflow with clear inputs and outputs.
     @patch('casm_app.notify_admin')
     def test_credential_proof_can_reissue_missing_secret_without_heartbeat(self, mock_notify_admin):
+        # Prepare machine id for the next step.
         machine_id = 'TEST-EDGE-CREDENTIAL-PROOF-REISSUE-001'
         first_secret = self._request_device(machine_id)
         self._approve_device(machine_id)
@@ -474,12 +547,14 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue(headers.get('X-Provision-Credential-Proof'))
 
         with patch('casm_app.PROVISION_ALLOW_SELF_REGISTER', False):
+            # Prepare reissue for the next step.
             reissue = self.client.post(
                 '/api/provision/request',
                 json={'machine_id': machine_id},
                 headers=headers,
             )
 
+        # Trigger the side effect required for this stage.
         self.assertEqual(reissue.status_code, 200)
         payload = reissue.json or {}
         refreshed_secret = str(payload.get('provision_secret') or '').strip()
@@ -489,6 +564,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(payload.get('provisioning_status'), 'approved')
         self.assertEqual(payload.get('notification_reason'), 'status_preserved')
 
+        # Prepare devices for the next step.
         devices = _load_pending_devices()
         self.assertEqual((devices.get(machine_id) or {}).get('status'), 'approved')
         mock_notify_admin.assert_not_called()
@@ -498,7 +574,9 @@ class ProvisioningActionTest(unittest.TestCase):
         )
         self.assertEqual(status_response.status_code, 200)
 
+    # Section: run the test incognito missing machine id recovers active heartbeat workflow with clear inputs and outputs.
     def test_incognito_missing_machine_id_recovers_active_heartbeat(self):
+        # Prepare machine id for the next step.
         machine_id = 'TEST-EDGE-INCOGNITO-ACTIVE-001'
         provision_secret = self._request_device(machine_id)
         self._approve_device(machine_id)
@@ -514,6 +592,7 @@ class ProvisioningActionTest(unittest.TestCase):
                 'model_available': True,
             },
         })
+        # Trigger the side effect required for this stage.
         self.assertEqual(heartbeat.status_code, 200)
 
         checkup = self.client.post('/api/provision/request', json={})
@@ -523,8 +602,10 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(payload.get('device_status'), 'active')
         self.assertEqual(payload.get('machine_id'), machine_id)
         self.assertTrue(payload.get('active'))
+        # Trigger the side effect required for this stage.
         self.assertIn('Existing active local backend heartbeat found', payload.get('message') or '')
 
+    # Section: run the test frontend maps active provisioning state workflow with clear inputs and outputs.
     def test_frontend_maps_active_provisioning_state(self):
         root = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
         settings_js = (root / 'frontend' / 'js' / 'settings-modal.js').read_text(encoding='utf-8')
@@ -532,6 +613,7 @@ class ProvisioningActionTest(unittest.TestCase):
         home_js = (root / 'frontend' / 'js' / 'pages' / 'home.js').read_text(encoding='utf-8')
         api_js = (root / 'frontend' / 'js' / 'api.js').read_text(encoding='utf-8')
 
+        # Trigger the side effect required for this stage.
         self.assertIn("normalized === 'active'", settings_js)
         self.assertIn("normalized === 'active'", app_js)
         self.assertIn('Device provisioned and active. Local backend is running.', settings_js)
@@ -539,8 +621,10 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn("requestResult.status || requestResult.device_status", settings_js)
         self.assertIn('request_status', api_js)
 
+    # Section: run the test frontend first run checkup does not require installer bat workflow with clear inputs and outputs.
     def test_frontend_first_run_checkup_does_not_require_installer_bat(self):
         root = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+        # Prepare settings js for the next step.
         settings_js = (root / 'frontend' / 'js' / 'settings-modal.js').read_text(encoding='utf-8')
         app_js = (root / 'frontend' / 'js' / 'app.js').read_text(encoding='utf-8')
 
@@ -550,26 +634,32 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn('without enabling offline auto-setup', settings_js)
         self.assertIn('autoSetupAllowed: ready', settings_js)
 
+    # Section: run the test re request pending device respects notification cooldown workflow with clear inputs and outputs.
     @patch('casm_app.notify_admin')
     def test_re_request_pending_device_respects_notification_cooldown(self, mock_notify_admin):
+        # Prepare machine id for the next step.
         machine_id = 'TEST-EDGE-PENDING-COOLDOWN-001'
         _ = self._request_device(machine_id)
         mock_notify_admin.reset_mock()
 
         with patch('casm_app.PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS', 3600):
+            # Prepare reissue for the next step.
             reissue = self.client.post('/api/provision/request', json={'machine_id': machine_id})
 
         self.assertEqual(reissue.status_code, 200)
         payload = reissue.json or {}
+        # Trigger the side effect required for this stage.
         self.assertEqual(payload.get('status'), 'stored')
         self.assertEqual(payload.get('device_status'), 'pending')
         self.assertFalse(payload.get('notification_dispatched'))
         self.assertEqual(payload.get('notification_reason'), 'pending_rerequest_cooldown')
         mock_notify_admin.assert_not_called()
 
+    # Section: run the test re request pending device notifies after cooldown workflow with clear inputs and outputs.
     @patch('casm_app.notify_admin')
     def test_re_request_pending_device_notifies_after_cooldown(self, mock_notify_admin):
         machine_id = 'TEST-EDGE-PENDING-COOLDOWN-002'
+        # Prepare this step for the next step.
         _ = self._request_device(machine_id)
         mock_notify_admin.reset_mock()
 
@@ -579,8 +669,10 @@ class ProvisioningActionTest(unittest.TestCase):
         _save_pending_devices(devices)
 
         with patch('casm_app.PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS', 60):
+            # Prepare reissue for the next step.
             reissue = self.client.post('/api/provision/request', json={'machine_id': machine_id})
 
+        # Trigger the side effect required for this stage.
         self.assertEqual(reissue.status_code, 200)
         payload = reissue.json or {}
         self.assertEqual(payload.get('status'), 'stored')
@@ -589,7 +681,9 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(payload.get('notification_reason'), 'pending_rerequest_notified')
         mock_notify_admin.assert_called_once()
 
+    # Section: run the test approved status requires server provisioning credentials workflow with clear inputs and outputs.
     def test_approved_status_requires_server_provisioning_credentials(self):
+        # Prepare machine id for the next step.
         machine_id = 'TEST-EDGE-CREDS-REQUIRED-001'
         provision_secret = self._request_device(machine_id)
         self._approve_device(machine_id)
@@ -599,10 +693,12 @@ class ProvisioningActionTest(unittest.TestCase):
             'SUPABASE_URL': '',
             'SUPABASE_SERVICE_ROLE_KEY': '',
         }, clear=False):
+            # Prepare status response for the next step.
             status_response = self.client.get(
                 f'/api/provision/status?machine_id={machine_id}&provision_secret={provision_secret}'
             )
 
+        # Trigger the side effect required for this stage.
         self.assertEqual(status_response.status_code, 503)
         payload = status_response.json or {}
         self.assertEqual(payload.get('status'), 'approved')
@@ -614,7 +710,9 @@ class ProvisioningActionTest(unittest.TestCase):
             {'SUPABASE_DB_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'}
         )
 
+    # Section: run the test bootstrap exchange flow is one time workflow with clear inputs and outputs.
     def test_bootstrap_exchange_flow_is_one_time(self):
+        # Prepare machine id for the next step.
         machine_id = 'TEST-EDGE-BOOTSTRAP-001'
         provision_secret = self._request_device(machine_id)
         self._approve_device(machine_id)
@@ -626,6 +724,7 @@ class ProvisioningActionTest(unittest.TestCase):
         payload = status_response.json or {}
 
         # Requirement 1: status must not directly return credentials anymore.
+        # Trigger the side effect required for this stage.
         self.assertNotIn('credentials', payload)
         self.assertTrue(payload.get('bootstrap_exchange_ready'))
         bootstrap_token = payload.get('bootstrap_token')
@@ -639,6 +738,7 @@ class ProvisioningActionTest(unittest.TestCase):
                 'bootstrap_token': 'invalid',
             },
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(invalid_exchange.status_code, 403)
 
         valid_exchange = self.client.post(
@@ -649,6 +749,7 @@ class ProvisioningActionTest(unittest.TestCase):
                 'bootstrap_token': bootstrap_token,
             },
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(valid_exchange.status_code, 200)
         credentials = (valid_exchange.json or {}).get('credentials', {})
         self.assertTrue(str(credentials.get('SUPABASE_DB_URL') or '').startswith('postgres'))
@@ -662,8 +763,10 @@ class ProvisioningActionTest(unittest.TestCase):
                 'bootstrap_token': bootstrap_token,
             },
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(replay_exchange.status_code, 403)
 
+    # Section: run the test installer download is token gated and one time workflow with clear inputs and outputs.
     def test_installer_download_is_token_gated_and_one_time(self):
         machine_id = 'TEST-EDGE-INSTALLER-001'
         provision_secret = self._request_device(machine_id)
@@ -673,6 +776,7 @@ class ProvisioningActionTest(unittest.TestCase):
             f'/api/bootstrap/installer/request?machine_id={machine_id}&provision_secret={provision_secret}',
             follow_redirects=False,
         )
+        # Trigger the side effect required for this stage.
         self.assertIn(request_with_secret.status_code, (301, 302, 303, 307, 308))
         self._assert_no_cache_headers(request_with_secret)
         machine_only_location = str(request_with_secret.headers.get('Location') or '')
@@ -682,6 +786,7 @@ class ProvisioningActionTest(unittest.TestCase):
         request_unauth = self.client.get('/api/bootstrap/installer/request')
         self.assertEqual(request_unauth.status_code, 401)
         self._assert_no_cache_headers(request_unauth)
+        # Trigger the side effect required for this stage.
         request_unauth.close()
 
         request_auth = self.client.get(
@@ -691,6 +796,7 @@ class ProvisioningActionTest(unittest.TestCase):
         )
         self.assertIn(request_auth.status_code, (301, 302, 303, 307, 308))
         self._assert_no_cache_headers(request_auth)
+        # Prepare location for the next step.
         location = str(request_auth.headers.get('Location') or '')
         self.assertIn('/api/bootstrap/installer?token=', location)
         request_auth.close()
@@ -700,6 +806,7 @@ class ProvisioningActionTest(unittest.TestCase):
         direct_static.close()
 
         missing_token = self.client.get('/api/bootstrap/installer')
+        # Trigger the side effect required for this stage.
         self.assertEqual(missing_token.status_code, 401)
         missing_token.close()
 
@@ -710,6 +817,7 @@ class ProvisioningActionTest(unittest.TestCase):
         status_response = self.client.get(
             f'/api/provision/status?machine_id={machine_id}&provision_secret={provision_secret}'
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(status_response.status_code, 200)
         installer_token = (status_response.json or {}).get('installer_token')
         self.assertTrue(installer_token)
@@ -719,6 +827,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn(b'ZERO-TOUCH LOCAL INSTALLER', installer_download.data)
         rendered_installer = installer_download.data.decode('utf-8', errors='ignore')
         # Assignment placeholders must be replaced in rendered downloads.
+        # Trigger the side effect required for this stage.
         self.assertNotIn('set "CASM_REPO_ZIP_URL=__CASM_REPO_ZIP_URL__"', rendered_installer)
         self.assertNotIn('set "CASM_SOURCE_ROOT=__CASM_SOURCE_ROOT__"', rendered_installer)
         self.assertNotIn('set "CASM_CLOUD_URL=__CASM_CLOUD_URL__"', rendered_installer)
@@ -741,6 +850,7 @@ class ProvisioningActionTest(unittest.TestCase):
         )
 
         # Ensure critical launcher labels are present in rendered payload.
+        # Trigger the side effect required for this stage.
         self.assertRegex(rendered_installer, r'(?im)^:safe_refresh_local_launcher\s*$')
         self.assertRegex(rendered_installer, r'(?im)^:refresh_local_launcher_from_template\s*$')
         self.assertRegex(rendered_installer, r'(?im)^:repair_startup_batch_label_mismatch\s*$')
@@ -750,6 +860,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn(f'set "CASM_PROVISION_SECRET={provision_secret}"', rendered_installer)
         self.assertIn('local_mode_provision_state.json', rendered_installer)
         self.assertIn('set "CASM_SUPABASE_URL=https://projtest123.supabase.co"', rendered_installer)
+        # Trigger the side effect required for this stage.
         self.assertIn('set "CASM_SUPABASE_DB_URL=postgres://test:test@localhost:5432/test"', rendered_installer)
         self.assertIn('set "CASM_SUPABASE_SERVICE_ROLE_KEY=service-role-test-key"', rendered_installer)
         self.assertTrue(str(installer_download.headers.get('X-Casm-Installer-Version') or '').strip())
@@ -759,16 +870,20 @@ class ProvisioningActionTest(unittest.TestCase):
         )
         installer_download.close()
 
+        # Prepare installer replay for the next step.
         installer_replay = self.client.get(f'/api/bootstrap/installer?token={installer_token}')
         self.assertEqual(installer_replay.status_code, 403)
         installer_replay.close()
 
+    # Section: run the test batch templates have required label targets workflow with clear inputs and outputs.
     def test_batch_templates_have_required_label_targets(self):
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         start_bat_path = os.path.join(repo_root, 'start.bat')
         installer_bat_path = os.path.join(repo_root, 'frontend', 'static', 'CASM_LocalInstaller.bat')
 
+        # Open the managed resource only for the block that needs it.
         with open(start_bat_path, 'r', encoding='utf-8') as f:
+            # Prepare start bat for the next step.
             start_bat = f.read()
 
         with open(installer_bat_path, 'r', encoding='utf-8') as f:
@@ -777,15 +892,18 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn('call :safe_start_ollama_and_wait_ready 30', start_bat)
         self.assertRegex(start_bat, r'(?im)^:safe_start_ollama_and_wait_ready\s*$')
         self.assertRegex(start_bat, r'(?im)^:start_ollama_and_wait_ready\s*$')
+        # Trigger the side effect required for this stage.
         self.assertRegex(start_bat, r'(?im)^:spawn_ollama_server\s*$')
         self.assertRegex(start_bat, r'(?im)^:is_ollama_ready\s*$')
 
         if 'call :start_ollama_and_wait_ready' in start_bat:
+            # Trigger the side effect required for this stage.
             self.assertRegex(start_bat, r'(?im)^:start_ollama_and_wait_ready\s*$')
 
         self.assertIn('call :safe_refresh_local_launcher', installer_bat)
         self.assertIn('call :repair_startup_batch_label_mismatch', installer_bat)
         self.assertRegex(installer_bat, r'(?im)^:safe_refresh_local_launcher\s*$')
+        # Trigger the side effect required for this stage.
         self.assertRegex(installer_bat, r'(?im)^:refresh_local_launcher_from_template\s*$')
         self.assertRegex(installer_bat, r'(?im)^:repair_startup_batch_label_mismatch\s*$')
         self.assertLess(
@@ -795,16 +913,20 @@ class ProvisioningActionTest(unittest.TestCase):
 
         token_map_key = "'__CASM_REPO_ZIP_URL__'='CASM_REPO_ZIP_URL'"
         provision_token_map_key = "'__CASM_PROVISION_SECRET__'='CASM_PROVISION_SECRET'"
+        # Trigger the side effect required for this stage.
         self.assertGreaterEqual(installer_bat.count(token_map_key), 2)
         self.assertGreaterEqual(installer_bat.count(provision_token_map_key), 2)
         self.assertGreaterEqual(installer_bat.count('$lineMap = [ordered]@{}'), 2)
 
+    # Section: run the test frontend redownload flow refreshes missing provision secret workflow with clear inputs and outputs.
     def test_frontend_redownload_flow_refreshes_missing_provision_secret(self):
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
         home_js_path = os.path.join(repo_root, 'frontend', 'js', 'pages', 'home.js')
         settings_js_path = os.path.join(repo_root, 'frontend', 'js', 'settings-modal.js')
 
+        # Open the managed resource only for the block that needs it.
         with open(home_js_path, 'r', encoding='utf-8') as f:
+            # Prepare home js for the next step.
             home_js = f.read()
         with open(settings_js_path, 'r', encoding='utf-8') as f:
             settings_js = f.read()
@@ -813,6 +935,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn('recoverRemoteInstallerCredentials', settings_js)
         self.assertIn('forceRequest: true', settings_js)
         self.assertIn('getStoredProvisionSecretForMachine', settings_js)
+        # Trigger the side effect required for this stage.
         self.assertIn("currentProvisionSecret: invalidSecret ? ''", settings_js)
         self.assertIn('attemptedSecretlessRecovery', settings_js)
         self.assertIn("this.setProviderStatus('Validating installer access for this approved device...'", settings_js)
@@ -827,10 +950,12 @@ class ProvisioningActionTest(unittest.TestCase):
             home_js,
         )
 
+    # Section: run the test machine only installer request rejects pending device workflow with clear inputs and outputs.
     def test_machine_only_installer_request_rejects_pending_device(self):
         machine_id = 'TEST-EDGE-INSTALLER-PENDING-001'
         _ = self._request_device(machine_id)
 
+        # Prepare pending resp for the next step.
         pending_resp = self.client.get(
             f'/api/bootstrap/installer/request?machine_id={machine_id}',
             follow_redirects=False,
@@ -839,7 +964,9 @@ class ProvisioningActionTest(unittest.TestCase):
         self._assert_no_cache_headers(pending_resp)
         pending_resp.close()
 
+    # Section: run the test local mode status recovers canonical machine id from saved secret workflow with clear inputs and outputs.
     def test_local_mode_status_recovers_canonical_machine_id_from_saved_secret(self):
+        # Prepare canonical machine id for the next step.
         canonical_machine_id = 'Web-897DE863'
         drifted_machine_id = 'Edge-405D88DCC9E4'
         provision_secret = self._request_device(canonical_machine_id)
@@ -856,6 +983,7 @@ class ProvisioningActionTest(unittest.TestCase):
             encoding='utf-8',
         )
 
+        # Prepare response for the next step.
         response = self.client.get('/api/local-mode/provisioning/status')
         self.assertEqual(response.status_code, 200)
         payload = response.json or {}
@@ -865,7 +993,9 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(str(persisted.get('machine_id') or ''), canonical_machine_id)
         self.assertEqual(LOCAL_MODE_MACHINE_ID_FILE.read_text(encoding='utf-8').strip(), canonical_machine_id)
 
+    # Section: run the test local status requires secret before claiming heartbeat ready workflow with clear inputs and outputs.
     def test_local_status_requires_secret_before_claiming_heartbeat_ready(self):
+        # Prepare machine id for the next step.
         machine_id = 'TEST-EDGE-MISSING-SECRET-001'
         _save_pending_devices({
             machine_id: {
@@ -878,6 +1008,7 @@ class ProvisioningActionTest(unittest.TestCase):
             }
         })
 
+        # Trigger the side effect required for this stage.
         LOCAL_MODE_PROVISION_STATE_FILE.write_text(
             json.dumps({
                 'machine_id': machine_id,
@@ -888,6 +1019,7 @@ class ProvisioningActionTest(unittest.TestCase):
         )
         LOCAL_MODE_MACHINE_ID_FILE.write_text(machine_id, encoding='utf-8')
 
+        # Open the managed resource only for the block that needs it.
         with patch('casm_app._local_mode_fetch_authoritative_status', return_value={
                 'checked': True,
                 'status': 'approved',
@@ -895,8 +1027,10 @@ class ProvisioningActionTest(unittest.TestCase):
             }), \
              patch('casm_app._local_mode_has_supabase_credentials', return_value=True), \
              patch('casm_app._is_hosted_runtime_environment', return_value=False):
+            # Prepare response for the next step.
             response = self.client.get('/api/local-mode/provisioning/status')
 
+        # Trigger the side effect required for this stage.
         self.assertEqual(response.status_code, 200)
         payload = response.json or {}
         self.assertEqual(payload.get('status'), 'validation_required')
@@ -906,9 +1040,11 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(payload.get('local_validation_required_reason'), 'missing_provision_secret')
         self.assertEqual(payload.get('status_source'), 'validation_required')
 
+        # Prepare persisted for the next step.
         persisted = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
         self.assertEqual(str(persisted.get('status') or ''), 'validation_required')
 
+    # Section: run the test partial local provision state save preserves existing secret workflow with clear inputs and outputs.
     def test_partial_local_provision_state_save_preserves_existing_secret(self):
         LOCAL_MODE_PROVISION_STATE_FILE.write_text(
             json.dumps({
@@ -920,6 +1056,7 @@ class ProvisioningActionTest(unittest.TestCase):
             encoding='utf-8',
         )
 
+        # Trigger the side effect required for this stage.
         casm_app._local_mode_save_provision_state({
             'machine_id': 'TEST-EDGE-PRESERVE-SECRET-001',
             'status': 'provisioned',
@@ -930,6 +1067,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(str(persisted.get('cloud_url') or ''), 'https://cloud.example.test')
         self.assertEqual(str(persisted.get('status') or ''), 'provisioned')
 
+        # Trigger the side effect required for this stage.
         casm_app._local_mode_save_provision_state({
             'machine_id': 'TEST-EDGE-PRESERVE-SECRET-001',
             'provision_secret': '',
@@ -940,6 +1078,7 @@ class ProvisioningActionTest(unittest.TestCase):
             str(persisted_after_read_status.get('provision_secret') or ''),
             'secret-to-preserve-001',
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(str(persisted_after_read_status.get('status') or ''), 'validation_required')
 
         casm_app._local_mode_save_provision_state({
@@ -949,15 +1088,18 @@ class ProvisioningActionTest(unittest.TestCase):
             'status': 'credentials_present',
         })
         persisted_after_explicit_clear = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
+        # Trigger the side effect required for this stage.
         self.assertEqual(str(persisted_after_explicit_clear.get('provision_secret') or ''), '')
         self.assertNotIn('_clear_provision_secret', persisted_after_explicit_clear)
 
+    # Section: run the test installer request recovers from local state machine id drift workflow with clear inputs and outputs.
     def test_installer_request_recovers_from_local_state_machine_id_drift(self):
         canonical_machine_id = 'Web-897DE863'
         drifted_machine_id = 'Edge-405D88DCC9E4'
         provision_secret = self._request_device(canonical_machine_id)
         self._approve_device(canonical_machine_id)
 
+        # Trigger the side effect required for this stage.
         LOCAL_MODE_MACHINE_ID_FILE.write_text(drifted_machine_id, encoding='utf-8')
         LOCAL_MODE_PROVISION_STATE_FILE.write_text(
             json.dumps({
@@ -970,6 +1112,7 @@ class ProvisioningActionTest(unittest.TestCase):
             encoding='utf-8',
         )
 
+        # Prepare installer redirect for the next step.
         installer_redirect = self.client.get(
             f'/api/bootstrap/installer/request?machine_id={drifted_machine_id}&provision_secret={provision_secret}',
             follow_redirects=False,
@@ -979,16 +1122,19 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn('/api/bootstrap/installer?token=', location)
         installer_redirect.close()
 
+        # Prepare persisted for the next step.
         persisted = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
         self.assertEqual(str(persisted.get('machine_id') or ''), canonical_machine_id)
         self.assertEqual(LOCAL_MODE_MACHINE_ID_FILE.read_text(encoding='utf-8').strip(), canonical_machine_id)
 
+    # Section: run the test installer request can resolve machine id from provision secret workflow with clear inputs and outputs.
     def test_installer_request_can_resolve_machine_id_from_provision_secret(self):
         canonical_machine_id = 'Web-897DE863'
         wrong_machine_id = 'Edge-405D88DCC9E4'
         provision_secret = self._request_device(canonical_machine_id)
         self._approve_device(canonical_machine_id)
 
+        # Prepare installer redirect for the next step.
         installer_redirect = self.client.get(
             f'/api/bootstrap/installer/request?machine_id={wrong_machine_id}&provision_secret={provision_secret}',
             follow_redirects=False,
@@ -999,7 +1145,9 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn('/api/bootstrap/installer?token=', location)
         installer_redirect.close()
 
+    # Section: run the test installer request recovers stale secret when fresh heartbeat exists workflow with clear inputs and outputs.
     def test_installer_request_recovers_stale_secret_when_fresh_heartbeat_exists(self):
+        # Prepare machine id for the next step.
         machine_id = 'WEB-INSTALLER-STALE-HEARTBEAT-001'
         stale_secret = self._request_device(machine_id)
         self._approve_device(machine_id)
@@ -1015,6 +1163,7 @@ class ProvisioningActionTest(unittest.TestCase):
                 'model_available': True,
             },
         })
+        # Trigger the side effect required for this stage.
         self.assertEqual(heartbeat.status_code, 200)
 
         devices = _load_pending_devices()
@@ -1027,6 +1176,7 @@ class ProvisioningActionTest(unittest.TestCase):
             f'/api/bootstrap/installer/request?machine_id={machine_id}&provision_secret={stale_secret}',
             follow_redirects=False,
         )
+        # Trigger the side effect required for this stage.
         self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))
         self._assert_no_cache_headers(installer_redirect)
         location = str(installer_redirect.headers.get('Location') or '')
@@ -1036,6 +1186,7 @@ class ProvisioningActionTest(unittest.TestCase):
         installer_download = self.client.get(location)
         self.assertEqual(installer_download.status_code, 200)
         rendered_installer = installer_download.data.decode('utf-8', errors='ignore')
+        # Prepare match for the next step.
         match = re.search(r'set "CASM_PROVISION_SECRET=([^"]+)"', rendered_installer)
         self.assertIsNotNone(match)
         recovered_secret = match.group(1)
@@ -1045,15 +1196,18 @@ class ProvisioningActionTest(unittest.TestCase):
         status_response = self.client.get(
             f'/api/provision/status?machine_id={machine_id}&provision_secret={recovered_secret}'
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(status_response.status_code, 200)
         self.assertEqual((status_response.json or {}).get('status'), 'approved')
 
+    # Section: run the test installer request does not recover stale secret without heartbeat workflow with clear inputs and outputs.
     def test_installer_request_does_not_recover_stale_secret_without_heartbeat(self):
         machine_id = 'WEB-INSTALLER-STALE-NO-HEARTBEAT-001'
         stale_secret = self._request_device(machine_id)
         self._approve_device(machine_id)
 
         devices = _load_pending_devices()
+        # Prepare values needed by the next step.
         devices[machine_id]['provision_secret_hash'] = casm_app._hash_provision_secret(
             'server-rotated-secret-002'
         )
@@ -1063,6 +1217,7 @@ class ProvisioningActionTest(unittest.TestCase):
             f'/api/bootstrap/installer/request?machine_id={machine_id}&provision_secret={stale_secret}',
             follow_redirects=False,
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(installer_response.status_code, 401)
         self._assert_no_cache_headers(installer_response)
         payload = installer_response.json or {}
@@ -1070,8 +1225,10 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue(payload.get('requires_revalidation'))
         installer_response.close()
 
+    # Section: run the test installer request secret overrides pending machine id collision workflow with clear inputs and outputs.
     def test_installer_request_secret_overrides_pending_machine_id_collision(self):
         approved_machine_id = 'WEB-INSTALLER-APPROVED-SECRET-001'
+        # Prepare pending machine id for the next step.
         pending_machine_id = 'WEB-INSTALLER-PENDING-SECRET-001'
 
         approved_secret = self._request_device(approved_machine_id)
@@ -1082,6 +1239,7 @@ class ProvisioningActionTest(unittest.TestCase):
             f'/api/bootstrap/installer/request?machine_id={pending_machine_id}&provision_secret={approved_secret}',
             follow_redirects=False,
         )
+        # Trigger the side effect required for this stage.
         self.assertIn(installer_redirect.status_code, (301, 302, 303, 307, 308))
         self._assert_no_cache_headers(installer_redirect)
         location = str(installer_redirect.headers.get('Location') or '')
@@ -1091,7 +1249,9 @@ class ProvisioningActionTest(unittest.TestCase):
         devices = _load_pending_devices()
         self.assertEqual(str((devices.get(pending_machine_id) or {}).get('status') or ''), 'pending')
 
+    # Section: run the test admin reset all clears cloud provisioning records workflow with clear inputs and outputs.
     def test_admin_reset_all_clears_cloud_provisioning_records(self):
+        # Trigger the side effect required for this stage.
         self._request_device('TEST-EDGE-RESET-001')
         self._request_device('TEST-EDGE-RESET-002')
         BOOTSTRAP_TOKEN_STATE_FILE.write_text(
@@ -1105,6 +1265,7 @@ class ProvisioningActionTest(unittest.TestCase):
             headers=self._admin_auth_headers(),
             follow_redirects=False,
         )
+        # Trigger the side effect required for this stage.
         self.assertEqual(response.status_code, 302)
         location = str(response.headers.get('Location') or '')
         self.assertIn('/admin/devices?reset_all=1', location)
@@ -1114,13 +1275,16 @@ class ProvisioningActionTest(unittest.TestCase):
         devices_after_reset = _load_pending_devices()
         self.assertEqual(devices_after_reset, {})
 
+        # Trigger the side effect required for this stage.
         self.assertTrue(BOOTSTRAP_TOKEN_STATE_FILE.exists())
         token_state = json.loads(BOOTSTRAP_TOKEN_STATE_FILE.read_text(encoding='utf-8'))
         self.assertEqual(token_state.get('used_jti'), {})
 
+    # Section: run the test local auto provision requires cloud url workflow with clear inputs and outputs.
     def test_local_auto_provision_requires_cloud_url(self):
         previous_cloud_url = os.environ.pop('CLOUD_URL', None)
         try:
+            # Prepare response for the next step.
             response = self.client.post('/api/local-mode/provisioning/auto', json={})
             self.assertEqual(response.status_code, 400)
             payload = response.json or {}
@@ -1134,11 +1298,14 @@ class ProvisioningActionTest(unittest.TestCase):
             self.assertEqual(get_payload.get('status'), 'cloud_url_missing')
         finally:
             if previous_cloud_url is not None:
+                # Prepare values needed by the next step.
                 os.environ['CLOUD_URL'] = previous_cloud_url
 
+    # Section: run the test local auto provision pending approval workflow with clear inputs and outputs.
     @patch('casm_app.requests.get')
     @patch('casm_app.requests.post')
     def test_local_auto_provision_pending_approval(self, mock_post, mock_get):
+        # Prepare values needed by the next step.
         os.environ['CLOUD_URL'] = 'https://cloud.example.test'
 
         mock_post.return_value = self._mock_http_response(
@@ -1150,7 +1317,9 @@ class ProvisioningActionTest(unittest.TestCase):
             {'status': 'pending'},
         )
 
+        # Open the managed resource only for the block that needs it.
         with patch('casm_app._local_mode_has_supabase_credentials', return_value=False):
+            # Prepare response for the next step.
             response = self.client.post('/api/local-mode/provisioning/auto', json={})
         self.assertEqual(response.status_code, 200)
 
@@ -1160,6 +1329,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertTrue(str(payload.get('machine_id') or '').strip())
         self.assertEqual(payload.get('admin_portal_url'), 'https://cloud.example.test/admin/devices')
 
+        # Trigger the side effect required for this stage.
         self.assertTrue(LOCAL_MODE_PROVISION_STATE_FILE.exists())
         persisted = json.loads(LOCAL_MODE_PROVISION_STATE_FILE.read_text(encoding='utf-8'))
         self.assertEqual(persisted.get('status'), 'pending')
@@ -1175,6 +1345,7 @@ class ProvisioningActionTest(unittest.TestCase):
             f'Expected a heartbeat upload POST call, got: {all_post_urls}'
         )
 
+    # Section: run the test cloud heartbeat recovers missing provision secret workflow with clear inputs and outputs.
     @patch('casm_app.requests.post')
     @patch('casm_app._local_mode_fetch_authoritative_status')
     @patch('casm_app._run_local_mode_auto_provision_once')
@@ -1190,6 +1361,7 @@ class ProvisioningActionTest(unittest.TestCase):
         mock_fetch_status,
         mock_post,
     ):
+        # Prepare values needed by the next step.
         os.environ['CLOUD_URL'] = 'https://cloud.example.test'
 
         mock_load_state.return_value = {
@@ -1212,6 +1384,7 @@ class ProvisioningActionTest(unittest.TestCase):
                 'diagnostics': {},
             },
         ]
+        # Prepare return value for the next step.
         mock_auto_provision_once.return_value = ({'success': True, 'status': 'pending_approval'}, 200)
         mock_fetch_status.return_value = {
             'checked': False,
@@ -1222,11 +1395,13 @@ class ProvisioningActionTest(unittest.TestCase):
         heartbeat_result = _send_local_mode_cloud_heartbeat_once()
         self.assertTrue(heartbeat_result.get('sent'))
 
+        # Trigger the side effect required for this stage.
         mock_auto_provision_once.assert_called_once_with('https://cloud.example.test')
         self.assertEqual(mock_collect_submission.call_count, 2)
         heartbeat_url = str(mock_post.call_args.args[0])
         self.assertIn('/api/local-mode/heartbeat', heartbeat_url)
 
+    # Section: run the test cloud heartbeat sends during supabase backoff without extra status get workflow with clear inputs and outputs.
     @patch('casm_app.requests.post')
     @patch('casm_app._local_mode_fetch_authoritative_status')
     @patch('casm_app._local_mode_collect_cloud_heartbeat_submission')
@@ -1236,6 +1411,7 @@ class ProvisioningActionTest(unittest.TestCase):
         mock_fetch_status,
         mock_post,
     ):
+        # Prepare return value for the next step.
         mock_collect_submission.return_value = {
             'ready': True,
             'cloud_url': 'https://cloud.example.test',
@@ -1250,13 +1426,16 @@ class ProvisioningActionTest(unittest.TestCase):
                 'model_available': True,
             },
         }
+        # Prepare return value for the next step.
         mock_post.return_value = self._mock_http_response(200, {'success': True, 'status': 'stored'})
 
         old_until = casm_app.supabase_offline_backoff_until_epoch
         old_context = casm_app.supabase_offline_backoff_context
         old_error = casm_app.supabase_offline_backoff_error
         try:
+            # Open the managed resource only for the block that needs it.
             with casm_app.supabase_offline_backoff_lock:
+                # Prepare supabase offline backoff until epoch for the next step.
                 casm_app.supabase_offline_backoff_until_epoch = casm_app.time.time() + 600
                 casm_app.supabase_offline_backoff_context = 'contract-test'
                 casm_app.supabase_offline_backoff_error = 'simulated Supabase DNS lag'
@@ -1265,6 +1444,7 @@ class ProvisioningActionTest(unittest.TestCase):
 
             self.assertTrue(heartbeat_result.get('sent'))
             self.assertFalse(heartbeat_result.get('authoritative_fetched'))
+            # Trigger the side effect required for this stage.
             self.assertEqual(
                 heartbeat_result.get('authoritative_skipped_reason'),
                 'supabase_offline_backoff',
@@ -1274,10 +1454,12 @@ class ProvisioningActionTest(unittest.TestCase):
             self.assertIn('/api/local-mode/heartbeat', str(mock_post.call_args.args[0]))
         finally:
             with casm_app.supabase_offline_backoff_lock:
+                # Prepare supabase offline backoff until epoch for the next step.
                 casm_app.supabase_offline_backoff_until_epoch = old_until
                 casm_app.supabase_offline_backoff_context = old_context
                 casm_app.supabase_offline_backoff_error = old_error
 
+    # Section: run the test successful cloud heartbeat is mirrored for local status workflow with clear inputs and outputs.
     @patch('casm_app.requests.post')
     @patch('casm_app._local_mode_fetch_authoritative_status')
     @patch('casm_app._local_mode_collect_cloud_heartbeat_submission')
@@ -1287,6 +1469,7 @@ class ProvisioningActionTest(unittest.TestCase):
         mock_fetch_status,
         mock_post,
     ):
+        # Prepare machine id for the next step.
         machine_id = 'TEST-EDGE-MIRROR-HEARTBEAT-001'
         now_iso = casm_app.datetime.now(casm_app.timezone.utc).isoformat()
         mock_collect_submission.return_value = {
@@ -1304,6 +1487,7 @@ class ProvisioningActionTest(unittest.TestCase):
                 'ollama_model': 'gemma3:4b',
             },
         }
+        # Prepare return value for the next step.
         mock_fetch_status.return_value = {
             'checked': True,
             'status': 'provisioned',
@@ -1333,6 +1517,7 @@ class ProvisioningActionTest(unittest.TestCase):
             },
         })
 
+        # Prepare heartbeat result for the next step.
         heartbeat_result = _send_local_mode_cloud_heartbeat_once()
 
         self.assertTrue(heartbeat_result.get('sent'))
@@ -1342,10 +1527,12 @@ class ProvisioningActionTest(unittest.TestCase):
         )
         mirrored = _get_cloud_local_mode_heartbeat_snapshot(machine_id)
         self.assertTrue(mirrored.get('available'))
+        # Trigger the side effect required for this stage.
         self.assertTrue(mirrored.get('is_recent'))
         self.assertTrue(mirrored.get('local_mode_possible'))
         self.assertEqual(mirrored.get('machine_id'), machine_id)
 
+    # Section: run the test cloud heartbeat stale secret recovery uses admin token without resending stale secret workflow with clear inputs and outputs.
     @patch('casm_app._local_mode_save_provision_state')
     @patch('casm_app._local_mode_collect_cloud_heartbeat_submission')
     @patch('casm_app._local_mode_load_provision_state')
@@ -1357,6 +1544,7 @@ class ProvisioningActionTest(unittest.TestCase):
         mock_collect_submission,
         mock_save_state,
     ):
+        # Prepare values needed by the next step.
         os.environ['CLOUD_URL'] = 'https://cloud.example.test'
         os.environ['ADMIN_PASSWORD'] = 'test-magic-password'
 
@@ -1366,6 +1554,7 @@ class ProvisioningActionTest(unittest.TestCase):
             'cloud_url': 'https://cloud.example.test',
             'status': 'approved',
         }
+        # Prepare return value for the next step.
         mock_collect_submission.return_value = {
             'ready': True,
             'cloud_url': 'https://cloud.example.test',
@@ -1375,6 +1564,7 @@ class ProvisioningActionTest(unittest.TestCase):
             'credentials_present': True,
             'diagnostics': {},
         }
+        # Prepare side effect for the next step.
         mock_post.side_effect = [
             self._mock_http_response(401, {'success': False, 'error': 'Invalid provision_secret'}),
             self._mock_http_response(200, {
@@ -1386,6 +1576,7 @@ class ProvisioningActionTest(unittest.TestCase):
             self._mock_http_response(200, {'success': True, 'status': 'stored'}),
         ]
 
+        # Prepare heartbeat result for the next step.
         heartbeat_result = _send_local_mode_cloud_heartbeat_once()
 
         self.assertTrue(heartbeat_result.get('sent'))
@@ -1395,6 +1586,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertIn('/api/provision/request', str(refresh_call.args[0]))
         refresh_json = refresh_call.kwargs.get('json') or {}
         refresh_headers = refresh_call.kwargs.get('headers') or {}
+        # Trigger the side effect required for this stage.
         self.assertEqual(refresh_json.get('machine_id'), 'TEST-EDGE-STALE-HEARTBEAT-001')
         self.assertNotIn('current_provision_secret', refresh_json)
         self.assertEqual(refresh_headers.get('X-Admin-Token'), 'test-magic-password')
@@ -1403,6 +1595,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(saved_state.get('provision_secret'), 'fresh-local-secret-001')
         self.assertEqual(saved_state.get('status'), 'approved')
 
+    # Section: run the test local auto provision approved auto exchanges and applies credentials workflow with clear inputs and outputs.
     @patch('casm_app._local_mode_apply_supabase_credentials')
     @patch('casm_app.requests.get')
     @patch('casm_app.requests.post')
@@ -1412,6 +1605,7 @@ class ProvisioningActionTest(unittest.TestCase):
         mock_get,
         mock_apply_credentials,
     ):
+        # Prepare values needed by the next step.
         os.environ['CLOUD_URL'] = 'https://cloud.example.test'
 
         expected_credentials = {
@@ -1424,6 +1618,7 @@ class ProvisioningActionTest(unittest.TestCase):
             200,
             {'status': 'stored', 'provision_secret': 'local-secret-002'},
         )
+        # Prepare exchange response for the next step.
         exchange_response = self._mock_http_response(
             200,
             {'status': 'provisioned', 'credentials': expected_credentials},
@@ -1435,6 +1630,7 @@ class ProvisioningActionTest(unittest.TestCase):
             {'status': 'approved', 'bootstrap_token': 'bootstrap-xyz'},
         )
 
+        # Prepare return value for the next step.
         mock_apply_credentials.return_value = {
             'success': True,
             'reinitialized': True,
@@ -1442,9 +1638,11 @@ class ProvisioningActionTest(unittest.TestCase):
         }
 
         with patch('casm_app._local_mode_has_supabase_credentials', return_value=False):
+            # Prepare response for the next step.
             response = self.client.post('/api/local-mode/provisioning/auto', json={})
         self.assertEqual(response.status_code, 200)
 
+        # Prepare payload for the next step.
         payload = response.json or {}
         self.assertTrue(payload.get('success'))
         self.assertEqual(payload.get('status'), 'provisioned')
@@ -1463,6 +1661,7 @@ class ProvisioningActionTest(unittest.TestCase):
 
         second_payload = mock_post.call_args_list[1].kwargs.get('json') or {}
         self.assertEqual(second_payload.get('bootstrap_token'), 'bootstrap-xyz')
+        # Trigger the side effect required for this stage.
         self.assertTrue(str(second_payload.get('machine_id') or '').strip())
 
         mock_apply_credentials.assert_called_once_with(expected_credentials)
@@ -1472,6 +1671,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(persisted.get('status'), 'provisioned')
         self.assertTrue(str(persisted.get('provisioned_at') or '').strip())
 
+    # Section: run the test local auto provision missing secret uses credential proof workflow with clear inputs and outputs.
     @patch('casm_app._send_local_mode_cloud_heartbeat_once')
     @patch('casm_app._local_mode_apply_supabase_credentials')
     @patch('casm_app.requests.get')
@@ -1483,6 +1683,7 @@ class ProvisioningActionTest(unittest.TestCase):
         mock_apply_credentials,
         mock_send_heartbeat,
     ):
+        # Prepare values needed by the next step.
         os.environ['CLOUD_URL'] = 'https://cloud.example.test'
         machine_id = 'TEST-EDGE-AUTO-CREDENTIAL-PROOF-001'
         LOCAL_MODE_MACHINE_ID_FILE.write_text(machine_id, encoding='utf-8')
@@ -1495,6 +1696,7 @@ class ProvisioningActionTest(unittest.TestCase):
             encoding='utf-8',
         )
 
+        # Prepare expected credentials for the next step.
         expected_credentials = {
             'SUPABASE_DB_URL': 'postgres://auto:test@localhost:5432/test',
             'SUPABASE_URL': 'https://auto-example.supabase.co',
@@ -1514,6 +1716,7 @@ class ProvisioningActionTest(unittest.TestCase):
                 {'status': 'provisioned', 'credentials': expected_credentials},
             ),
         ]
+        # Prepare return value for the next step.
         mock_get.return_value = self._mock_http_response(
             200,
             {'status': 'approved', 'bootstrap_token': 'bootstrap-credential-proof'},
@@ -1523,6 +1726,7 @@ class ProvisioningActionTest(unittest.TestCase):
             'reinitialized': True,
             'reinit_error': None,
         }
+        # Prepare return value for the next step.
         mock_send_heartbeat.return_value = {'sent': True}
 
         response = self.client.post('/api/local-mode/provisioning/auto', json={})
@@ -1532,6 +1736,7 @@ class ProvisioningActionTest(unittest.TestCase):
         self.assertEqual(payload.get('status'), 'provisioned')
         self.assertTrue(payload.get('provisioned'))
 
+        # Prepare request call for the next step.
         request_call = mock_post.call_args_list[0]
         self.assertIn('/api/provision/request', str(request_call.args[0]))
         request_json = request_call.kwargs.get('json') or {}
@@ -1542,9 +1747,12 @@ class ProvisioningActionTest(unittest.TestCase):
             request_call.kwargs.get('timeout'),
             max(12, int(casm_app.LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS)),
         )
+        # Trigger the side effect required for this stage.
         self.assertTrue(request_headers.get('X-Provision-Credential-Proof'))
         self.assertTrue(request_headers.get('X-Provision-Credential-Proof-Timestamp'))
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == '__main__':
+    # Trigger the side effect required for this stage.
     unittest.main()

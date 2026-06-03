@@ -4,11 +4,13 @@ Pipeline Configuration
 
 Central configuration for all pipeline components.
 """
+# Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 
 import os
 from pathlib import Path
 
 # Base directories
+# Prepare base dir for the next step.
 BASE_DIR = Path(__file__).parent.parent
 PIPELINE_DIR = BASE_DIR / 'pipeline'
 VIOLATIONS_DIR = PIPELINE_DIR / 'violations'
@@ -160,19 +162,23 @@ def _split_csv(value: str) -> list:
     return [item.strip().lower() for item in value.split(',') if item.strip()]
 
 
+# Section: run the default provider orders workflow with clear inputs and outputs.
 def _default_provider_orders() -> dict:
     profile = str(os.getenv('CASM_ROUTING_PROFILE', 'cloud')).strip().lower()
     if profile == 'local':
+        # Return the prepared result to the caller.
         return {
             'nlp_provider_order': 'ollama',
             'embedding_provider_order': 'ollama',
         }
+    # Return the prepared result to the caller.
     return {
         'nlp_provider_order': 'gemini',
         'embedding_provider_order': 'model_api',
     }
 
 
+# Prepare provider order defaults for the next step.
 _PROVIDER_ORDER_DEFAULTS = _default_provider_orders()
 
 
@@ -205,6 +211,7 @@ MODEL_API_CONFIG = {
 def _resolve_rag_data_source() -> Path:
     explicit_path = str(os.getenv('RAG_DATA_SOURCE', '')).strip()
     if explicit_path:
+        # Return the prepared result to the caller.
         return Path(explicit_path)
 
     candidates = [
@@ -212,12 +219,15 @@ def _resolve_rag_data_source() -> Path:
         BASE_DIR / 'NLP_CASM' / 'Trim1.csv',
     ]
 
+    # Process each item in this collection using the same rule set.
     for candidate in candidates:
         if candidate.exists():
+            # Return the prepared result to the caller.
             return candidate
 
     return candidates[0]
 
+# Prepare rag config for the next step.
 RAG_CONFIG = {
     'enabled': True,  # Enable RAG with regulation data
     'use_chroma': False,  # Disabled — Gemini uses direct regulation injection instead of ChromaDB
@@ -286,6 +296,7 @@ DATABASE_CONFIG = {
 import hashlib
 from datetime import datetime
 
+# Prepare supabase config for the next step.
 SUPABASE_CONFIG = {
     'url': os.getenv('SUPABASE_URL', ''),
     'service_role_key': os.getenv('SUPABASE_SERVICE_ROLE_KEY', ''),
@@ -331,22 +342,26 @@ def generate_report_id(device_id: str = None) -> str:
     from zoneinfo import ZoneInfo
     
     # Use Malaysian Time (UTC+8) consistently for report IDs
+    # Prepare myt for the next step.
     myt = ZoneInfo('Asia/Kuala_Lumpur')
     now_myt = datetime.now(myt)
     timestamp = now_myt.strftime('%Y%m%d_%H%M%S')
     
     if device_id:
         # Create short hash of device_id
+        # Prepare device hash for the next step.
         device_hash = hashlib.md5(device_id.encode()).hexdigest()[:6]
     else:
         device_hash = 'local'
     
     # Add microseconds for uniqueness
+    # Prepare micro for the next step.
     micro = now_myt.strftime('%f')[:4]
     
     return f"{timestamp}_{device_hash}_{micro}"
 
 
+# Section: run the is supabase configured workflow with clear inputs and outputs.
 def is_supabase_configured() -> bool:
     """Check if Supabase is properly configured."""
     return bool(
@@ -356,6 +371,7 @@ def is_supabase_configured() -> bool:
     )
 
 
+# Section: run the get severity priority workflow with clear inputs and outputs.
 def get_severity_priority(severity: str) -> int:
     """
     Get priority level for a severity (lower = higher priority).
@@ -366,6 +382,7 @@ def get_severity_priority(severity: str) -> int:
     Returns:
         Priority integer (1-4)
     """
+    # Prepare priorities for the next step.
     priorities = {
         'CRITICAL': 1,
         'HIGH': 2,

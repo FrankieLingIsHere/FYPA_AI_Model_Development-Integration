@@ -1,13 +1,18 @@
+# Readability: Test setup: document the contract this file protects.
 import os
 from pathlib import Path
 import unittest
 
 
+# Prepare root for the next step.
 ROOT = Path(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 
+# Section: group report routing static test state and behaviour in one readable unit.
 class ReportRoutingStaticTest(unittest.TestCase):
+    # Section: run the test report origin routing helpers exist workflow with clear inputs and outputs.
     def test_report_origin_routing_helpers_exist(self):
+        # Prepare api js for the next step.
         api_js = (ROOT / 'frontend' / 'js' / 'api.js').read_text(encoding='utf-8')
         reports_js = (ROOT / 'frontend' / 'js' / 'pages' / 'reports.js').read_text(encoding='utf-8')
         app_js = (ROOT / 'frontend' / 'js' / 'app.js').read_text(encoding='utf-8')
@@ -17,6 +22,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('resolveReportAssetUrl(url, sourceHint = null)', api_js)
         self.assertIn("scope === 'cloud' || scope === 'synced_local'", api_js)
         self.assertIn('configuredCloudBase && configuredCloudBase === normalized', api_js)
+        # Trigger the side effect required for this stage.
         self.assertIn("API.getImageUrl(violation.report_id, 'annotated.jpg', violation)", reports_js)
         self.assertIn('API.resolveReportAssetUrl', reports_js)
         self.assertIn('this.openReport(violation.report_id, violation)', reports_js)
@@ -26,8 +32,10 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('skipRemoteMerge: true', reports_js)
         self.assertIn("renderReportsListMarkup()", reports_js)
         self.assertIn("API.warmDashboardCaches({ reason: 'analytics-mount'", analytics_js)
+        # Trigger the side effect required for this stage.
         self.assertIn("renderCachedDataIfAvailable()", analytics_js)
 
+    # Section: run the test local mode metrics use cloud and local fetches workflow with clear inputs and outputs.
     def test_local_mode_metrics_use_cloud_and_local_fetches(self):
         api_js = (ROOT / 'frontend' / 'js' / 'api.js').read_text(encoding='utf-8')
 
@@ -35,24 +43,29 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('calculateStatsFromViolations(merged)', api_js)
         self.assertIn('this.mergeLocalReportDrafts(merged, safeLimit)', api_js)
         self.assertIn('cached_rows: this.stripLocalDraftRuntimeFields(merged)', api_js)
+        # Trigger the side effect required for this stage.
         self.assertNotIn('return readyCount || list.length', api_js)
         self.assertIn("status === 'completed'", api_js)
         self.assertIn("!!item.local_report_url", api_js)
 
+    # Section: run the test backend stats scope matches cloud staging semantics workflow with clear inputs and outputs.
     def test_backend_stats_scope_matches_cloud_staging_semantics(self):
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
 
         self.assertIn("active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))", casm_app)
         self.assertIn("explicit_scope == 'synced_local'", casm_app)
+        # Trigger the side effect required for this stage.
         self.assertIn("active_profile == 'cloud' and has_local_artifacts and not is_local_device", casm_app)
         self.assertIn('return \'cloud\'', casm_app)
 
+    # Section: run the test local realtime uses sse and backend push rows workflow with clear inputs and outputs.
     def test_local_realtime_uses_sse_and_backend_push_rows(self):
         realtime_js = (ROOT / 'frontend' / 'js' / 'realtime.js').read_text(encoding='utf-8')
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
         supabase_report_generator = (ROOT / 'pipeline' / 'backend' / 'core' / 'supabase_report_generator.py').read_text(encoding='utf-8')
 
         self.assertIn("host === 'localhost'", realtime_js)
+        # Trigger the side effect required for this stage.
         self.assertIn('return false;', realtime_js)
         self.assertIn('_push_realtime_report_event(preliminary_metadata', casm_app)
         self.assertIn("_push_realtime_report_event(realtime_metadata, event_type='report_status')", casm_app)
@@ -62,6 +75,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("'status_sequence': status_sequence", casm_app)
         self.assertIn('normalizeStatusSequence(sequence)', reports_js := (ROOT / 'frontend' / 'js' / 'pages' / 'reports.js').read_text(encoding='utf-8'))
         self.assertIn('display_status_until', reports_js)
+        # Trigger the side effect required for this stage.
         self.assertIn('minGeneratingDisplayMs', reports_js)
         self.assertIn("def _signal_local_report_ready(reason: str = 'local_report_html_ready')", casm_app)
         self.assertIn("'report_openable_after_seconds'", casm_app)
@@ -74,7 +88,9 @@ class ReportRoutingStaticTest(unittest.TestCase):
             'Report-ready callback must run before validation/upload/persistence work',
         )
 
+    # Section: run the test local notifications survive initial load and preliminary rows workflow with clear inputs and outputs.
     def test_local_notifications_survive_initial_load_and_preliminary_rows(self):
+        # Prepare realtime js for the next step.
         realtime_js = (ROOT / 'frontend' / 'js' / 'realtime.js').read_text(encoding='utf-8')
         monitor_js = (ROOT / 'frontend' / 'js' / 'violation-monitor.js').read_text(encoding='utf-8')
 
@@ -84,6 +100,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('isLifecycleEventDuringSession(violation)', monitor_js)
         self.assertNotIn('NEW real-time violation arrived during initial load', monitor_js)
         self.assertIn('emitViolationDetectedNotifications(payload)', realtime_js)
+        # Trigger the side effect required for this stage.
         self.assertIn('eventType === \'violation_detected\'', realtime_js)
         self.assertIn('eventEpoch >= this.sessionStartedAtMs', realtime_js)
         self.assertIn('forwardPayloadToViolationMonitor(payload)', realtime_js)
@@ -93,16 +110,19 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('ViolationMonitor.applyRealtimePayload(payload)', realtime_js)
         self.assertNotIn("ViolationMonitor.checkForNewViolations({ noCache: true, reason: 'realtime-update' })", realtime_js)
         self.assertIn('this.fetchRealtimeSnapshot({ fresh: true })', realtime_js)
+        # Trigger the side effect required for this stage.
         self.assertIn('fresh=1', realtime_js)
         self.assertIn('rowNeedsLifecycleFallback', realtime_js)
         self.assertIn("progressStatus === 'generating'", realtime_js)
         self.assertIn('!progressRowHasReport', realtime_js)
 
+    # Section: run the test synced local tag survives cloud mode repair workflow with clear inputs and outputs.
     def test_synced_local_tag_survives_cloud_mode_repair(self):
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
         reports_js = (ROOT / 'frontend' / 'js' / 'pages' / 'reports.js').read_text(encoding='utf-8')
         api_js = (ROOT / 'frontend' / 'js' / 'api.js').read_text(encoding='utf-8')
 
+        # Trigger the side effect required for this stage.
         self.assertIn('confirmed_synced_local = _has_confirmed_synced_local_evidence', casm_app)
         self.assertIn("source_scope_marker = 'synced_local'", casm_app)
         self.assertIn("'browser_local_draft_handoff'", casm_app)
@@ -112,6 +132,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("hasDurableLocalOriginEvidence(record = {})", api_js)
         self.assertIn("localMirrorShouldNotOverrideProtectedScope", api_js)
         self.assertIn("!incomingStrongLocalDraft", api_js)
+        # Trigger the side effect required for this stage.
         self.assertIn("&& (!incomingLocalAnchor || localMirrorShouldNotOverrideProtectedScope)", api_js)
         self.assertIn('resolveStableRuntimeSourceScope', reports_js)
         self.assertIn('hasDurableLocalOriginEvidence(record = {})', reports_js)
@@ -121,7 +142,9 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('def _infer_realtime_db_source_scope', casm_app)
         self.assertIn("'db_realtime_snapshot'", casm_app)
 
+    # Section: run the test local sync and generation quality guards workflow with clear inputs and outputs.
     def test_local_sync_and_generation_quality_guards(self):
+        # Prepare casm app for the next step.
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
         caption_image = (ROOT / 'caption_image.py').read_text(encoding='utf-8')
 
@@ -131,6 +154,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('LOCAL_OLLAMA_CPU_VISION_READ_TIMEOUT_SECONDS = max(', caption_image)
         self.assertIn("_safe_int_env('LOCAL_OLLAMA_CPU_VISION_READ_TIMEOUT_SECONDS', 210)", caption_image)
         self.assertIn("else None", caption_image)
+        # Trigger the side effect required for this stage.
         self.assertIn("if OLLAMA_VISION_NUM_GPU is not None:", caption_image)
         self.assertIn('max_tokens=LOCAL_OLLAMA_CAPTION_MAX_TOKENS if strict_local_profile else 650', caption_image)
         self.assertIn('max_tokens=750', caption_image)
@@ -140,6 +164,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("'thinkingBudget': GEMINI_VISION_THINKING_BUDGET", caption_image)
         self.assertNotIn('allow_placeholder_report = True\n\n    logger.info', casm_app)
         self.assertIn('allow_placeholder_report and force_reprocess_requested', casm_app)
+        # Trigger the side effect required for this stage.
         self.assertIn('queue_sync_device_id = f"local_cache_sync_{report_id}_{time.time_ns()}"', casm_app)
         self.assertIn('device_id=queue_sync_device_id', casm_app)
         self.assertIn('allow_local_mode_sync=True', casm_app)
@@ -149,8 +174,10 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('def _normalize_violation_type_label(value: Any) -> str:', casm_app)
         self.assertIn("'ppe_tags': violation_types_raw", casm_app)
         self.assertIn("'missing_ppe': missing_ppe_values", casm_app)
+        # Trigger the side effect required for this stage.
         self.assertIn("for detail_key in ('missing_ppe', 'ppe_tags')", casm_app)
 
+    # Section: run the test live prepare and first run capture guards exist workflow with clear inputs and outputs.
     def test_live_prepare_and_first_run_capture_guards_exist(self):
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
         live_js = (ROOT / 'frontend' / 'js' / 'pages' / 'live.js').read_text(encoding='utf-8')
@@ -158,6 +185,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         infer_image = (ROOT / 'infer_image.py').read_text(encoding='utf-8')
         live_source_adapter = (ROOT / 'pipeline' / 'backend' / 'core' / 'live_source_adapter.py').read_text(encoding='utf-8')
 
+        # Trigger the side effect required for this stage.
         self.assertIn("@app.route('/api/live/prepare', methods=['POST'])", casm_app)
         self.assertIn("_prepare_live_runtime(", casm_app)
         self.assertIn("annotated_frame: Optional[np.ndarray] = None", casm_app)
@@ -167,6 +195,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("Retrying cloud report generation for", casm_app)
         self.assertIn("prepareLiveRuntime(", live_js)
         self.assertIn("void prepareLiveRuntime('live-page-mount');", live_js)
+        # Trigger the side effect required for this stage.
         self.assertIn("backendWebcamDevices.length === 0", live_js)
         self.assertIn("const refreshParam = notify ? '?refresh=1' : ''", live_js)
         self.assertIn("LIVE_PREPARE: '/api/live/prepare'", config_js)
@@ -175,7 +204,9 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('WEBCAM_NEGATIVE_PROBE_CACHE_SECONDS', live_source_adapter)
         self.assertIn('cache_valid = self._webcam_probe_cache_ts > 0', live_source_adapter)
 
+    # Section: run the test cloud heartbeat and provisioning labels stay visible workflow with clear inputs and outputs.
     def test_cloud_heartbeat_and_provisioning_labels_stay_visible(self):
+        # Prepare casm app for the next step.
         casm_app = (ROOT / 'casm_app.py').read_text(encoding='utf-8')
         app_js = (ROOT / 'frontend' / 'js' / 'app.js').read_text(encoding='utf-8')
         settings_js = (ROOT / 'frontend' / 'js' / 'settings-modal.js').read_text(encoding='utf-8')
@@ -185,6 +216,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("'matches_requested_machine': bool(matched_requested_machine)", casm_app)
         self.assertIn("heartbeat_summary.get('matches_requested_machine', True)", casm_app)
         self.assertIn("provision_status = 'idle'", casm_app)
+        # Trigger the side effect required for this stage.
         self.assertIn('def _send_local_mode_cloud_heartbeat_background', casm_app)
         self.assertIn("reason='startup-begin'", casm_app)
         self.assertIn("reason='startup-ready'", casm_app)
@@ -194,6 +226,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('scheduleProvisioningHeartbeatRefreshBurst', app_js)
         self.assertIn('PROVISIONING_HEARTBEAT_FAST_FOLLOWUP_DELAYS_MS', app_js)
         self.assertIn('provisioningHeartbeatRefreshBurstBusy', app_js)
+        # Trigger the side effect required for this stage.
         self.assertIn('shouldExpectReadyHeartbeat', app_js)
         self.assertIn('heartbeatMatchesThisMachine', app_js)
         self.assertIn('online-heartbeat-followup', app_js)
@@ -203,6 +236,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('releaseManualLocalHoldForReconnect', app_js)
         self.assertIn("Network restored. Returning to CLOUD mode and syncing local reports.", app_js)
         self.assertIn("const recoveredFromOffline = manager.lastEvaluatedNetworkState === 'network-offline'", app_js)
+        # Trigger the side effect required for this stage.
         self.assertIn("manualProfile === 'local' && options.allowWhileLocal !== true", app_js)
         self.assertIn('allowWhileLocal: true', app_js)
         self.assertNotIn("(this.currentMode === 'local' || manualProfile === 'local') && options.allowWhileLocal !== true", app_js)
@@ -212,6 +246,7 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn('setTimeout(tick, 800)', settings_js)
         self.assertIn('shouldExpectReadyHeartbeat', settings_js)
         self.assertIn('heartbeatMatchesThisMachine', settings_js)
+        # Trigger the side effect required for this stage.
         self.assertIn('setProviderProfileManualLock', settings_js)
         self.assertIn('Request Reprovisioning', settings_js)
         self.assertIn('Re-Validate Provisioning', settings_js)
@@ -221,11 +256,14 @@ class ReportRoutingStaticTest(unittest.TestCase):
         self.assertIn("'LOCAL_REPORT_ALLOW_NLP_FALLBACK', 'false'", casm_app)
         self.assertIn("'LOCAL_REPORT_RULE_BASED_FAST_PATH', 'false'", report_generator)
         self.assertIn("OLLAMA_FORCE_LOCAL_READ_TIMEOUT_SECONDS', '150'", report_generator)
+        # Trigger the side effect required for this stage.
         self.assertIn('OLLAMA_FORCE_LOCAL_JSON_SCHEMA', report_generator)
         self.assertIn('def _build_ollama_report_json_schema', report_generator)
         self.assertIn('getSyncInfo(violation', reports_js)
         self.assertIn('Sync queued', reports_js)
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == '__main__':
+    # Trigger the side effect required for this stage.
     unittest.main(verbosity=2)

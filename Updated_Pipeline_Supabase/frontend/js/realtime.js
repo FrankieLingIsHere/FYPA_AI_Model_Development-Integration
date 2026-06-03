@@ -1,3 +1,4 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 // Realtime SSE manager for automatic UI synchronization
 const RealtimeSync = {
     source: null,
@@ -22,6 +23,7 @@ const RealtimeSync = {
     supabaseDisabledUntil: 0,
 
     start() {
+        // Choose the correct browser state branch before continuing.
         if (this.started) return;
         this.started = true;
         this.sessionStartedAtMs = Date.now();
@@ -47,6 +49,7 @@ const RealtimeSync = {
         this.started = false;
         this.mode = 'offline';
         this.setConnectionState(false, 'offline');
+        // Choose the correct browser state branch before continuing.
         if (this.reconnectTimer) {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = null;
@@ -59,13 +62,16 @@ const RealtimeSync = {
     },
 
     connect() {
+        // Choose the correct browser state branch before continuing.
         if (!this.started) return;
 
         this.setConnectionState(false, 'reconnecting');
 
         if (this.shouldUseSupabaseRealtime()) {
             const connected = this.connectSupabaseRealtime();
+            // Choose the correct browser state branch before continuing.
             if (connected) {
+                // Return the prepared value to the caller.
                 return;
             }
         }
@@ -77,6 +83,7 @@ const RealtimeSync = {
         this.mode = 'sse';
         this.disconnectSupabase();
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const url = API.getRealtimeStreamUrl();
             this.source = new EventSource(url);
@@ -109,7 +116,9 @@ const RealtimeSync = {
 
     shouldUseSupabaseRealtime() {
         const cfg = API.getSupabaseRealtimeConfig();
+        // Choose the correct browser state branch before continuing.
         if (Date.now() < this.supabaseDisabledUntil) {
+            // Return the prepared value to the caller.
             return false;
         }
         try {
@@ -119,11 +128,13 @@ const RealtimeSync = {
             const resolved = new URL(activeBase || window.location.origin, window.location.origin);
             const host = String(resolved.hostname || '').toLowerCase();
             if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') {
+                // Return the prepared value to the caller.
                 return false;
             }
         } catch (error) {
             // If URL parsing fails, fall through to the normal capability check.
         }
+        // Return the prepared value to the caller.
         return !!(window.supabase && cfg.url && cfg.anonKey);
     },
 
@@ -141,9 +152,12 @@ const RealtimeSync = {
     },
 
     connectSupabaseRealtime() {
+        // Keep this browser operation recoverable if it fails.
         try {
             const cfg = API.getSupabaseRealtimeConfig();
+            // Choose the correct browser state branch before continuing.
             if (!window.supabase || !cfg.url || !cfg.anonKey) {
+                // Return the prepared value to the caller.
                 return false;
             }
 
@@ -180,12 +194,14 @@ const RealtimeSync = {
                 })
                 .subscribe((status) => {
                     const normalized = String(status || '').toUpperCase();
+                    // Choose the correct browser state branch before continuing.
                     if (normalized === 'SUBSCRIBED') {
                         this.supabaseFailureCount = 0;
                         this.supabaseDisabledUntil = 0;
                         this.reconnectDelayMs = 2000;
                         this.setConnectionState(true, 'connected');
                         this.updateTransportHint('Supabase WS');
+                        // Return the prepared value to the caller.
                         return;
                     }
 
@@ -195,6 +211,7 @@ const RealtimeSync = {
                     }
                 });
 
+            // Return the prepared value to the caller.
             return true;
         } catch (error) {
             console.error('Supabase realtime init failed:', error);
@@ -209,6 +226,7 @@ const RealtimeSync = {
     },
 
     disconnectSSEOnly() {
+        // Choose the correct browser state branch before continuing.
         if (this.source) {
             this.source.close();
             this.source = null;
@@ -225,6 +243,7 @@ const RealtimeSync = {
     async fetchRealtimeSnapshot(options = {}) {
         const now = Date.now();
         const fresh = !!(options && options.fresh);
+        // Choose the correct browser state branch before continuing.
         if (this.pendingSnapshotFetch) return;
         if (!fresh && now - this.lastSnapshotAt < 700) return;
 
@@ -232,6 +251,7 @@ const RealtimeSync = {
         this.lastSnapshotAt = now;
 
         try {
+            // Prepare snapshot url for the next UI or data step.
             let snapshotUrl = API.getRealtimeSnapshotUrl();
             if (fresh) {
                 const separator = snapshotUrl.includes('?') ? '&' : '?';
@@ -259,6 +279,7 @@ const RealtimeSync = {
 
     updateTransportHint(label) {
         const badge = document.getElementById('realtimeStatusBadge');
+        // Choose the correct browser state branch before continuing.
         if (!badge) return;
         badge.title = `Realtime sync active (${label})`;
     },
@@ -276,6 +297,7 @@ const RealtimeSync = {
 
     updateBadge(mode) {
         const badge = document.getElementById('realtimeStatusBadge');
+        // Choose the correct browser state branch before continuing.
         if (!badge) return;
 
         const icon = badge.querySelector('i');
@@ -285,22 +307,26 @@ const RealtimeSync = {
 
         if (mode === 'connected') {
             badge.classList.add('realtime-live');
+            // Choose the correct browser state branch before continuing.
             if (icon) icon.className = 'fas fa-circle';
             if (text) text.textContent = 'Live';
             badge.title = 'Realtime sync active';
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (mode === 'reconnecting') {
             badge.classList.add('realtime-reconnecting');
             if (icon) icon.className = 'fas fa-circle-notch fa-spin';
             if (text) text.textContent = 'Reconnecting';
             badge.title = 'Realtime reconnect in progress';
+            // Return the prepared value to the caller.
             return;
         }
 
         badge.classList.add('realtime-offline');
         if (icon) icon.className = 'fas fa-triangle-exclamation';
+        // Choose the correct browser state branch before continuing.
         if (text) text.textContent = 'Offline';
         badge.title = 'Realtime unavailable. Polling fallback should be used.';
     },
@@ -311,7 +337,9 @@ const RealtimeSync = {
         this.disconnectSSEOnly();
         this.disconnectSupabase();
 
+        // Choose the correct browser state branch before continuing.
         if (this.reconnectTimer) {
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -324,6 +352,7 @@ const RealtimeSync = {
     },
 
     handleUpdateEvent(event) {
+        // Keep this browser operation recoverable if it fails.
         try {
             const payload = JSON.parse(event.data || '{}');
             this.emitPageUpdate(payload);
@@ -357,10 +386,12 @@ const RealtimeSync = {
 
     emitViolationDetectedNotifications(payload) {
         const reports = Array.isArray(payload && payload.reports) ? payload.reports : [];
+        // Choose the correct browser state branch before continuing.
         if (!reports.length) return;
 
         const nowEpochMs = Date.now();
         Object.keys(this.detectedReportNotifiedAt || {}).forEach((reportId) => {
+            // Choose the correct browser state branch before continuing.
             if (nowEpochMs - Number(this.detectedReportNotifiedAt[reportId] || 0) > 15 * 60 * 1000) {
                 delete this.detectedReportNotifiedAt[reportId];
             }
@@ -374,6 +405,7 @@ const RealtimeSync = {
         };
 
         reports.forEach((row) => {
+            // Choose the correct browser state branch before continuing.
             if (!row || typeof row !== 'object') return;
             const reportId = String(row.report_id || '').trim();
             if (!reportId) return;
@@ -384,7 +416,9 @@ const RealtimeSync = {
             const eventEpoch = getRowEventEpoch(row);
             const happenedAfterPageStart = eventEpoch !== null && eventEpoch >= this.sessionStartedAtMs;
 
+            // Choose the correct browser state branch before continuing.
             if (!isLiveViolationRow || !happenedAfterPageStart) {
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -397,18 +431,22 @@ const RealtimeSync = {
                 violation_summary: row.violation_summary || 'PPE Violation Detected',
             };
 
+            // Keep this browser operation recoverable if it fails.
             try {
+                // Choose the correct browser state branch before continuing.
                 if (
                     typeof ViolationMonitor !== 'undefined'
                     && typeof ViolationMonitor._notifyViolationDetected === 'function'
                 ) {
                     ViolationMonitor._notifyViolationDetected(violation);
+                    // Choose the correct browser state branch before continuing.
                     if (
                         ViolationMonitor.knownViolations
                         && typeof ViolationMonitor.knownViolations.has === 'function'
                         && typeof ViolationMonitor.knownViolations.set === 'function'
                         && !ViolationMonitor.knownViolations.has(reportId)
                     ) {
+                        // Prepare normalized status for the next UI or data step.
                         const normalizedStatus = (
                             typeof ViolationMonitor.normalizeStatusValue === 'function'
                                 ? ViolationMonitor.normalizeStatusValue(row.status, !!row.has_report)
@@ -436,11 +474,13 @@ const RealtimeSync = {
         const reports = Array.isArray(payload.reports) ? payload.reports : [];
         const nowEpochMs = Date.now();
 
+        // Prepare progress for the next UI or data step.
         const progress = (payload && typeof payload === 'object') ? (payload.progress || {}) : {};
         const progressReportId = String(progress.current || '').trim();
         const progressStatus = String(progress.status || '').trim().toLowerCase();
         const progressStep = String(progress.current_step || '').trim();
         const progressReportRow = progressReportId ? reports.find((row) => {
+            // Return the prepared value to the caller.
             return String((row && row.report_id) || '').trim() === progressReportId;
         }) : null;
         const hasProgressReportRow = !!progressReportRow;
@@ -451,8 +491,10 @@ const RealtimeSync = {
             && (progressStatus === 'waiting' || progressStatus === 'processing' || progressStatus === 'generating')
         );
 
+        // Prepare is recent row for the next UI or data step.
         const isRecentRow = (row) => {
             const raw = row && (row.updated_at || row.timestamp);
+            // Choose the correct browser state branch before continuing.
             if (!raw) return false;
             const ts = Date.parse(raw);
             if (!Number.isFinite(ts)) return false;
@@ -462,11 +504,14 @@ const RealtimeSync = {
         const shouldTreatRowAsRecent = (row) => {
             const rowId = String((row && row.report_id) || '').trim();
             if (isActiveProgress && rowId && rowId === progressReportId) {
+                // Return the prepared value to the caller.
                 return true;
             }
+            // Return the prepared value to the caller.
             return isRecentRow(row);
         };
 
+        // Choose the correct browser state branch before continuing.
         if (!this.statusNotificationsHydrated) {
             this.statusNotificationsHydrated = true;
             this.lastProgressReportId = progressReportId || null;
@@ -485,6 +530,7 @@ const RealtimeSync = {
             this.lastProgressReportId = null;
             this.lastProgressStatus = progressStatus || null;
             this.lastProgressStep = progressStep;
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -505,7 +551,9 @@ const RealtimeSync = {
         );
         const allowProgressFallback = !hasProgressReportRow || rowNeedsLifecycleFallback;
 
+        // Choose the correct browser state branch before continuing.
         if (allowProgressFallback) {
+            // Choose the correct browser state branch before continuing.
             if (
                 (progressStatus === 'waiting' || progressStatus === 'processing' || progressStatus === 'generating')
                 && (changedReport || changedStatus)

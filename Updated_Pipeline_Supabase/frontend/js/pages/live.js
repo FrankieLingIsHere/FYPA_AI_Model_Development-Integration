@@ -1,3 +1,4 @@
+// Readability: Page module: organise rendering, user events, and API updates for this view.
 // Live Monitoring Page Component
 const LivePage = {
     depthStatusInterval: null,
@@ -280,6 +281,7 @@ const LivePage = {
         const annotatedResultSection = document.getElementById('annotatedResultSection');
         const annotatedResult = document.getElementById('annotatedResult');
         
+        // Prepare current mode for the next UI or data step.
         let currentMode = 'live';
         let selectedFiles = [];
         let selectedPreviewUrls = [];
@@ -290,6 +292,7 @@ const LivePage = {
         let selectedBrowserDeviceId = '';
         let realsenseAvailable = false;
         let realsenseDeviceName = 'Intel RealSense';
+        // Prepare realsense capabilities for the next UI or data step.
         let realsenseCapabilities = {};
         let edgeRealsenseAvailable = false;
         let edgeRealsenseDeviceName = 'RealSense (Edge Relay)';
@@ -307,12 +310,14 @@ const LivePage = {
                 const resolved = new URL(API_CONFIG.BASE_URL, window.location.origin);
                 const host = String(resolved.hostname || '').toLowerCase();
                 const isLocalHost = host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host.endsWith('.local');
+                // Return the prepared value to the caller.
                 return !isLocalHost;
             } catch (error) {
                 return false;
             }
         };
         const permissionsApiSupported = !!(navigator.permissions && navigator.permissions.query);
+        // Prepare phone permission state for the next UI or data step.
         let phonePermissionState = phoneCameraSupported ? 'prompt' : 'unavailable';
         let useBrowserCaptureRuntime = false;
         const phoneCaptureCanvas = document.createElement('canvas');
@@ -326,6 +331,7 @@ const LivePage = {
             conf: 0.08,
             jpegQuality: 0.68
         };
+        // Prepare live runtime prepared for the next UI or data step.
         let liveRuntimePrepared = false;
         let liveRuntimePreparePromise = null;
         let phoneInferenceRunId = 0;
@@ -347,12 +353,14 @@ const LivePage = {
         const providerRuntimeActive = document.getElementById('providerRuntimeActive');
         const providerRuntimeCapacity = document.getElementById('providerRuntimeCapacity');
 
+        // Prepare build live stream url for the next UI or data step.
         const buildLiveStreamUrl = () => {
             const streamUrl = new URL(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STREAM}`, window.location.origin);
             streamUrl.searchParams.set('t', Date.now().toString());
             streamUrl.searchParams.set('conf', String(laptopLiveStreamConfig.conf));
             streamUrl.searchParams.set('fps', String(laptopLiveStreamConfig.fps));
             streamUrl.searchParams.set('quality', String(laptopLiveStreamConfig.quality));
+            // Return the prepared value to the caller.
             return streamUrl.toString();
         };
 
@@ -363,11 +371,14 @@ const LivePage = {
             renderSourceToggle();
         };
 
+        // Prepare update phone permission badge for the next UI or data step.
         const updatePhonePermissionBadge = () => {
+            // Choose the correct browser state branch before continuing.
             if (!phoneCameraPermissionBadge) return;
 
             if (!phoneCameraSupported) {
                 phoneCameraPermissionBadge.style.display = 'none';
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -408,11 +419,14 @@ const LivePage = {
             phoneCameraPermissionBadge.style.gap = '0.35rem';
         };
 
+        // Prepare init phone permission watcher for the next UI or data step.
         const initPhonePermissionWatcher = async () => {
+            // Choose the correct browser state branch before continuing.
             if (!phoneCameraSupported) return;
             if (!permissionsApiSupported) {
                 phonePermissionState = 'prompt';
                 updatePhonePermissionBadge();
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -433,7 +447,9 @@ const LivePage = {
             }
         };
 
+        // Prepare stop phone inference loop for the next UI or data step.
         const stopPhoneInferenceLoop = () => {
+            // Choose the correct browser state branch before continuing.
             if (this.phoneInferenceInterval) {
                 clearInterval(this.phoneInferenceInterval);
                 this.phoneInferenceInterval = null;
@@ -445,15 +461,18 @@ const LivePage = {
         const clearLiveOverlayCanvas = () => {
             if (!liveOverlayCanvas) return;
             const ctx = liveOverlayCanvas.getContext('2d');
+            // Choose the correct browser state branch before continuing.
             if (ctx) {
                 ctx.clearRect(0, 0, liveOverlayCanvas.width || 0, liveOverlayCanvas.height || 0);
             }
             liveOverlayCanvas.style.display = 'none';
         };
 
+        // Prepare stop phone camera track for the next UI or data step.
         const stopPhoneCameraTrack = () => {
             if (this.phoneCameraStream) {
                 this.phoneCameraStream.getTracks().forEach((track) => {
+                    // Keep this browser operation recoverable if it fails.
                     try {
                         track.stop();
                     } catch (error) {
@@ -463,7 +482,9 @@ const LivePage = {
                 this.phoneCameraStream = null;
             }
 
+            // Choose the correct browser state branch before continuing.
             if (phoneCameraPreview) {
+                // Keep this browser operation recoverable if it fails.
                 try {
                     phoneCameraPreview.pause();
                 } catch (error) {
@@ -476,9 +497,12 @@ const LivePage = {
             clearLiveOverlayCanvas();
         };
 
+        // Prepare normalize camera index for the next UI or data step.
         const normalizeCameraIndex = (value, fallback = 0) => {
             const parsed = Number.parseInt(value, 10);
+            // Choose the correct browser state branch before continuing.
             if (Number.isFinite(parsed) && parsed >= 0) {
+                // Return the prepared value to the caller.
                 return parsed;
             }
             return fallback;
@@ -497,6 +521,7 @@ const LivePage = {
                     .sort((a, b) => a.index - b.index);
             }
 
+            // Choose the correct browser state branch before continuing.
             if (payload && payload.camera_index !== null && payload.camera_index !== undefined) {
                 selectedCameraIndex = normalizeCameraIndex(payload.camera_index, selectedCameraIndex);
             } else if (backendWebcamDevices.length > 0 && !backendWebcamDevices.some((d) => d.index === selectedCameraIndex)) {
@@ -504,9 +529,11 @@ const LivePage = {
             }
         };
 
+        // Prepare get browser device label for the next UI or data step.
         const getBrowserDeviceLabel = (device, index) => {
             const label = String((device && device.label) || '').trim();
             if (label) return label;
+            // Return the prepared value to the caller.
             return `Browser Camera ${index + 1}`;
         };
 
@@ -517,8 +544,11 @@ const LivePage = {
             return getBrowserDeviceLabel(browserVideoDevices[idx], idx);
         };
 
+        // Prepare is depth source selected for the next UI or data step.
         const isDepthSourceSelected = () => {
+            // Choose the correct browser state branch before continuing.
             if (selectedSource === 'realsense') {
+                // Return the prepared value to the caller.
                 return realsenseAvailable;
             }
             if (selectedSource === 'edge_realsense') {
@@ -527,8 +557,11 @@ const LivePage = {
             return false;
         };
 
+        // Prepare get current source label for the next UI or data step.
         const getCurrentSourceLabel = () => {
+            // Choose the correct browser state branch before continuing.
             if (selectedSource === 'realsense') {
+                // Return the prepared value to the caller.
                 return realsenseDeviceName || 'RealSense';
             }
             if (selectedSource === 'edge_realsense') {
@@ -540,7 +573,9 @@ const LivePage = {
             return `Webcam ${selectedCameraIndex}`;
         };
 
+        // Prepare has capability payload for the next UI or data step.
         const hasCapabilityPayload = (caps) => {
+            // Return the prepared value to the caller.
             return !!(caps && Object.prototype.hasOwnProperty.call(caps, 'sdk_available'));
         };
 
@@ -552,7 +587,9 @@ const LivePage = {
             );
         };
 
+        // Prepare can attempt edge realsense for the next UI or data step.
         const canAttemptEdgeRealsense = () => {
+            // Return the prepared value to the caller.
             return edgeRealsenseAvailable || hasCapabilityPayload(edgeRealsenseCapabilities);
         };
 
@@ -563,6 +600,7 @@ const LivePage = {
         const shouldPreferBrowserCaptureSource = () => {
             if (!browserCameraSupported) return false;
             if (selectedSource === 'phone' && phoneCameraSupported) return true;
+            // Choose the correct browser state branch before continuing.
             if (
                 selectedSource === 'webcam'
                 && (
@@ -574,7 +612,9 @@ const LivePage = {
             return false;
         };
 
+        // Prepare render backend webcam selector for the next UI or data step.
         const renderBackendWebcamSelector = () => {
+            // Choose the correct browser state branch before continuing.
             if (!webcamDeviceSelect || !refreshWebcamDevicesBtn) return;
 
             const showSelector = (
@@ -586,6 +626,7 @@ const LivePage = {
             if (!showSelector) {
                 webcamDeviceSelect.style.display = 'none';
                 refreshWebcamDevicesBtn.style.display = 'none';
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -593,6 +634,7 @@ const LivePage = {
             refreshWebcamDevicesBtn.style.display = 'inline-flex';
             webcamDeviceSelect.innerHTML = '';
 
+            // Choose the correct browser state branch before continuing.
             if (!backendWebcamDevices.length) {
                 const fallback = document.createElement('option');
                 fallback.value = String(selectedCameraIndex);
@@ -600,6 +642,7 @@ const LivePage = {
                 webcamDeviceSelect.appendChild(fallback);
                 webcamDeviceSelect.value = String(selectedCameraIndex);
                 webcamDeviceSelect.disabled = true;
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -611,6 +654,7 @@ const LivePage = {
                 webcamDeviceSelect.appendChild(option);
             });
 
+            // Choose the correct browser state branch before continuing.
             if (!backendWebcamDevices.some((d) => d.index === selectedCameraIndex)) {
                 selectedCameraIndex = backendWebcamDevices[0].index;
             }
@@ -618,9 +662,11 @@ const LivePage = {
             webcamDeviceSelect.value = String(selectedCameraIndex);
         };
 
+        // Prepare render browser camera selector for the next UI or data step.
         const renderBrowserCameraSelector = () => {
             if (!browserCameraSelect || !refreshBrowserCameraBtn) return;
 
+            // Prepare show selector for the next UI or data step.
             const showSelector = (
                 !APP_STATE.liveStreamActive &&
                 selectedSource === 'webcam' &&
@@ -630,6 +676,7 @@ const LivePage = {
             if (!showSelector) {
                 browserCameraSelect.style.display = 'none';
                 refreshBrowserCameraBtn.style.display = 'none';
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -656,10 +703,13 @@ const LivePage = {
             selectedBrowserDeviceId = browserCameraSelect.value || '';
         };
 
+        // Prepare refresh browser camera options for the next UI or data step.
         const refreshBrowserCameraOptions = async () => {
+            // Choose the correct browser state branch before continuing.
             if (!browserCameraSupported || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
                 browserVideoDevices = [];
                 renderBrowserCameraSelector();
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -673,10 +723,13 @@ const LivePage = {
             renderBrowserCameraSelector();
         };
 
+        // Prepare refresh backend webcam options for the next UI or data step.
         const refreshBackendWebcamOptions = async (notify = false) => {
+            // Keep this browser operation recoverable if it fails.
             try {
                 const refreshParam = notify ? '?refresh=1' : '';
                 const resp = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_DEVICES}${refreshParam}`);
+                // Choose the correct browser state branch before continuing.
                 if (!resp.ok) {
                     throw new Error('Failed to load backend webcam devices');
                 }
@@ -691,14 +744,17 @@ const LivePage = {
             } catch (error) {
                 console.error('Error refreshing backend webcam devices:', error);
                 renderBackendWebcamSelector();
+                // Choose the correct browser state branch before continuing.
                 if (notify) {
                     showNotification('Unable to refresh backend webcam list', 'warning');
                 }
             }
         };
 
+        // Prepare get available sources for the next UI or data step.
         const getAvailableSources = () => {
             const sources = ['webcam'];
+            // Choose the correct browser state branch before continuing.
             if (canAttemptRealsenseUsb()) {
                 sources.push('realsense');
             }
@@ -711,8 +767,10 @@ const LivePage = {
             return sources;
         };
 
+        // Prepare is webcam unavailable message for the next UI or data step.
         const isWebcamUnavailableMessage = (message) => {
             const text = String(message || '').toLowerCase();
+            // Return the prepared value to the caller.
             return text.includes('failed to open webcam') ||
                 text.includes('could not open webcam') ||
                 (text.includes('webcam') && (text.includes('failed') || text.includes('unavailable')));
@@ -722,8 +780,11 @@ const LivePage = {
             return !!(window && window.__CASM_ALLOW_AUTOMATION_WEBCAM_FALLBACK === true);
         };
 
+        // Prepare prepare live runtime for the next UI or data step.
         const prepareLiveRuntime = async (reason = 'live-page') => {
+            // Choose the correct browser state branch before continuing.
             if (liveRuntimePrepared) {
+                // Return the prepared value to the caller.
                 return { success: true, prepared: { cached: true } };
             }
             if (liveRuntimePreparePromise) {
@@ -743,6 +804,7 @@ const LivePage = {
                         })
                     });
 
+                    // Prepare payload for the next UI or data step.
                     let payload = null;
                     try {
                         payload = await response.json();
@@ -755,6 +817,7 @@ const LivePage = {
                         liveRuntimePrepared = true;
                     }
 
+                    // Return the prepared value to the caller.
                     return payload || { success: false };
                 } catch (error) {
                     console.debug('Live runtime prepare skipped:', error);
@@ -766,17 +829,21 @@ const LivePage = {
                 }
             })();
 
+            // Return the prepared value to the caller.
             return liveRuntimePreparePromise;
         };
 
+        // Prepare start browser capture session for the next UI or data step.
         const startBrowserCaptureSession = async (usingPhoneSource, noticePrefix = '') => {
             if (APP_STATE.liveStreamActive) {
                 startBtn.innerHTML = '<i class="fas fa-play"></i> Start';
+                // Return the prepared value to the caller.
                 return;
             }
 
             await prepareLiveRuntime(usingPhoneSource ? 'browser-phone-start' : 'browser-webcam-start');
 
+            // Choose the correct browser state branch before continuing.
             if (usingPhoneSource) {
                 phonePermissionState = 'prompt';
                 updatePhonePermissionBadge();
@@ -787,6 +854,7 @@ const LivePage = {
                 height: { ideal: 720 }
             };
 
+            // Choose the correct browser state branch before continuing.
             if (!usingPhoneSource && selectedBrowserDeviceId) {
                 webcamConstraints.deviceId = { exact: selectedBrowserDeviceId };
             }
@@ -800,12 +868,14 @@ const LivePage = {
                 : webcamConstraints;
 
             let stream;
+            // Keep this browser operation recoverable if it fails.
             try {
                 stream = await navigator.mediaDevices.getUserMedia({
                     video: videoConstraints,
                     audio: false
                 });
             } catch (error) {
+                // Prepare selected device unavailable for the next UI or data step.
                 const selectedDeviceUnavailable = (
                     !usingPhoneSource &&
                     !!selectedBrowserDeviceId &&
@@ -824,6 +894,7 @@ const LivePage = {
                     audio: false
                 });
                 selectedBrowserDeviceId = '';
+                // Choose the correct browser state branch before continuing.
                 if (browserCameraSelect) {
                     browserCameraSelect.value = '';
                 }
@@ -834,8 +905,10 @@ const LivePage = {
             useBrowserCaptureRuntime = true;
 
             const activeTrack = stream.getVideoTracks && stream.getVideoTracks()[0];
+            // Choose the correct browser state branch before continuing.
             if (activeTrack && typeof activeTrack.getSettings === 'function') {
                 const activeSettings = activeTrack.getSettings() || {};
+                // Choose the correct browser state branch before continuing.
                 if (!usingPhoneSource && activeSettings.deviceId) {
                     selectedBrowserDeviceId = activeSettings.deviceId;
                 }
@@ -848,6 +921,7 @@ const LivePage = {
                 updatePhonePermissionBadge();
             }
 
+            // Choose the correct browser state branch before continuing.
             if (phoneCameraPreview) {
                 phoneCameraPreview.srcObject = stream;
                 await phoneCameraPreview.play();
@@ -878,7 +952,9 @@ const LivePage = {
             showNotification(`${noticePrefix}${successText}`.trim(), 'success');
         };
 
+        // Prepare capture phone frame for inference for the next UI or data step.
         const capturePhoneFrameForInference = async () => {
+            // Choose the correct browser state branch before continuing.
             if (!this.phoneCameraStream || !phoneCameraPreview) return;
             if (this.phoneInferenceBusy) return;
             if (phoneCameraPreview.readyState < 2) return;
@@ -893,6 +969,7 @@ const LivePage = {
             phoneCaptureCanvas.width = width;
             phoneCaptureCanvas.height = height;
             const ctx = phoneCaptureCanvas.getContext('2d');
+            // Choose the correct browser state branch before continuing.
             if (!ctx) return;
 
             ctx.drawImage(phoneCameraPreview, 0, 0, width, height);
@@ -904,6 +981,7 @@ const LivePage = {
 
             this.phoneInferenceBusy = true;
 
+            // Keep this browser operation recoverable if it fails.
             try {
                 const formData = new FormData();
                 formData.append('image', blob, 'phone_live.jpg');
@@ -914,7 +992,9 @@ const LivePage = {
                     body: formData
                 });
 
+                // Choose the correct browser state branch before continuing.
                 if (runId !== phoneInferenceRunId || !APP_STATE.liveStreamActive || !shouldUseBrowserCaptureSource()) {
+                    // Return the prepared value to the caller.
                     return;
                 }
 
@@ -926,6 +1006,7 @@ const LivePage = {
                 if (runId !== phoneInferenceRunId || !APP_STATE.liveStreamActive || !shouldUseBrowserCaptureSource()) {
                     return;
                 }
+                // Choose the correct browser state branch before continuing.
                 if (result && Array.isArray(result.detections) && liveOverlayCanvas && phoneCameraPreview) {
                     const ctx = liveOverlayCanvas.getContext('2d');
                     const videoW = phoneCameraPreview.videoWidth || width;
@@ -934,6 +1015,7 @@ const LivePage = {
                     liveOverlayCanvas.height = videoH;
                     liveOverlayCanvas.style.display = 'block';
 
+                    // Choose the correct browser state branch before continuing.
                     if (ctx) {
                         ctx.clearRect(0, 0, videoW, videoH);
                         ctx.lineWidth = 2;
@@ -941,6 +1023,7 @@ const LivePage = {
 
                         result.detections.forEach((det) => {
                             const bbox = det.bbox || [];
+                            // Choose the correct browser state branch before continuing.
                             if (bbox.length !== 4) return;
                             const [x1, y1, x2, y2] = bbox;
                             const confidence = Number(det.score ?? det.confidence ?? 0);
@@ -969,10 +1052,13 @@ const LivePage = {
                         ctx.fillText(hudLabel, 17, 27);
                     }
                 }
+                // Choose the correct browser state branch before continuing.
                 if (result && result.violations_detected) {
                     const reportQueued = result.report_queued === true;
+                    // Choose the correct browser state branch before continuing.
                     if (!reportQueued) {
                         const now = Date.now();
+                        // Choose the correct browser state branch before continuing.
                         if (now - this.phoneLastViolationNoticeAt > 10000) {
                             this.phoneLastViolationNoticeAt = now;
                             showNotification(`Phone camera: ${result.violation_count || 1} violation(s) detected`, 'warning');
@@ -997,6 +1083,7 @@ const LivePage = {
                         const friendlyMissing = detectedTypes.map(t => {
                             const stripped = t.replace(/^no[-_]?/i, '').trim();
                             if (!stripped) return t;
+                            // Return the prepared value to the caller.
                             return stripped.split(/[-_\s]+/).map(w =>
                                 w.length ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w
                             ).join(' ');
@@ -1021,7 +1108,9 @@ const LivePage = {
                                 : 'PPE Violation Detected'
                         };
 
+                        // Keep this browser operation recoverable if it fails.
                         try {
+                            // Prepare should persist local draft for the next UI or data step.
                             const shouldPersistLocalDraft = (
                                 typeof API !== 'undefined'
                                 && typeof API.shouldPersistLocalReportDraft === 'function'
@@ -1074,6 +1163,7 @@ const LivePage = {
                                 ViolationMonitor._notifyViolationDetected(synthViolation);
                                 monitorNotified = true;
                             }
+                            // Choose the correct browser state branch before continuing.
                             if (!monitorNotified
                                 && typeof window !== 'undefined'
                                 && window.AudioAlert
@@ -1085,6 +1175,7 @@ const LivePage = {
                             console.warn('Could not fire immediate violation notice:', notifyErr);
                         }
                     }
+                    // Choose the correct browser state branch before continuing.
                     if (result.report_queued === false) {
                         const rawReason = String(result.report_queue_reason || '').trim().toLowerCase();
                         // Dedup / cooldown / already-processing are *normal* outcomes
@@ -1105,10 +1196,12 @@ const LivePage = {
                             'dedup',
                             'already_processing'
                         ]);
+                        // Choose the correct browser state branch before continuing.
                         if (!benignReasons.has(rawReason)) {
                             const reason = rawReason || 'queue_unavailable';
                             const shouldNotifySuppression =
                                 !this.reportQueueSuppressionActive || this.reportQueueSuppressionReason !== reason;
+                            // Choose the correct browser state branch before continuing.
                             if (shouldNotifySuppression) {
                                 showNotification(`Violation detected but report not queued (${reason})`, 'warning');
                                 this.reportQueueSuppressionActive = true;
@@ -1123,7 +1216,9 @@ const LivePage = {
                 this.phoneInferenceBusy = false;
             }
         };
+        // Section: handle the render capabilities workflow.
         function renderCapabilities() {
+            // Choose the correct browser state branch before continuing.
             if (!capabilitiesContainer) return;
 
             const hasAnyRealsense = realsenseAvailable || edgeRealsenseAvailable;
@@ -1145,6 +1240,7 @@ const LivePage = {
                     ${edgeReasonBadge}
                     ${hostedBadge}
                 `;
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -1173,18 +1269,23 @@ const LivePage = {
             `;
         }
 
+        // Section: handle the hide depth widgets workflow.
         function hideDepthWidgets() {
+            // Choose the correct browser state branch before continuing.
             if (depthHud) depthHud.style.display = 'none';
             if (depthPreviewBox) depthPreviewBox.style.display = 'none';
         }
 
+        // Section: handle the update depth widgets workflow.
         function updateDepthWidgets(depthTelemetry) {
             const showDepth = APP_STATE.liveStreamActive && isDepthSourceSelected();
             if (!showDepth || !depthTelemetry || !depthTelemetry.depth_available) {
                 hideDepthWidgets();
+                // Return the prepared value to the caller.
                 return;
             }
 
+            // Choose the correct browser state branch before continuing.
             if (depthHud) depthHud.style.display = 'block';
             if (depthPreviewBox) depthPreviewBox.style.display = 'block';
 
@@ -1197,18 +1298,22 @@ const LivePage = {
             depthRange.textContent = (minD != null && maxD != null) ? `${minD.toFixed(2)} - ${maxD.toFixed(2)} m` : '-';
             depthConfidence.textContent = confidence != null ? `${Math.round(confidence * 100)}%` : '-';
 
+            // Choose the correct browser state branch before continuing.
             if (depthPreview) {
                 depthPreview.src = `${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_DEPTH_PREVIEW}?t=${Date.now()}`;
             }
         }
 
+        // Section: handle the refresh depth status workflow.
         async function refreshDepthStatus() {
             const shouldPollDepth = APP_STATE.liveStreamActive && isDepthSourceSelected();
             if (!shouldPollDepth) {
                 hideDepthWidgets();
+                // Return the prepared value to the caller.
                 return;
             }
 
+            // Keep this browser operation recoverable if it fails.
             try {
                 const resp = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_DEPTH_STATUS}`);
                 if (!resp.ok) return;
@@ -1218,6 +1323,7 @@ const LivePage = {
                 if (payload.edge_realsense_available !== undefined) {
                     edgeRealsenseAvailable = !!payload.edge_realsense_available;
                 }
+                // Choose the correct browser state branch before continuing.
                 if (payload.edge_realsense_device_name) {
                     edgeRealsenseDeviceName = payload.edge_realsense_device_name;
                 }
@@ -1230,7 +1336,9 @@ const LivePage = {
             }
         }
 
+        // Section: handle the render source toggle workflow.
         function renderSourceToggle() {
+            // Choose the correct browser state branch before continuing.
             if (!sourceToggleBtn) return;
 
             if (selectedSource === 'realsense') {
@@ -1246,7 +1354,9 @@ const LivePage = {
             const canToggle = getAvailableSources().length > 1 && !APP_STATE.liveStreamActive;
             sourceToggleBtn.disabled = !canToggle;
 
+            // Choose the correct browser state branch before continuing.
             if (!canToggle) {
+                // Choose the correct browser state branch before continuing.
                 if (APP_STATE.liveStreamActive) {
                     sourceToggleBtn.title = 'Stop monitoring to switch source';
                 } else if (!realsenseAvailable && !edgeRealsenseAvailable && !phoneCameraSupported) {
@@ -1258,6 +1368,7 @@ const LivePage = {
                 sourceToggleBtn.style.cursor = 'not-allowed';
             } else {
                 const modeLabels = ['Webcam (Near-edge)'];
+                // Choose the correct browser state branch before continuing.
                 if (canAttemptRealsenseUsb()) modeLabels.push(realsenseAvailable ? 'RealSense USB' : 'RealSense USB (try)');
                 if (canAttemptEdgeRealsense()) modeLabels.push(edgeRealsenseAvailable ? 'RealSense Edge Relay' : 'RealSense Edge Relay (try)');
                 if (phoneCameraSupported) modeLabels.push('Phone Camera');
@@ -1266,6 +1377,7 @@ const LivePage = {
                 sourceToggleBtn.style.cursor = 'pointer';
             }
 
+            // Choose the correct browser state branch before continuing.
             if (selectedSource !== 'realsense' && selectedSource !== 'edge_realsense') {
                 hideDepthWidgets();
             }
@@ -1288,6 +1400,7 @@ const LivePage = {
             cardTitle.innerHTML = '<i class="fas fa-video"></i> Live Camera Monitoring';
             
             // Update instructions
+            // Choose the correct browser state branch before continuing.
             if (instructionsList) {
                 instructionsList.innerHTML = `
                     <li>Click the <strong>"Start"</strong> button above to begin live monitoring</li>
@@ -1299,8 +1412,10 @@ const LivePage = {
             }
         }
         
+        // Section: handle the switch to upload mode workflow.
         function switchToUploadMode() {
             // Stop live stream if active
+            // Choose the correct browser state branch before continuing.
             if (APP_STATE.liveStreamActive) {
                 stopLiveStream();
             }
@@ -1316,6 +1431,7 @@ const LivePage = {
             cardTitle.innerHTML = '<i class="fas fa-image"></i> Image Analysis';
             
             // Update instructions
+            // Choose the correct browser state branch before continuing.
             if (instructionsList) {
                 instructionsList.innerHTML = `
                     <li>Click the upload area or <strong>drop an image</strong> to select a file</li>
@@ -1331,9 +1447,12 @@ const LivePage = {
         liveModeBtn.addEventListener('click', switchToLiveMode);
         uploadModeBtn.addEventListener('click', switchToUploadMode);
 
+        // Prepare focus workflow target for the next UI or data step.
         const focusWorkflowTarget = (element) => {
+            // Choose the correct browser state branch before continuing.
             if (!element) return;
             try {
+                // Choose the correct browser state branch before continuing.
                 if (typeof element.setAttribute === 'function' && !element.hasAttribute('tabindex')) {
                     element.setAttribute('tabindex', '-1');
                 }
@@ -1348,8 +1467,10 @@ const LivePage = {
             }
         };
 
+        // Prepare apply assistant intent for the next UI or data step.
         const applyAssistantIntent = (detail = {}) => {
             const mode = String(detail.mode || '').trim().toLowerCase() === 'upload' ? 'upload' : 'live';
+            // Choose the correct browser state branch before continuing.
             if (mode === 'upload') {
                 switchToUploadMode();
             } else {
@@ -1357,9 +1478,11 @@ const LivePage = {
             }
 
             window.setTimeout(() => {
+                // Choose the correct browser state branch before continuing.
                 if (mode === 'upload') {
                     const uploadLabel = uploadContainer ? uploadContainer.querySelector('label[for="imageUpload"]') : null;
                     focusWorkflowTarget(uploadLabel || uploadContainer || imageUpload);
+                    // Return the prepared value to the caller.
                     return;
                 }
                 focusWorkflowTarget(startBtn || liveStreamContainer);
@@ -1374,6 +1497,7 @@ const LivePage = {
             focusWorkflow: (detail = {}) => applyAssistantIntent(detail)
         };
 
+        // Choose the correct browser state branch before continuing.
         if (window.__CASM_LIVE_ASSISTANT_INTENT) {
             const pendingIntent = window.__CASM_LIVE_ASSISTANT_INTENT;
             delete window.__CASM_LIVE_ASSISTANT_INTENT;
@@ -1381,8 +1505,10 @@ const LivePage = {
         }
 
         sourceToggleBtn.addEventListener('click', () => {
+            // Choose the correct browser state branch before continuing.
             if (APP_STATE.liveStreamActive) {
                 showNotification('Stop monitoring before switching camera source.', 'warning');
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -1400,6 +1526,7 @@ const LivePage = {
             showNotification(`Camera source changed to ${sourceLabel}`, 'success');
         });
 
+        // Choose the correct browser state branch before continuing.
         if (webcamDeviceSelect) {
             webcamDeviceSelect.addEventListener('change', () => {
                 selectedCameraIndex = normalizeCameraIndex(webcamDeviceSelect.value, selectedCameraIndex);
@@ -1418,6 +1545,7 @@ const LivePage = {
             });
         }
 
+        // Choose the correct browser state branch before continuing.
         if (browserCameraSelect) {
             browserCameraSelect.addEventListener('change', () => {
                 selectedBrowserDeviceId = browserCameraSelect.value || '';
@@ -1438,7 +1566,9 @@ const LivePage = {
             });
         }
         
+        // Section: handle the escape upload html workflow.
         function escapeUploadHtml(value) {
+            // Return the prepared value to the caller.
             return String(value || '')
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
@@ -1447,6 +1577,7 @@ const LivePage = {
                 .replace(/'/g, '&#39;');
         }
 
+        // Section: handle the notify upload issue workflow.
         function notifyUploadIssue(message) {
             if (typeof showNotification === 'function') {
                 showNotification(message, 'warning');
@@ -1455,15 +1586,19 @@ const LivePage = {
             }
         }
 
+        // Section: handle the format upload size workflow.
         function formatUploadSize(bytes) {
             const size = Number(bytes || 0);
+            // Choose the correct browser state branch before continuing.
             if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)}MB`;
             if (size >= 1024) return `${Math.round(size / 1024)}KB`;
             return `${size}B`;
         }
 
+        // Section: handle the reset upload preview urls workflow.
         function resetUploadPreviewUrls() {
             selectedPreviewUrls.forEach((url) => {
+                // Keep this browser operation recoverable if it fails.
                 try {
                     URL.revokeObjectURL(url);
                 } catch (_) {
@@ -1473,18 +1608,21 @@ const LivePage = {
             selectedPreviewUrls = [];
         }
 
+        // Section: handle the set analyze button label workflow.
         function setAnalyzeButtonLabel() {
             const count = selectedFiles.length;
             const label = count > 1 ? `Analyze ${count} Images` : 'Analyze Image';
             analyzeBtn.innerHTML = `<i class="fas fa-search"></i> ${label}`;
         }
 
+        // Section: handle the render upload selection workflow.
         function renderUploadSelection(files) {
             resetUploadPreviewUrls();
             selectedFiles = files;
             selectedPreviewUrls = selectedFiles.map((file) => URL.createObjectURL(file));
             uploadPreview.style.display = selectedFiles.length ? 'block' : 'none';
             uploadResults.style.display = 'none';
+            // Choose the correct browser state branch before continuing.
             if (previewImage && selectedPreviewUrls[0]) {
                 previewImage.src = selectedPreviewUrls[0];
             }
@@ -1507,15 +1645,19 @@ const LivePage = {
             setAnalyzeButtonLabel();
         }
 
+        // Section: handle the handle upload file selection workflow.
         function handleUploadFileSelection(fileList) {
             const files = Array.from(fileList || []);
+            // Choose the correct browser state branch before continuing.
             if (!files.length) return;
 
             const accepted = [];
             const rejected = [];
             files.forEach((file) => {
+                // Choose the correct browser state branch before continuing.
                 if (!file || !String(file.type || '').startsWith('image/')) {
                     rejected.push(`${file?.name || 'Unsupported file'} is not an image`);
+                    // Return the prepared value to the caller.
                     return;
                 }
                 if (file.size > 10 * 1024 * 1024) {
@@ -1525,17 +1667,20 @@ const LivePage = {
                 accepted.push(file);
             });
 
+            // Choose the correct browser state branch before continuing.
             if (rejected.length) {
                 notifyUploadIssue(rejected.slice(0, 3).join('. '));
             }
             if (!accepted.length) {
                 imageUpload.value = '';
+                // Return the prepared value to the caller.
                 return;
             }
 
             renderUploadSelection(accepted);
         }
 
+        // Section: handle the analyze uploaded file workflow.
         async function analyzeUploadedFile(file) {
             const formData = new FormData();
             formData.append('image', file, file.name);
@@ -1546,15 +1691,18 @@ const LivePage = {
                 body: formData
             });
 
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) {
                 throw new Error(`Analysis failed for ${file.name}`);
             }
             return response.json();
         }
 
+        // Section: handle the persist uploaded violation draft workflow.
         function persistUploadedViolationDraft(result, file) {
             if (!result || !result.violations_detected || !result.report_id) return;
             try {
+                // Prepare should persist local draft for the next UI or data step.
                 const shouldPersistLocalDraft = (
                     typeof API !== 'undefined'
                     && typeof API.shouldPersistLocalReportDraft === 'function'
@@ -1609,16 +1757,19 @@ const LivePage = {
             }
         }
 
+        // Section: handle the render upload results workflow.
         function renderUploadResults(entries) {
             const successful = entries.filter((entry) => entry.result);
             const totalDetections = successful.reduce((sum, entry) => {
                 const detections = Array.isArray(entry.result.detections) ? entry.result.detections.length : 0;
+                // Return the prepared value to the caller.
                 return sum + Number(entry.result.count ?? detections ?? 0);
             }, 0);
             const totalViolations = successful.reduce((sum, entry) => sum + Number(entry.result.violation_count || 0), 0);
             const failedCount = entries.length - successful.length;
             const firstAnnotated = successful.find((entry) => entry.result && entry.result.annotated_image);
 
+            // Choose the correct browser state branch before continuing.
             if (uploadResultsTitle) {
                 uploadResultsTitle.innerHTML = `<i class="fas fa-chart-bar"></i> Detection Results (${successful.length}/${entries.length} analyzed)`;
             }
@@ -1655,6 +1806,7 @@ const LivePage = {
                 <div style="display:flex;flex-direction:column;gap:0.9rem;margin-top:1rem;">
                     ${entries.map((entry, index) => {
                         if (entry.error) {
+                            // Return the prepared value to the caller.
                             return `
                                 <article style="border:1px solid var(--border-color);border-radius:8px;padding:0.9rem;background:var(--surface-color, #fff);">
                                     <strong>${escapeUploadHtml(entry.file.name)}</strong>
@@ -1664,6 +1816,7 @@ const LivePage = {
                         }
                         const result = entry.result || {};
                         const detections = Array.isArray(result.detections) ? result.detections : [];
+                        // Return the prepared value to the caller.
                         return `
                             <article style="border:1px solid var(--border-color);border-radius:8px;padding:0.9rem;background:var(--surface-color, #fff);">
                                 <div style="display:flex;justify-content:space-between;gap:1rem;align-items:flex-start;flex-wrap:wrap;">
@@ -1697,6 +1850,7 @@ const LivePage = {
             handleUploadFileSelection(e.target.files);
         });
 
+        // Choose the correct browser state branch before continuing.
         if (uploadDropZone) {
             uploadDropZone.addEventListener('dragover', (e) => {
                 e.preventDefault();
@@ -1719,13 +1873,16 @@ const LivePage = {
         analyzeBtn.addEventListener('click', async () => {
             if (!selectedFiles.length) return;
             
+            // Keep this browser operation recoverable if it fails.
             try {
                 analyzeBtn.disabled = true;
                 const entries = [];
 
+                // Walk through the active items and update each one consistently.
                 for (let index = 0; index < selectedFiles.length; index += 1) {
                     const file = selectedFiles[index];
                     analyzeBtn.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Analyzing ${index + 1}/${selectedFiles.length}`;
+                    // Keep this browser operation recoverable if it fails.
                     try {
                         const result = await analyzeUploadedFile(file);
                         persistUploadedViolationDraft(result, file);
@@ -1753,6 +1910,7 @@ const LivePage = {
             resetUploadPreviewUrls();
             selectedFiles = [];
             imageUpload.value = '';
+            // Choose the correct browser state branch before continuing.
             if (previewImage) previewImage.removeAttribute('src');
             if (uploadPreviewGrid) uploadPreviewGrid.innerHTML = '';
             if (uploadSelectionSummary) uploadSelectionSummary.textContent = '';
@@ -1762,6 +1920,7 @@ const LivePage = {
         });
         
         // Live stream functions
+        // Section: handle the stop live stream workflow.
         async function stopLiveStream() {
             stopBtn.disabled = true;
             // Tear down UI first so stream frame and boxes disappear immediately.
@@ -1772,10 +1931,12 @@ const LivePage = {
             streamImg.style.display = 'none';
             placeholder.style.display = 'block';
             statusIndicator.style.display = 'none';
+            // Choose the correct browser state branch before continuing.
             if (phoneCameraPreview) phoneCameraPreview.style.display = 'none';
             hideDepthWidgets();
 
             try {
+                // Choose the correct browser state branch before continuing.
                 if (shouldUseBrowserCaptureSource()) {
                     stopPhoneInferenceLoop();
                     stopPhoneCameraTrack();
@@ -1805,8 +1966,10 @@ const LivePage = {
                 startBtn.disabled = true;
                 startBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
 
+                // Choose the correct browser state branch before continuing.
                 if (shouldPreferBrowserCaptureSource()) {
                     await startBrowserCaptureSession(selectedSource === 'phone');
+                    // Return the prepared value to the caller.
                     return;
                 }
 
@@ -1834,6 +1997,7 @@ const LivePage = {
                     })
                 });
 
+                // Prepare start data for the next UI or data step.
                 let startData = null;
                 let startText = '';
                 try {
@@ -1844,6 +2008,7 @@ const LivePage = {
                 }
 
                 const backendErrorMessage = (startData && (startData.error || startData.message)) || startText || 'Failed to start monitoring';
+                // Prepare should fallback to browser webcam for the next UI or data step.
                 const shouldFallbackToBrowserWebcam = (
                     selectedSource === 'webcam' &&
                     browserCameraSupported &&
@@ -1852,14 +2017,17 @@ const LivePage = {
                 );
 
                 if (!response.ok || (startData && startData.success === false)) {
+                    // Choose the correct browser state branch before continuing.
                     if (shouldFallbackToBrowserWebcam) {
                         await startBrowserCaptureSession(false, 'Backend webcam unavailable. ');
+                        // Return the prepared value to the caller.
                         return;
                     }
                     throw new Error(backendErrorMessage);
                 }
 
                 const actualStartedSource = String((startData && startData.source) || '').trim().toLowerCase();
+                // Choose the correct browser state branch before continuing.
                 if (
                     (requestedSourceAtStart === 'realsense' || requestedSourceAtStart === 'edge_realsense') &&
                     actualStartedSource &&
@@ -1872,6 +2040,7 @@ const LivePage = {
                 }
 
                 useBrowserCaptureRuntime = false;
+                // Choose the correct browser state branch before continuing.
                 if (startData.source) {
                     selectedSource = startData.source;
                 }
@@ -1883,6 +2052,7 @@ const LivePage = {
                 if (startData.realsense_available !== undefined) {
                     realsenseAvailable = !!startData.realsense_available;
                 }
+                // Choose the correct browser state branch before continuing.
                 if (startData.realsense_device_name) {
                     realsenseDeviceName = startData.realsense_device_name;
                 }
@@ -1919,6 +2089,7 @@ const LivePage = {
 
                 showNotification(`Live monitoring started (${getCurrentSourceLabel()})`, 'success');
 
+                // Choose the correct browser state branch before continuing.
                 if (startData.fallback_to_webcam) {
                     showNotification(startData.message || 'RealSense unavailable, switched to webcam', 'warning');
                 }
@@ -1932,11 +2103,14 @@ const LivePage = {
                     console.error('Error starting live stream:', error);
                 }
 
+                // Choose the correct browser state branch before continuing.
                 if (shouldUseBrowserCaptureSource()) {
                     const usingPhoneSource = selectedSource === 'phone';
                     const isPermissionDenied = error && (error.name === 'NotAllowedError' || error.name === 'SecurityError');
                     const isCameraMissing = error && error.name === 'NotFoundError';
+                    // Choose the correct browser state branch before continuing.
                     if (isPermissionDenied) {
+                        // Choose the correct browser state branch before continuing.
                         if (usingPhoneSource) {
                             phonePermissionState = 'denied';
                             updatePhonePermissionBadge();
@@ -1951,6 +2125,7 @@ const LivePage = {
                             alert('No usable webcam was found.');
                         }
                     } else {
+                        // Choose the correct browser state branch before continuing.
                         if (usingPhoneSource && phonePermissionState !== 'denied') {
                             phonePermissionState = 'prompt';
                             updatePhonePermissionBadge();
@@ -1960,6 +2135,7 @@ const LivePage = {
                     stopPhoneInferenceLoop();
                     stopPhoneCameraTrack();
                 } else {
+                    // Prepare message for the next UI or data step.
                     const message = (error && error.message) ? String(error.message) : 'Failed to start live monitoring. Please check if the webcam is available.';
                     alert(message);
                 }
@@ -1983,6 +2159,7 @@ const LivePage = {
                 return;
             }
 
+            // Keep this browser operation recoverable if it fails.
             try {
                 await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STOP}`, {
                     method: 'POST'
@@ -2000,10 +2177,12 @@ const LivePage = {
         });
 
         // Get preferred/default source and RealSense availability
+        // Keep this browser operation recoverable if it fails.
         try {
             const devicesResp = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_DEVICES}`);
             const devices = await devicesResp.json();
             realsenseAvailable = !!devices.realsense_available;
+            // Choose the correct browser state branch before continuing.
             if (devices.realsense_device_name) {
                 realsenseDeviceName = devices.realsense_device_name;
             }
@@ -2016,6 +2195,7 @@ const LivePage = {
             syncBackendWebcamDevices(devices);
             selectedSource = devices.default_source || 'webcam';
 
+            // Choose the correct browser state branch before continuing.
             if (selectedSource === 'realsense' && !realsenseAvailable) {
                 selectedSource = edgeRealsenseAvailable ? 'edge_realsense' : 'webcam';
             }
@@ -2028,6 +2208,7 @@ const LivePage = {
                 selectedSource = 'webcam';
             }
 
+            // Choose the correct browser state branch before continuing.
             if (phoneCameraSupported && !['realsense', 'edge_realsense', 'webcam', 'phone'].includes(selectedSource)) {
                 selectedSource = 'phone';
             }
@@ -2044,10 +2225,12 @@ const LivePage = {
         }
 
         // Check initial status
+        // Keep this browser operation recoverable if it fails.
         try {
             const response = await fetch(`${API_CONFIG.BASE_URL}${API_CONFIG.ENDPOINTS.LIVE_STATUS}`);
             const status = await response.json();
 
+            // Choose the correct browser state branch before continuing.
             if (status.realsense_available !== undefined) {
                 realsenseAvailable = !!status.realsense_available;
             }
@@ -2058,6 +2241,7 @@ const LivePage = {
             if (status.edge_realsense_available !== undefined) {
                 edgeRealsenseAvailable = !!status.edge_realsense_available;
             }
+            // Choose the correct browser state branch before continuing.
             if (status.edge_realsense_device_name) {
                 edgeRealsenseDeviceName = status.edge_realsense_device_name;
             }
@@ -2069,6 +2253,7 @@ const LivePage = {
                 selectedSource = edgeRealsenseAvailable ? 'edge_realsense' : 'webcam';
             }
 
+            // Choose the correct browser state branch before continuing.
             if (selectedSource === 'edge_realsense' && !edgeRealsenseAvailable) {
                 selectedSource = realsenseAvailable ? 'realsense' : 'webcam';
             }
@@ -2081,6 +2266,7 @@ const LivePage = {
                 selectedSource = 'phone';
             }
             
+            // Choose the correct browser state branch before continuing.
             if (status.active) {
                 // Stream is already active
                 useBrowserCaptureRuntime = false;
@@ -2113,6 +2299,7 @@ const LivePage = {
         const cooldownSaveBtn = document.getElementById('cooldownSaveBtn');
         const cooldownStatus = document.getElementById('cooldownStatus');
 
+        // Section: handle the set cooldown status workflow.
         function setCooldownStatus(msg, color) {
             cooldownStatus.textContent = msg;
             cooldownStatus.style.color = color;
@@ -2120,7 +2307,9 @@ const LivePage = {
             setTimeout(() => { cooldownStatus.style.display = 'none'; }, 3000);
         }
 
+        // Section: handle the get cooldown settings url workflow.
         function getCooldownSettingsUrl() {
+            // Prepare base url for the next UI or data step.
             const baseUrl = (typeof API_CONFIG !== 'undefined' && API_CONFIG.BASE_URL) ? API_CONFIG.BASE_URL : '';
             return `${baseUrl}/api/settings/cooldown`;
         }
@@ -2133,8 +2322,10 @@ const LivePage = {
 
         cooldownSaveBtn.addEventListener('click', async () => {
             const val = parseInt(cooldownInput.value, 10);
+            // Choose the correct browser state branch before continuing.
             if (isNaN(val) || val < 1 || val > 300) {
                 setCooldownStatus('Must be 1–300 s', '#c0392b');
+                // Return the prepared value to the caller.
                 return;
             }
             cooldownSaveBtn.disabled = true;
@@ -2145,6 +2336,7 @@ const LivePage = {
                     body: JSON.stringify({ cooldown_seconds: val })
                 });
                 const data = await res.json();
+                // Choose the correct browser state branch before continuing.
                 if (res.ok && data.success) {
                     setCooldownStatus(`Saved: ${val}s`, '#27ae60');
                 } else {
@@ -2158,15 +2350,18 @@ const LivePage = {
         });
 
         // Simple notification function (fallback if not defined globally)
+        // Section: handle the show notification workflow.
         function showNotification(message, type = 'info') {
             if (typeof NotificationManager !== 'undefined') {
                 if (type === 'success') return NotificationManager.success(message);
+                // Choose the correct browser state branch before continuing.
                 if (type === 'warning') return NotificationManager.warning(message);
                 if (type === 'error') return NotificationManager.error(message);
                 return NotificationManager.info(message);
             }
 
             console.log(`[${type.toUpperCase()}] ${message}`);
+            // Choose the correct browser state branch before continuing.
             if (type === 'error') {
                 alert(message);
             }
@@ -2175,6 +2370,7 @@ const LivePage = {
     },
 
     unmount() {
+        // Choose the correct browser state branch before continuing.
         if (this.phoneInferenceInterval) {
             clearInterval(this.phoneInferenceInterval);
             this.phoneInferenceInterval = null;
@@ -2185,6 +2381,7 @@ const LivePage = {
             this.phoneCameraStream = null;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (this.assistantIntentHandler) {
             window.removeEventListener('casm-live:intent', this.assistantIntentHandler);
             this.assistantIntentHandler = null;

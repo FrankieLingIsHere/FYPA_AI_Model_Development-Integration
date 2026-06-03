@@ -1,4 +1,5 @@
 @echo off
+REM Readability: Utility script: keep operational maintenance steps visible and repeatable.
 REM Reprocess Recent Reports (This Week)
 REM =====================================
 
@@ -6,6 +7,7 @@ REM Move to project root (this .bat lives in scripts/, root is parent dir)
 cd /d "%~dp0.."
 
 echo.
+REM Section: perform this operational step before continuing.
 echo ========================================
 echo  Reprocess Recent Reports
 echo ========================================
@@ -16,6 +18,7 @@ echo.
 echo Press Ctrl+C to cancel, or
 pause
 
+REM Section: perform this operational step before continuing.
 echo.
 echo Starting reprocessing...
 echo.
@@ -29,6 +32,7 @@ if not exist "venv\Scripts\activate.bat" (
 )
 
 REM Activate virtual environment
+REM Section: perform this operational step before continuing.
 echo Activating virtual environment...
 call venv\Scripts\activate.bat
 
@@ -39,6 +43,7 @@ if errorlevel 1 (
 )
 
 echo Virtual environment activated.
+REM Section: perform this operational step before continuing.
 echo.
 
 REM Check if .env file exists
@@ -54,6 +59,7 @@ REM Use Python to calculate Monday date properly
 echo Calculating this week's start date...
 for /f "delims=" %%i in ('python -c "from datetime import datetime, timedelta; d = datetime.now(); monday = d - timedelta(days=d.weekday()); print(monday.strftime('%%Y-%%m-%%d'))"') do set monday_date=%%i
 
+REM Section: perform this operational step before continuing.
 echo Reprocessing reports since: %monday_date%
 echo.
 
@@ -65,6 +71,7 @@ if errorlevel 1 (
     echo ERROR: Reprocessing failed!
     echo Check the error messages above.
 ) else (
+REM Section: perform this operational step before continuing.
     echo.
     echo ========================================
     echo  Reprocessing Complete Successfully!

@@ -1,3 +1,4 @@
+// Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 document.addEventListener('DOMContentLoaded', () => {
     const sceneInput = document.getElementById('scene-input');
     const analyzeBtn = document.getElementById('analyze-btn');
@@ -7,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const personsGrid = document.getElementById('persons-grid');
     const confidenceScore = document.querySelector('#confidence-score .score');
 
+    // Prepare incident data for the next UI or data step.
     let incidentData = [];
 
     // Load the CSV data
@@ -15,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
+            // Return the prepared value to the caller.
             return response.text();
         })
         .then(csvText => {
@@ -33,8 +36,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     analyzeBtn.addEventListener('click', async () => {
         const sceneDescription = sceneInput.value.trim();
+        // Choose the correct browser state branch before continuing.
         if (!sceneDescription) {
             alert('Please enter a scene description.');
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -44,6 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
         resultsContainer.style.display = 'none';
         analyzeBtn.disabled = true;
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const contextIncidents = findSimilarIncidents(sceneDescription, 2);
             const response = await callOllamaAPI(sceneDescription, contextIncidents);
@@ -59,7 +65,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Section: handle the find similar incidents workflow.
     function findSimilarIncidents(description, count) {
+        // Choose the correct browser state branch before continuing.
         if (incidentData.length === 0) return [];
 
         const descriptionWords = new Set(description.toLowerCase().match(/\b(\w+)\b/g));
@@ -68,14 +76,17 @@ document.addEventListener('DOMContentLoaded', () => {
             const abstractWords = new Set(incident.Abstract.toLowerCase().match(/\b(\w+)\b/g));
             const intersection = new Set([...descriptionWords].filter(x => abstractWords.has(x)));
             const score = intersection.size;
+            // Return the prepared value to the caller.
             return { ...incident, score };
         });
 
         scoredIncidents.sort((a, b) => b.score - a.score);
 
+        // Return the prepared value to the caller.
         return scoredIncidents.slice(0, count);
     }
 
+    // Section: handle the build prompt workflow.
     function buildPrompt(description, contextIncidents) {
         const contextText = contextIncidents.map((inc, i) => `Incident ${i + 1}:\n${inc.Abstract}`).join('\n\n');
 
@@ -125,6 +136,7 @@ ${contextText}
         `;
     }
 
+    // Section: handle the call ollama api workflow.
     async function callOllamaAPI(description, contextIncidents) {
         const prompt = buildPrompt(description, contextIncidents);
         console.log('Sending prompt to Ollama API:', prompt);
@@ -141,6 +153,7 @@ ${contextText}
         });
 
         console.log('Received response status:', response.status);
+        // Choose the correct browser state branch before continuing.
         if (!response.ok) {
             throw new Error(`API request failed with status ${response.status}`);
         }
@@ -151,6 +164,7 @@ ${contextText}
         try {
             const parsedResponse = JSON.parse(data.response);
             console.log('Parsed response:', parsedResponse);
+            // Return the prepared value to the caller.
             return parsedResponse;
         } catch (parseError) {
             console.error('Error parsing JSON from model response:', parseError);
@@ -159,11 +173,13 @@ ${contextText}
         }
     }
 
+    // Section: handle the display results workflow.
     function displayResults(data) {
         // Populate Summary Card
         const summaryEl = document.querySelector('#summary-card .card-content');
         const confidenceEl = document.querySelector('#confidence-score .score');
 
+        // Choose the correct browser state branch before continuing.
         if (summaryEl) {
             summaryEl.textContent = data.summary || 'No summary provided.';
         }
@@ -171,6 +187,7 @@ ${contextText}
             const score = parseInt(data.confidence_score, 10) || 0;
             confidenceEl.textContent = `${score}%`;
             confidenceEl.className = 'score'; // Reset
+            // Choose the correct browser state branch before continuing.
             if (score < 50) {
                 confidenceEl.classList.add('low');
             } else if (score < 85) {
@@ -195,6 +212,7 @@ ${contextText}
                             </div>`;
                 }).join('');
 
+                // Prepare create list for the next UI or data step.
                 const createList = (items) => items && items.length > 0 ?
                     `<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul>` : '<p>None specified.</p>';
 
@@ -234,6 +252,7 @@ ${contextText}
         const createList = (items) => items && items.length > 0 ?
             `<ul>${items.map(i => `<li>${i}</li>`).join('')}</ul>` : '<p>None specified.</p>';
 
+        // Choose the correct browser state branch before continuing.
         if (hazardsCard) {
             hazardsCard.innerHTML = createList(data.hazards_detected);
         }

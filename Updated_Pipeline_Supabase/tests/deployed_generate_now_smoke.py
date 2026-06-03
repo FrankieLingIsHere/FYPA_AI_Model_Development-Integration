@@ -1,3 +1,4 @@
+# Readability: Test setup: document the contract this file protects.
 import json
 import os
 import sys
@@ -7,6 +8,7 @@ import requests
 from requests import RequestException
 
 
+# Prepare base url for the next step.
 BASE_URL = os.environ.get(
     "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
@@ -16,52 +18,66 @@ POLL_SECONDS = int(os.environ.get("CASM_SMOKE_POLL_SECONDS", "45"))
 POLL_INTERVAL = int(os.environ.get("CASM_SMOKE_POLL_INTERVAL", "3"))
 MAX_CANDIDATES = int(os.environ.get("CASM_SMOKE_MAX_CANDIDATES", "15"))
 STRICT_GENERATE_NOW_SMOKE = os.environ.get("CASM_GENERATE_NOW_SMOKE_STRICT", "1") != "0"
+# Prepare allow empty report set for the next step.
 ALLOW_EMPTY_REPORT_SET = str(
     os.environ.get("CASM_GENERATE_NOW_SMOKE_ALLOW_EMPTY", "1")
 ).strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Section: run the skip or fail workflow with clear inputs and outputs.
 def skip_or_fail(message: str, code: int) -> int:
+    # Choose the correct branch before the workflow continues.
     if STRICT_GENERATE_NOW_SMOKE:
+        # Trigger the side effect required for this stage.
         print(f"FAIL: {message}")
         return code
     print(f"PASS: non-blocking skip, {message}")
     return 0
 
 
+# Section: run the get violations workflow with clear inputs and outputs.
 def get_violations(limit: int = 40):
     r = requests.get(f"{BASE_URL}/api/violations?limit={limit}", timeout=30)
+    # Trigger the side effect required for this stage.
     r.raise_for_status()
     payload = r.json()
     return payload if isinstance(payload, list) else []
 
 
+# Section: run the get status workflow with clear inputs and outputs.
 def get_status(report_id: str):
     r = requests.get(f"{BASE_URL}/api/report/{report_id}/status", timeout=30)
     r.raise_for_status()
     return r.json()
 
 
+# Section: run the post generate now workflow with clear inputs and outputs.
 def post_generate_now(report_id: str):
+    # Prepare r for the next step.
     r = requests.post(
         f"{BASE_URL}/api/report/{report_id}/generate-now",
         json={"force": False},
         timeout=45,
     )
     try:
+        # Prepare payload for the next step.
         payload = r.json()
     except Exception:
         payload = {"raw": r.text}
+    # Return the prepared result to the caller.
     return r.status_code, payload
 
 
+# Section: run the is skippable generate now error workflow with clear inputs and outputs.
 def _is_skippable_generate_now_error(code: int, payload) -> bool:
     if code in (404,):
         return True
 
     if not isinstance(payload, dict):
+        # Return the prepared result to the caller.
         return False
 
+    # Prepare msg for the next step.
     msg = str(payload.get("error") or payload.get("message") or "").lower()
     skippable_markers = (
         "original image is missing",
@@ -70,8 +86,11 @@ def _is_skippable_generate_now_error(code: int, payload) -> bool:
     return any(marker in msg for marker in skippable_markers)
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main() -> int:
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare violations for the next step.
         violations = get_violations(limit=60)
     except RequestException as exc:
         return skip_or_fail(f"could not list violations due to API/network issue: {exc}", 2)
@@ -80,10 +99,13 @@ def main() -> int:
 
     if not violations:
         if ALLOW_EMPTY_REPORT_SET:
+            # Trigger the side effect required for this stage.
             print("PASS: no violations available for generate-now smoke; empty report state accepted")
             return 0
+        # Return the prepared result to the caller.
         return skip_or_fail("no violations available for generate-now smoke candidate selection", 4)
 
+    # Prepare tested for the next step.
     tested = 0
     report_id = None
     selected_code = None
@@ -92,36 +114,43 @@ def main() -> int:
         if tested >= MAX_CANDIDATES:
             break
 
+        # Prepare candidate id for the next step.
         candidate_id = target.get("report_id")
         if not candidate_id:
             continue
 
         tested += 1
         try:
+            # Prepare values needed by the next step.
             code, payload = post_generate_now(candidate_id)
         except RequestException as exc:
             print(f"SKIP: transient request failure while triggering generate-now: {exc}")
             continue
+        # Trigger the side effect required for this stage.
         print(f"candidate-{tested}-report-id={candidate_id}")
         print(f"candidate-{tested}-generate-now-status={code}")
         print("candidate-{tested}-generate-now-body=".format(tested=tested) + json.dumps(payload, ensure_ascii=True)[:500])
 
         if code >= 500:
+            # Trigger the side effect required for this stage.
             print("SKIP: generate-now returned transient server error; trying next report")
             continue
 
         if isinstance(payload, dict) and payload.get("success") is False:
             if _is_skippable_generate_now_error(code, payload):
+                # Trigger the side effect required for this stage.
                 print("SKIP: candidate is not locally regeneratable; trying next report")
                 continue
             print("SKIP: generate-now returned success=false; trying next report")
             continue
 
+        # Prepare report id for the next step.
         report_id = candidate_id
         selected_code = code
         selected_payload = payload
         break
 
+    # Choose the correct branch before the workflow continues.
     if not report_id:
         return skip_or_fail(
             "no actionable report found within candidate window; all tested reports were stale/non-regeneratable",
@@ -132,10 +161,13 @@ def main() -> int:
     print(f"generate-now-status={selected_code}")
     print("generate-now-body=" + json.dumps(selected_payload, ensure_ascii=True)[:500])
 
+    # Prepare steps for the next step.
     steps = max(1, POLL_SECONDS // max(1, POLL_INTERVAL))
     statuses = []
     for i in range(1, steps + 1):
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare st for the next step.
             st = get_status(report_id)
         except RequestException as exc:
             print(f"SKIP: transient request failure while polling status: {exc}")
@@ -147,10 +179,12 @@ def main() -> int:
             f"message={st.get('message')}"
         )
 
+        # Choose the correct branch before the workflow continues.
         if status in ("completed", "failed"):
             break
         time.sleep(POLL_INTERVAL)
 
+    # Choose the correct branch before the workflow continues.
     if all(s in ("pending", "queued") for s in statuses):
         return skip_or_fail("report remained queued/pending for smoke window", 6)
 
@@ -158,11 +192,14 @@ def main() -> int:
     return 0
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
     try:
+        # Surface the failure with enough context for the caller.
         raise SystemExit(main())
     except Exception as exc:
         if STRICT_GENERATE_NOW_SMOKE:
+            # Trigger the side effect required for this stage.
             print(f"FAIL: unhandled generate-now smoke error: {exc}")
             raise SystemExit(20)
         print(f"PASS: non-blocking skip, unhandled generate-now smoke error: {exc}")

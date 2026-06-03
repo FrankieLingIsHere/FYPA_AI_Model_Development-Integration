@@ -1,3 +1,4 @@
+// Readability: Test setup: document the contract this file protects.
 /*
  * Contract test for report source tag stability.
  *
@@ -16,6 +17,7 @@ const vm = require('vm');
 const ROOT = path.resolve(__dirname, '..');
 const REPORTS_JS = path.join(ROOT, 'frontend', 'js', 'pages', 'reports.js');
 
+// Section: handle the load reports page workflow.
 function loadReportsPage() {
   const code = `${fs.readFileSync(REPORTS_JS, 'utf8')}\nglobalThis.ReportsPage = ReportsPage;`;
   const context = {
@@ -28,20 +30,24 @@ function loadReportsPage() {
   };
   vm.createContext(context);
   vm.runInContext(code, context, { filename: REPORTS_JS });
+  // Return the prepared value to the caller.
   return context.ReportsPage;
 }
 
+// Section: handle the assert equal workflow.
 function assertEqual(actual, expected, message) {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${expected}, got ${actual}`);
   }
 }
 
+// Section: handle the assert tag workflow.
 function assertTag(record, scope, label, message) {
   assertEqual(record.source_scope, scope, `${message} source_scope`);
   assertEqual(record.source_label, label, `${message} source_label`);
 }
 
+// Section: handle the test merge matrix workflow.
 function testMergeMatrix() {
   const ReportsPage = loadReportsPage();
   const now = new Date().toISOString();
@@ -227,6 +233,7 @@ function testMergeMatrix() {
   cases.forEach((entry) => {
     const merged = ReportsPage.mergePendingReports(entry.base, entry.pending);
     const record = merged.find((item) => item.report_id === entry.base[0].report_id);
+    // Choose the correct browser state branch before continuing.
     if (!record) {
       throw new Error(`${entry.name}: merged record missing`);
     }
@@ -234,6 +241,7 @@ function testMergeMatrix() {
   });
 }
 
+// Section: handle the test runtime patch matrix workflow.
 function testRuntimePatchMatrix() {
   const ReportsPage = loadReportsPage();
   const cases = [
@@ -465,6 +473,7 @@ function testRuntimePatchMatrix() {
   });
 }
 
+// Section: handle the test local sync event matrix workflow.
 function testLocalSyncEventMatrix() {
   const ReportsPage = loadReportsPage();
   const now = new Date().toISOString();
@@ -502,6 +511,7 @@ function testLocalSyncEventMatrix() {
     sync_state: 'cloud_sync_queued',
   });
 
+  // Prepare cloud record for the next UI or data step.
   let cloudRecord = ReportsPage.violations.find((item) => item.report_id === 'tag-cloud-sync-event-001');
   let localRecord = ReportsPage.violations.find((item) => item.report_id === 'tag-local-sync-event-001');
 
@@ -527,6 +537,7 @@ function testLocalSyncEventMatrix() {
   assertEqual(localRecord.sync_state, 'cloud_completed', 'completed local sync event clears queued sync state');
 }
 
+// Section: handle the test fast completed report shows generating stage briefly workflow.
 function testFastCompletedReportShowsGeneratingStageBriefly() {
   const ReportsPage = loadReportsPage();
   ReportsPage.violations = [{
@@ -559,6 +570,7 @@ function testFastCompletedReportShowsGeneratingStageBriefly() {
   ReportsPage.visualStatusTimers.clear();
 }
 
+// Section: handle the test thumbnail evidence survives runtime refresh workflow.
 function testThumbnailEvidenceSurvivesRuntimeRefresh() {
   const ReportsPage = loadReportsPage();
   ReportsPage.violations = [{
@@ -595,6 +607,7 @@ function testThumbnailEvidenceSurvivesRuntimeRefresh() {
   assertEqual(record.annotated_image_key, 'violations/tag-thumbnail-sticky-001/annotated.jpg', 'runtime refresh preserves annotated image key');
 }
 
+// Section: handle the test ready reports are not downgraded by late snapshots workflow.
 function testReadyReportsAreNotDowngradedByLateSnapshots() {
   const ReportsPage = loadReportsPage();
   const now = new Date().toISOString();
@@ -627,6 +640,7 @@ function testReadyReportsAreNotDowngradedByLateSnapshots() {
   assertEqual(ReportsPage.getStatusInfo(record).text, 'Ready', 'ready card must not flicker to generating/finalizing');
 }
 
+// Section: handle the test synced local badge wins over queued sync state workflow.
 function testSyncedLocalBadgeWinsOverQueuedSyncState() {
   const ReportsPage = loadReportsPage();
   const record = {
@@ -643,8 +657,10 @@ function testSyncedLocalBadgeWinsOverQueuedSyncState() {
   assertEqual(syncInfo && syncInfo.label, 'Synced', 'Local Synced report must not keep Sync queued badge');
 }
 
+// Section: handle the test report status probe does not force full list refresh workflow.
 function testReportStatusProbeDoesNotForceFullListRefresh() {
   const ReportsPage = loadReportsPage();
+  // Prepare load calls for the next UI or data step.
   let loadCalls = 0;
   let prefetchCalls = 0;
   let readyToastCalls = 0;
@@ -682,8 +698,10 @@ function testReportStatusProbeDoesNotForceFullListRefresh() {
   ReportsPage.visualStatusTimers.clear();
 }
 
+// Section: handle the test report status probe does not replay ready toast for ready card workflow.
 function testReportStatusProbeDoesNotReplayReadyToastForReadyCard() {
   const ReportsPage = loadReportsPage();
+  // Prepare ready toast calls for the next UI or data step.
   let readyToastCalls = 0;
 
   ReportsPage.violations = [{
@@ -712,6 +730,7 @@ function testReportStatusProbeDoesNotReplayReadyToastForReadyCard() {
   assertEqual(readyToastCalls, 0, 'already-ready status refresh must not replay ready toast');
 }
 
+// Section: handle the test local sync completion toast fires for already synced cache workflow.
 function testLocalSyncCompletionToastFiresForAlreadySyncedCache() {
   const ReportsPage = loadReportsPage();
   const notifications = [];
@@ -746,8 +765,10 @@ function testLocalSyncCompletionToastFiresForAlreadySyncedCache() {
   assertEqual(notifications[0].message, '1 local report synced to cloud storage.', 'completed sync toast message');
 }
 
+// Section: handle the test realtime payload does not force full list refresh workflow.
 function testRealtimePayloadDoesNotForceFullListRefresh() {
   const ReportsPage = loadReportsPage();
+  // Prepare load calls for the next UI or data step.
   let loadCalls = 0;
   let prefetchCalls = 0;
 
@@ -776,6 +797,7 @@ function testRealtimePayloadDoesNotForceFullListRefresh() {
   assertEqual(prefetchCalls, 0, 'generating realtime payload must not warm report HTML');
 }
 
+// Section: handle the main workflow.
 function main() {
   const tests = [
     testMergeMatrix,
@@ -792,6 +814,7 @@ function main() {
   ];
   const failures = [];
   tests.forEach((testFn) => {
+    // Keep this browser operation recoverable if it fails.
     try {
       testFn();
       console.log(`PASS: ${testFn.name}`);
@@ -801,6 +824,7 @@ function main() {
     }
   });
 
+  // Choose the correct browser state branch before continuing.
   if (failures.length) {
     process.exit(1);
   }

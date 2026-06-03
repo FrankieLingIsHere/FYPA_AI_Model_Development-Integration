@@ -1,3 +1,4 @@
+# Readability: Test setup: document the contract this file protects.
 import json
 import os
 import sys
@@ -6,6 +7,7 @@ import time
 import requests
 
 
+# Prepare base url for the next step.
 BASE_URL = os.environ.get(
     "CASM_BASE_URL",
     "https://fypaaimodeldevelopment-integration-production.up.railway.app",
@@ -15,6 +17,7 @@ POLL_SECONDS = int(os.environ.get("CASM_CONDITIONS_POLL_SECONDS", "30"))
 POLL_INTERVAL = int(os.environ.get("CASM_CONDITIONS_POLL_INTERVAL", "3"))
 MAX_REPORT_IDS = int(os.environ.get("CASM_CONDITIONS_MAX_REPORT_IDS", "5"))
 ENABLE_PROVIDER_MODE_MATRIX = os.environ.get("CASM_PROVIDER_MODE_MATRIX", "0") != "0"
+# Prepare provider mode generate probe for the next step.
 PROVIDER_MODE_GENERATE_PROBE = os.environ.get("CASM_PROVIDER_MODE_GENERATE_PROBE", "0") != "0"
 GENERATE_NOW_PROBE = os.environ.get("CASM_CONDITIONS_GENERATE_NOW_PROBE", "0") != "0"
 STRICT_CONDITIONS = os.environ.get("CASM_CONDITIONS_STRICT", "1") != "0"
@@ -36,6 +39,7 @@ TRANSIENT_GENERATE_ERROR_MARKERS = (
     "503 unavailable",
 )
 
+# Prepare allowed report statuses for the next step.
 ALLOWED_REPORT_STATUSES = {
     "pending",
     "queued",
@@ -47,6 +51,7 @@ ALLOWED_REPORT_STATUSES = {
     "unknown",
 }
 
+# Prepare provider mode matrix for the next step.
 PROVIDER_MODE_MATRIX = [
     {
         "name": "cloud-strict",
@@ -85,8 +90,11 @@ PROVIDER_MODE_MATRIX = [
 ]
 
 
+# Section: run the fail workflow with clear inputs and outputs.
 def fail(msg: str, code: int = 2) -> int:
+    # Choose the correct branch before the workflow continues.
     if STRICT_CONDITIONS:
+        # Trigger the side effect required for this stage.
         print(f"FAIL: deployed conditions issue: {msg}")
         return code
 
@@ -94,21 +102,27 @@ def fail(msg: str, code: int = 2) -> int:
     return 0
 
 
+# Section: run the request json workflow with clear inputs and outputs.
 def request_json(method: str, path: str, *, timeout: int = 30, **kwargs):
+    # Prepare url for the next step.
     url = f"{BASE_URL}{path}"
     r = requests.request(method=method.upper(), url=url, timeout=timeout, **kwargs)
     text_preview = (r.text or "")[:500]
     payload = None
     try:
+        # Prepare payload for the next step.
         payload = r.json()
     except Exception:
         payload = None
     return r.status_code, payload, text_preview
 
 
+# Section: run the require json dict workflow with clear inputs and outputs.
 def require_json_dict(path: str, name: str):
+    # Prepare values needed by the next step.
     code, payload, text = request_json("GET", path)
     if code >= 400:
+        # Surface the failure with enough context for the caller.
         raise RuntimeError(f"{name} failed with {code}: {text}")
     if not isinstance(payload, dict):
         raise RuntimeError(f"{name} expected JSON object, got: {text}")
@@ -116,52 +130,68 @@ def require_json_dict(path: str, name: str):
     return payload
 
 
+# Section: run the normalize provider order workflow with clear inputs and outputs.
 def normalize_provider_order(value):
+    # Choose the correct branch before the workflow continues.
     if isinstance(value, str):
+        # Return the prepared result to the caller.
         return [x.strip().lower() for x in value.split(",") if x.strip()]
     if isinstance(value, list):
         out = []
         for item in value:
+            # Choose the correct branch before the workflow continues.
             if item is None:
                 continue
             item_text = str(item).strip().lower()
             if item_text:
+                # Trigger the side effect required for this stage.
                 out.append(item_text)
+        # Return the prepared result to the caller.
         return out
+    # Return the prepared result to the caller.
     return []
 
 
+# Section: run the is skippable generate now error workflow with clear inputs and outputs.
 def is_skippable_generate_now_error(code: int, payload) -> bool:
     if code in (404,):
         return True
     if not isinstance(payload, dict):
         return False
     msg = str(payload.get("error") or payload.get("message") or "").lower()
+    # Return the prepared result to the caller.
     return "original image is missing" in msg or "report not found" in msg
 
 
+# Section: run the is transient generate now error workflow with clear inputs and outputs.
 def is_transient_generate_now_error(code: int, payload) -> bool:
     if code in (500, 502, 503, 504):
+        # Return the prepared result to the caller.
         return True
 
     if not isinstance(payload, dict):
         return code in (408, 409, 425, 429)
 
+    # Prepare rejected reason for the next step.
     rejected_reason = str(payload.get("rejected_reason") or "").strip().lower()
     if rejected_reason in TRANSIENT_GENERATE_REJECTED_REASONS:
         return True
 
     msg = str(payload.get("error") or payload.get("message") or "").lower()
     if any(marker in msg for marker in TRANSIENT_GENERATE_ERROR_MARKERS):
+        # Return the prepared result to the caller.
         return True
 
     return code in (408, 409, 425, 429)
 
 
+# Section: run the assert no nlp fallback workflow with clear inputs and outputs.
 def assert_no_nlp_fallback(runtime_payload: dict) -> None:
+    # Prepare runtime for the next step.
     runtime = runtime_payload.get("runtime") if isinstance(runtime_payload, dict) else None
     nlp_runtime = runtime.get("nlp") if isinstance(runtime, dict) else None
     if not isinstance(nlp_runtime, dict):
+        # Surface the failure with enough context for the caller.
         raise RuntimeError("runtime status missing runtime.nlp object")
 
     fallback_reason = str(nlp_runtime.get("last_fallback_reason") or "").strip()
@@ -170,7 +200,9 @@ def assert_no_nlp_fallback(runtime_payload: dict) -> None:
     if fallback_reason:
         raise RuntimeError(f"unexpected NLP fallback observed: {fallback_reason}")
 
+    # Choose the correct branch before the workflow continues.
     if last_provider and last_provider not in ALLOWED_NO_FALLBACK_PROVIDERS:
+        # Surface the failure with enough context for the caller.
         raise RuntimeError(
             f"unexpected NLP provider while no-fallback is required: {last_provider}"
         )
@@ -181,10 +213,13 @@ def assert_no_nlp_fallback(runtime_payload: dict) -> None:
     )
 
 
+# Section: run the run live start contract probe workflow with clear inputs and outputs.
 def run_live_start_contract_probe() -> None:
     """Validate live start endpoint behavior against real backend (no mocks)."""
+    # Prepare values needed by the next step.
     code, payload, text = request_json("GET", "/api/live/status")
     if code >= 400 or not isinstance(payload, dict):
+        # Surface the failure with enough context for the caller.
         raise RuntimeError(f"live-status invalid ({code}): {text}")
     print("PASS: live-status endpoint")
 
@@ -195,20 +230,25 @@ def run_live_start_contract_probe() -> None:
         timeout=35,
     )
 
+    # Choose the correct branch before the workflow continues.
     if not isinstance(payload, dict):
+        # Surface the failure with enough context for the caller.
         raise RuntimeError(f"live-start returned non-JSON payload ({code}): {text}")
 
     if payload.get("success") is True:
         print(f"PASS: live-start accepted webcam request (status={code})")
         stop_code, stop_payload, stop_text = request_json("POST", "/api/live/stop", json={})
         if stop_code >= 400 or not isinstance(stop_payload, dict) or stop_payload.get("success") is False:
+            # Surface the failure with enough context for the caller.
             raise RuntimeError(
                 f"live-stop failed after successful start ({stop_code}): "
                 f"{json.dumps(stop_payload)[:300] if isinstance(stop_payload, dict) else stop_text}"
             )
+        # Trigger the side effect required for this stage.
         print("PASS: live-stop after start")
         return
 
+    # Prepare message for the next step.
     message = str(payload.get("error") or payload.get("message") or "").lower()
     expected_hardware_unavailable = (
         "failed to open webcam" in message
@@ -217,15 +257,18 @@ def run_live_start_contract_probe() -> None:
     )
 
     if expected_hardware_unavailable:
+        # Trigger the side effect required for this stage.
         print("PASS: live-start returned explicit webcam-unavailable response")
         return
 
+    # Surface the failure with enough context for the caller.
     raise RuntimeError(
         "live-start returned unexpected failure payload: "
         f"status={code} body={json.dumps(payload)[:350]}"
     )
 
 
+# Section: run the build restore payload workflow with clear inputs and outputs.
 def build_restore_payload(current_settings: dict) -> dict:
     restore_payload = {}
     known_keys = (
@@ -246,24 +289,33 @@ def build_restore_payload(current_settings: dict) -> dict:
         "gemini_monthly_budget_usd",
         "gemini_max_output_tokens_per_report",
     )
+    # Process each item in this collection using the same rule set.
     for key in known_keys:
+        # Choose the correct branch before the workflow continues.
         if key in current_settings:
+            # Prepare values needed by the next step.
             restore_payload[key] = current_settings.get(key)
     return restore_payload
 
 
+# Section: run the run provider mode matrix probe workflow with clear inputs and outputs.
 def run_provider_mode_matrix_probe(report_ids):
     settings_before = require_json_dict("/api/settings/provider-routing", "provider-routing-initial")
     restore_payload = build_restore_payload(settings_before)
+    # Prepare probe report id for the next step.
     probe_report_id = report_ids[0] if report_ids else None
 
     try:
+        # Process each item in this collection using the same rule set.
         for mode in PROVIDER_MODE_MATRIX:
+            # Prepare mode name for the next step.
             mode_name = mode["name"]
             payload = dict(mode["payload"])
 
             for model_key in ("nlp_model", "vision_model", "embedding_model", "gemini_model"):
+                # Choose the correct branch before the workflow continues.
                 if model_key in settings_before and model_key not in payload:
+                    # Prepare values needed by the next step.
                     payload[model_key] = settings_before.get(model_key)
 
             code, mode_result, mode_text = request_json(
@@ -272,7 +324,9 @@ def run_provider_mode_matrix_probe(report_ids):
                 json=payload,
                 timeout=45,
             )
+            # Choose the correct branch before the workflow continues.
             if code >= 500:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError(f"provider mode {mode_name} update failed ({code}): {mode_text}")
             if not isinstance(mode_result, dict):
                 raise RuntimeError(f"provider mode {mode_name} returned non-JSON payload")
@@ -281,8 +335,10 @@ def run_provider_mode_matrix_probe(report_ids):
                     f"provider mode {mode_name} returned success=false: {json.dumps(mode_result)[:350]}"
                 )
 
+            # Prepare settings after for the next step.
             settings_after = mode_result.get("settings") if isinstance(mode_result.get("settings"), dict) else None
             if not settings_after:
+                # Prepare settings after for the next step.
                 settings_after = require_json_dict("/api/settings/provider-routing", f"provider-routing-{mode_name}")
 
             expected = mode["expect"]
@@ -290,9 +346,12 @@ def run_provider_mode_matrix_probe(report_ids):
             nlp_order = normalize_provider_order(settings_after.get("nlp_provider_order"))
 
             routing_profile_value = settings_after.get("routing_profile")
+            # Prepare routing profile text for the next step.
             routing_profile_text = str(routing_profile_value or "").strip().lower()
             if routing_profile_text:
+                # Choose the correct branch before the workflow continues.
                 if routing_profile_text != expected["routing_profile"]:
+                    # Surface the failure with enough context for the caller.
                     raise RuntimeError(
                         f"provider mode {mode_name} routing_profile mismatch: {settings_after.get('routing_profile')}"
                     )
@@ -303,7 +362,9 @@ def run_provider_mode_matrix_probe(report_ids):
                     raise RuntimeError(
                         f"provider mode {mode_name} profile inference mismatch: inferred={inferred_profile}, nlp_order={nlp_order}"
                     )
+            # Choose the correct branch before the workflow continues.
             if bool(settings_after.get("model_api_enabled")) != bool(expected["model_api_enabled"]):
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError(
                     f"provider mode {mode_name} model_api_enabled mismatch: {settings_after.get('model_api_enabled')}"
                 )
@@ -312,7 +373,9 @@ def run_provider_mode_matrix_probe(report_ids):
                     f"provider mode {mode_name} gemini_enabled mismatch: {settings_after.get('gemini_enabled')}"
                 )
 
+            # Choose the correct branch before the workflow continues.
             if not nlp_order or nlp_order[0] != expected["nlp_first"]:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError(
                     f"provider mode {mode_name} nlp order mismatch: got {nlp_order}, expected first={expected['nlp_first']}"
                 )
@@ -321,15 +384,18 @@ def run_provider_mode_matrix_probe(report_ids):
                     f"provider mode {mode_name} expected strict single-provider NLP order, got {nlp_order}"
                 )
 
+            # Prepare values needed by the next step.
             runtime_code, runtime_payload, runtime_text = request_json(
                 "GET",
                 "/api/providers/runtime-status",
                 timeout=30,
             )
             if runtime_code >= 400 or not isinstance(runtime_payload, dict):
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError(
                     f"provider runtime status failed in mode {mode_name} ({runtime_code}): {runtime_text}"
                 )
+            # Choose the correct branch before the workflow continues.
             if runtime_payload.get("success") is False:
                 raise RuntimeError(f"provider runtime status unsuccessful in mode {mode_name}")
 
@@ -340,8 +406,11 @@ def run_provider_mode_matrix_probe(report_ids):
                     json={"force": False},
                     timeout=45,
                 )
+                # Choose the correct branch before the workflow continues.
                 if g_code >= 500:
+                    # Choose the correct branch before the workflow continues.
                     if is_transient_generate_now_error(g_code, g_payload):
+                        # Trigger the side effect required for this stage.
                         print(
                             f"INFO: mode {mode_name} generate-now transient server issue for {probe_report_id}: "
                             f"code={g_code} body={json.dumps(g_payload)[:260] if isinstance(g_payload, dict) else g_text[:260]}"
@@ -350,8 +419,11 @@ def run_provider_mode_matrix_probe(report_ids):
                         raise RuntimeError(
                             f"generate-now server error in mode {mode_name} for {probe_report_id}: {g_code} {g_text}"
                         )
+                # Choose the correct branch before the workflow continues.
                 if isinstance(g_payload, dict) and g_payload.get("success") is False:
+                    # Choose the correct branch before the workflow continues.
                     if is_skippable_generate_now_error(g_code, g_payload):
+                        # Trigger the side effect required for this stage.
                         print(
                             f"INFO: mode {mode_name} generate-now skipped for {probe_report_id}: "
                             f"{json.dumps(g_payload)[:260]}"
@@ -362,17 +434,21 @@ def run_provider_mode_matrix_probe(report_ids):
                             f"{json.dumps(g_payload)[:260]}"
                         )
                     else:
+                        # Surface the failure with enough context for the caller.
                         raise RuntimeError(
                             f"generate-now rejected in mode {mode_name}: {json.dumps(g_payload)[:350]}"
                         )
                 else:
+                    # Trigger the side effect required for this stage.
                     print(
                         f"PASS: mode {mode_name} generate-now accepted for {probe_report_id} "
                         f"(status={g_code})"
                     )
 
+            # Trigger the side effect required for this stage.
             print(f"PASS: provider mode probe {mode_name}")
     finally:
+        # Choose the correct branch before the workflow continues.
         if restore_payload:
             r_code, r_payload, r_text = request_json(
                 "POST",
@@ -380,7 +456,9 @@ def run_provider_mode_matrix_probe(report_ids):
                 json=restore_payload,
                 timeout=45,
             )
+            # Choose the correct branch before the workflow continues.
             if r_code >= 400 or not isinstance(r_payload, dict) or r_payload.get("success") is False:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError(
                     f"failed to restore provider routing settings ({r_code}): "
                     f"{json.dumps(r_payload)[:320] if isinstance(r_payload, dict) else r_text}"
@@ -388,10 +466,14 @@ def run_provider_mode_matrix_probe(report_ids):
             print("PASS: provider routing settings restored")
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main() -> int:
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare startup for the next step.
         startup = require_json_dict("/api/system/startup-status", "startup-status")
         if not startup.get("ready"):
+            # Return the prepared result to the caller.
             return fail(f"startup-status not ready: {json.dumps(startup)[:400]}", 3)
 
         queue = require_json_dict("/api/queue/status", "queue-status")
@@ -400,8 +482,10 @@ def main() -> int:
         if not queue.get("worker_running"):
             return fail(f"queue worker not running: {json.dumps(queue)[:400]}", 5)
 
+        # Prepare stats for the next step.
         stats = require_json_dict("/api/stats", "stats")
         if "total_violations" not in stats and "total" not in stats:
+            # Return the prepared result to the caller.
             return fail(f"stats missing total/total_violations: {json.dumps(stats)[:400]}", 6)
 
         try:
@@ -409,8 +493,10 @@ def main() -> int:
         except Exception as exc:
             return fail(f"live start contract probe failed: {exc}", 22)
 
+        # Prepare values needed by the next step.
         code, pending_payload, pending_text = request_json("GET", "/api/reports/pending")
         if code >= 400 or not isinstance(pending_payload, list):
+            # Return the prepared result to the caller.
             return fail(f"pending reports endpoint invalid ({code}): {pending_text}", 7)
         print(f"PASS: pending-reports (count={len(pending_payload)})")
 
@@ -419,7 +505,9 @@ def main() -> int:
             return fail(f"violations endpoint invalid ({code}): {violations_text}", 8)
         print(f"PASS: violations-list (count={len(violations_payload)})")
 
+        # Process each item in this collection using the same rule set.
         for item in violations_payload[:MAX_REPORT_IDS]:
+            # Choose the correct branch before the workflow continues.
             if not isinstance(item, dict):
                 continue
             summary = str(item.get("violation_summary") or "").strip().lower()
@@ -429,7 +517,9 @@ def main() -> int:
             status = str(item.get("status") or "").strip().lower()
 
             count_value = None
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare count value for the next step.
                 count_value = int(count_raw)
             except Exception:
                 pass
@@ -440,31 +530,40 @@ def main() -> int:
                 or ("violation" in summary)
                 or ("no-" in summary)
             )
+            # Prepare completed report for the next step.
             completed_report = has_report or status == "completed"
 
             if completed_report and summary_signals_violation and count_value is not None and count_value <= 0:
+                # Return the prepared result to the caller.
                 return fail(
                     f"inconsistent violation payload for report {item.get('report_id')}: "
                     f"violation_count={count_value}, summary={summary[:140]}",
                     23,
                 )
 
+        # Trigger the side effect required for this stage.
         print("PASS: violation-count consistency on completed violation payloads")
 
         report_ids = []
         for item in violations_payload:
+            # Choose the correct branch before the workflow continues.
             if isinstance(item, dict):
+                # Prepare rid for the next step.
                 rid = item.get("report_id")
                 if rid and rid not in report_ids:
+                    # Trigger the side effect required for this stage.
                     report_ids.append(rid)
 
+        # Choose the correct branch before the workflow continues.
         if not report_ids:
             print("PASS: no report IDs available; baseline deployed endpoints are healthy")
             return 0
 
         for rid in report_ids[:5]:
+            # Prepare values needed by the next step.
             code, payload, text = request_json("GET", f"/api/report/{rid}/status")
             if code >= 400 or not isinstance(payload, dict):
+                # Return the prepared result to the caller.
                 return fail(f"report status failed for {rid} ({code}): {text}", 9)
 
             status_value = str(payload.get("status") or "unknown").lower()
@@ -472,33 +571,41 @@ def main() -> int:
                 return fail(f"unexpected status for {rid}: {status_value}", 10)
             print(f"PASS: report-status {rid} -> {status_value}")
 
+        # Choose the correct branch before the workflow continues.
         if not GENERATE_NOW_PROBE:
+            # Trigger the side effect required for this stage.
             print(
                 "INFO: generate-now probe disabled via egress-minimal default "
                 "(set CASM_CONDITIONS_GENERATE_NOW_PROBE=1 to enable)"
             )
             if ENABLE_PROVIDER_MODE_MATRIX:
+                # Trigger the side effect required for this stage.
                 run_provider_mode_matrix_probe(report_ids)
             else:
                 print("INFO: provider mode matrix probe disabled via CASM_PROVIDER_MODE_MATRIX=0")
 
+            # Choose the correct branch before the workflow continues.
             if REQUIRE_NO_NLP_FALLBACK:
                 runtime_code, runtime_payload, runtime_text = request_json(
                     "GET",
                     "/api/providers/runtime-status",
                     timeout=30,
                 )
+                # Choose the correct branch before the workflow continues.
                 if runtime_code >= 400 or not isinstance(runtime_payload, dict):
+                    # Return the prepared result to the caller.
                     return fail(
                         f"provider runtime-status unavailable for no-fallback validation ({runtime_code}): {runtime_text}",
                         24,
                     )
                 assert_no_nlp_fallback(runtime_payload)
 
+            # Trigger the side effect required for this stage.
             print("PASS: deployed conditions matrix")
             print("observed-conditions=" + json.dumps({"generate_now_probe": False}, ensure_ascii=True))
             return 0
 
+        # Prepare conditions for the next step.
         conditions = {
             "already_completed": False,
             "already_queued_or_generating": False,
@@ -508,9 +615,11 @@ def main() -> int:
             "skipped_generate_now": False,
         }
 
+        # Prepare progression candidate for the next step.
         progression_candidate = None
 
         for rid in report_ids:
+            # Prepare values needed by the next step.
             code, payload, text = request_json(
                 "POST",
                 f"/api/report/{rid}/generate-now",
@@ -519,8 +628,10 @@ def main() -> int:
             )
 
             if code >= 500:
+                # Return the prepared result to the caller.
                 return fail(f"generate-now server error for {rid}: {code} {text}", 11)
 
+            # Choose the correct branch before the workflow continues.
             if not isinstance(payload, dict):
                 return fail(f"generate-now non-JSON response for {rid}: {text}", 12)
 
@@ -530,7 +641,9 @@ def main() -> int:
             print(f"INFO: generate-now {rid} -> code={code} body={json.dumps(payload)[:350]}")
 
             if success is False:
+                # Choose the correct branch before the workflow continues.
                 if "original image is missing" in err_msg:
+                    # Prepare values needed by the next step.
                     conditions["missing_original"] = True
                     continue
                 if is_skippable_generate_now_error(code, payload):
@@ -540,7 +653,9 @@ def main() -> int:
                         "possible Supabase egress or local cache drift."
                     )
                     continue
+                # Choose the correct branch before the workflow continues.
                 if is_transient_generate_now_error(code, payload):
+                    # Prepare values needed by the next step.
                     conditions["transient_rejection"] = True
                     print(
                         f"INFO: generate-now transient rejection for {rid}: "
@@ -549,31 +664,40 @@ def main() -> int:
                     continue
                 return fail(f"generate-now returned success=false for {rid}: {json.dumps(payload)[:350]}", 13)
 
+            # Choose the correct branch before the workflow continues.
             if payload.get("already_completed"):
+                # Prepare values needed by the next step.
                 conditions["already_completed"] = True
             elif payload.get("already_queued"):
                 conditions["already_queued_or_generating"] = True
                 if progression_candidate is None:
+                    # Prepare progression candidate for the next step.
                     progression_candidate = rid
             else:
                 conditions["accepted_new_or_reprocess"] = True
                 if progression_candidate is None:
                     progression_candidate = rid
 
+            # Choose the correct branch before the workflow continues.
             if any(conditions.values()):
                 # Continue scanning a few IDs to widen observed condition surface.
+                # Choose the correct branch before the workflow continues.
                 if sum(1 for v in conditions.values() if v) >= 2:
                     break
 
+        # Choose the correct branch before the workflow continues.
         if not any(conditions.values()):
             return fail("no recognized generate-now condition observed", 14)
 
         if progression_candidate:
+            # Prepare steps for the next step.
             steps = max(1, POLL_SECONDS // max(1, POLL_INTERVAL))
             seen = []
             for i in range(1, steps + 1):
+                # Prepare values needed by the next step.
                 code, payload, text = request_json("GET", f"/api/report/{progression_candidate}/status")
                 if code >= 400 or not isinstance(payload, dict):
+                    # Return the prepared result to the caller.
                     return fail(
                         f"status polling failed for {progression_candidate} ({code}): {text}",
                         15,
@@ -581,19 +705,24 @@ def main() -> int:
                 status_value = str(payload.get("status") or "unknown").lower()
                 seen.append(status_value)
                 print(f"poll-{i}: {progression_candidate} -> {status_value}")
+                # Choose the correct branch before the workflow continues.
                 if status_value in ("completed", "failed"):
                     break
                 time.sleep(POLL_INTERVAL)
 
+            # Choose the correct branch before the workflow continues.
             if seen and all(s in ("pending", "queued") for s in seen):
                 msg = f"{progression_candidate} remained queued/pending across polling window"
                 if REQUIRE_GENERATE_PROGRESSION:
+                    # Return the prepared result to the caller.
                     return fail(msg, 16)
                 print(f"INFO: non-blocking condition: {msg}")
 
+        # Choose the correct branch before the workflow continues.
         if ENABLE_PROVIDER_MODE_MATRIX:
             run_provider_mode_matrix_probe(report_ids)
         else:
+            # Trigger the side effect required for this stage.
             print("INFO: provider mode matrix probe disabled via CASM_PROVIDER_MODE_MATRIX=0")
 
         if REQUIRE_NO_NLP_FALLBACK:
@@ -603,12 +732,15 @@ def main() -> int:
                 timeout=30,
             )
             if runtime_code >= 400 or not isinstance(runtime_payload, dict):
+                # Return the prepared result to the caller.
                 return fail(
                     f"provider runtime-status unavailable for no-fallback validation ({runtime_code}): {runtime_text}",
                     24,
                 )
+            # Trigger the side effect required for this stage.
             assert_no_nlp_fallback(runtime_payload)
 
+        # Trigger the side effect required for this stage.
         print("PASS: deployed conditions matrix")
         print("observed-conditions=" + json.dumps(conditions, ensure_ascii=True))
         return 0
@@ -618,5 +750,7 @@ def main() -> int:
         return fail(f"Unhandled error in conditions test: {exc}", 21)
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
+    # Surface the failure with enough context for the caller.
     raise SystemExit(main())

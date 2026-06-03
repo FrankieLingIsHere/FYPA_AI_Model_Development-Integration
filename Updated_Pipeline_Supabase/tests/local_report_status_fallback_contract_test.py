@@ -5,6 +5,7 @@ When Supabase is in reconnect backoff, db_manager can still be present while
 local artifacts are the only reliable source of truth. The status endpoint must
 not return not_found for a local report folder that exists.
 """
+# Readability: Test setup: document the contract this file protects.
 
 import os
 import sys
@@ -14,6 +15,7 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 
+# Prepare root for the next step.
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -23,6 +25,7 @@ os.makedirs(TEST_STATE_DIR, exist_ok=True)
 os.makedirs(TEST_ULTRALYTICS_DIR, exist_ok=True)
 
 os.environ.setdefault("FLASK_DEBUG", "false")
+# Trigger the side effect required for this stage.
 os.environ.setdefault("SERVE_FRONTEND", "false")
 os.environ.setdefault("ADMIN_PASSWORD", "test-magic-password")
 os.environ.setdefault("BOOTSTRAP_TOKEN_SECRET", "test-bootstrap-secret")
@@ -35,15 +38,21 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "service-role-test-key")
 import casm_app
 
 
+# Section: group backoff db state and behaviour in one readable unit.
 class BackoffDB:
+    # Section: run the get detection event workflow with clear inputs and outputs.
     def get_detection_event(self, report_id):
+        # Surface the failure with enough context for the caller.
         raise ConnectionError("Database reconnect backoff active")
 
+    # Section: run the get violation workflow with clear inputs and outputs.
     def get_violation(self, report_id):
         raise ConnectionError("Database reconnect backoff active")
 
 
+# Section: group cloud db state and behaviour in one readable unit.
 class CloudDB:
+    # Section: run the get detection event workflow with clear inputs and outputs.
     def get_detection_event(self, report_id):
         return {
             "report_id": report_id,
@@ -53,7 +62,9 @@ class CloudDB:
             "updated_at": datetime.now(timezone.utc),
         }
 
+    # Section: run the get violation workflow with clear inputs and outputs.
     def get_violation(self, report_id):
+        # Return the prepared result to the caller.
         return {
             "report_id": report_id,
             "original_image_key": f"violations/{report_id}/original.jpg",
@@ -66,8 +77,11 @@ class CloudDB:
         }
 
 
+# Section: group local unsynced db state and behaviour in one readable unit.
 class LocalUnsyncedDB:
+    # Section: run the get detection event workflow with clear inputs and outputs.
     def get_detection_event(self, report_id):
+        # Return the prepared result to the caller.
         return {
             "report_id": report_id,
             "status": "generating",
@@ -76,7 +90,9 @@ class LocalUnsyncedDB:
             "updated_at": datetime.now(timezone.utc),
         }
 
+    # Section: run the get violation workflow with clear inputs and outputs.
     def get_violation(self, report_id):
+        # Return the prepared result to the caller.
         return {
             "report_id": report_id,
             "original_image_key": None,
@@ -90,8 +106,11 @@ class LocalUnsyncedDB:
         }
 
 
+# Section: group local synced db state and behaviour in one readable unit.
 class LocalSyncedDB:
+    # Section: run the get detection event workflow with clear inputs and outputs.
     def get_detection_event(self, report_id):
+        # Return the prepared result to the caller.
         return {
             "report_id": report_id,
             "status": "generating",
@@ -101,7 +120,9 @@ class LocalSyncedDB:
             "updated_at": datetime.now(timezone.utc),
         }
 
+    # Section: run the get violation workflow with clear inputs and outputs.
     def get_violation(self, report_id):
+        # Return the prepared result to the caller.
         return {
             "report_id": report_id,
             "original_image_key": f"violations/{report_id}/original.jpg",
@@ -117,8 +138,11 @@ class LocalSyncedDB:
         }
 
 
+# Section: group cloud stale synced local db state and behaviour in one readable unit.
 class CloudStaleSyncedLocalDB:
+    # Section: run the get detection event workflow with clear inputs and outputs.
     def get_detection_event(self, report_id):
+        # Return the prepared result to the caller.
         return {
             "report_id": report_id,
             "status": "completed",
@@ -127,7 +151,9 @@ class CloudStaleSyncedLocalDB:
             "updated_at": datetime.now(timezone.utc),
         }
 
+    # Section: run the get violation workflow with clear inputs and outputs.
     def get_violation(self, report_id):
+        # Return the prepared result to the caller.
         return {
             "report_id": report_id,
             "original_image_key": f"violations/{report_id}/original.jpg",
@@ -139,7 +165,9 @@ class CloudStaleSyncedLocalDB:
             },
         }
 
+    # Section: run the get all violations with status workflow with clear inputs and outputs.
     def get_all_violations_with_status(self, limit=100):
+        # Prepare report id for the next step.
         report_id = "20260516_112819"
         event = self.get_detection_event(report_id)
         violation = self.get_violation(report_id)
@@ -153,10 +181,14 @@ class CloudStaleSyncedLocalDB:
         }]
 
 
+# Section: group tag matrix db state and behaviour in one readable unit.
 class TagMatrixDB:
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, records):
+        # Prepare records for the next step.
         self.records = {record["report_id"]: record for record in records}
 
+    # Section: run the get detection event workflow with clear inputs and outputs.
     def get_detection_event(self, report_id):
         record = self.records[report_id]
         return {
@@ -168,7 +200,9 @@ class TagMatrixDB:
             "updated_at": datetime.now(timezone.utc),
         }
 
+    # Section: run the get violation workflow with clear inputs and outputs.
     def get_violation(self, report_id):
+        # Prepare record for the next step.
         record = self.records[report_id]
         return {
             "report_id": report_id,
@@ -178,9 +212,12 @@ class TagMatrixDB:
             "detection_data": dict(record.get("detection_data") or {}),
         }
 
+    # Section: run the get all violations with status workflow with clear inputs and outputs.
     def get_all_violations_with_status(self, limit=100):
+        # Prepare rows for the next step.
         rows = []
         for report_id, record in self.records.items():
+            # Trigger the side effect required for this stage.
             rows.append({
                 **self.get_detection_event(report_id),
                 **self.get_violation(report_id),
@@ -190,21 +227,29 @@ class TagMatrixDB:
                 "violation_summary": record.get("violation_summary", "PPE violation"),
                 "missing_ppe": record.get("missing_ppe", ["Mask"]),
             })
+        # Return the prepared result to the caller.
         return rows[:limit]
 
 
+# Section: group capture update db state and behaviour in one readable unit.
 class CaptureUpdateDB:
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self):
         self.calls = []
 
+    # Section: run the update violation workflow with clear inputs and outputs.
     def update_violation(self, report_id, **kwargs):
         self.calls.append((report_id, kwargs))
 
 
+# Section: group capture queue state and behaviour in one readable unit.
 class CaptureQueue:
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self):
+        # Prepare items for the next step.
         self.items = []
 
+    # Section: run the enqueue workflow with clear inputs and outputs.
     def enqueue(self, violation_data, device_id, report_id, severity, expedite=False):
         self.items.append({
             "violation_data": dict(violation_data),
@@ -213,43 +258,59 @@ class CaptureQueue:
             "severity": severity,
             "expedite": expedite,
         })
+        # Return the prepared result to the caller.
         return True
 
+    # Section: run the get stats workflow with clear inputs and outputs.
     def get_stats(self):
         return {"current_size": len(self.items), "capacity": 100}
 
+    # Section: run the get queue size workflow with clear inputs and outputs.
     def get_queue_size(self):
         return len(self.items)
 
 
+# Section: group fake image storage manager state and behaviour in one readable unit.
 class FakeImageStorageManager:
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, blobs):
+        # Prepare blobs for the next step.
         self.blobs = dict(blobs)
         self.downloads = []
 
+    # Section: run the download file content workflow with clear inputs and outputs.
     def download_file_content(self, key):
         self.downloads.append(key)
         return self.blobs.get(key)
 
 
+# Section: group capture processing db state and behaviour in one readable unit.
 class CaptureProcessingDB:
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self):
+        # Prepare inserts for the next step.
         self.inserts = []
         self.status_updates = []
 
+    # Section: run the insert detection event workflow with clear inputs and outputs.
     def insert_detection_event(self, **kwargs):
         self.inserts.append(dict(kwargs))
 
+    # Section: run the update detection status workflow with clear inputs and outputs.
     def update_detection_status(self, report_id, status, error_message=None):
         self.status_updates.append((report_id, status, error_message))
 
 
+# Section: group manual reprocess stale handoff db state and behaviour in one readable unit.
 class ManualReprocessStaleHandoffDB(CaptureUpdateDB):
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, report_id):
+        # Trigger the side effect required for this stage.
         super().__init__()
         self.report_id = report_id
         self.status_updates = []
 
+    # Section: run the get detection event workflow with clear inputs and outputs.
     def get_detection_event(self, report_id):
         return {
             "report_id": report_id,
@@ -259,7 +320,9 @@ class ManualReprocessStaleHandoffDB(CaptureUpdateDB):
             "updated_at": datetime.now(timezone.utc),
         }
 
+    # Section: run the get violation workflow with clear inputs and outputs.
     def get_violation(self, report_id):
+        # Return the prepared result to the caller.
         return {
             "report_id": report_id,
             "original_image_key": f"violations/{report_id}/original.jpg",
@@ -272,14 +335,19 @@ class ManualReprocessStaleHandoffDB(CaptureUpdateDB):
             },
         }
 
+    # Section: run the update detection status workflow with clear inputs and outputs.
     def update_detection_status(self, report_id, status, error_message=None):
+        # Trigger the side effect required for this stage.
         self.status_updates.append((report_id, status, error_message))
 
 
+# Section: group pending stale handoff db state and behaviour in one readable unit.
 class PendingStaleHandoffDB:
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, report_id):
         self.report_id = report_id
 
+    # Section: run the get pending reports workflow with clear inputs and outputs.
     def get_pending_reports(self, limit=300):
         return [{
             "report_id": self.report_id,
@@ -297,8 +365,11 @@ class PendingStaleHandoffDB:
         }]
 
 
+# Section: group partial handoff pending db state and behaviour in one readable unit.
 class PartialHandoffPendingDB:
+    # Section: run the get status workflow with clear inputs and outputs.
     def get_status(self, report_id):
+        # Return the prepared result to the caller.
         return {
             "report_id": report_id,
             "status": "completed",
@@ -313,7 +384,9 @@ class PartialHandoffPendingDB:
             "source_label": "Cloud",
         }
 
+    # Section: run the get detection event workflow with clear inputs and outputs.
     def get_detection_event(self, report_id):
+        # Return the prepared result to the caller.
         return {
             "report_id": report_id,
             "status": "completed",
@@ -323,7 +396,9 @@ class PartialHandoffPendingDB:
             "updated_at": datetime.now(timezone.utc),
         }
 
+    # Section: run the get violation workflow with clear inputs and outputs.
     def get_violation(self, report_id):
+        # Return the prepared result to the caller.
         return {
             "report_id": report_id,
             "original_image_key": f"violations/{report_id}/original.jpg",
@@ -337,7 +412,9 @@ class PartialHandoffPendingDB:
             },
         }
 
+    # Section: run the get all violations with status workflow with clear inputs and outputs.
     def get_all_violations_with_status(self, limit=200):
+        # Prepare report id for the next step.
         report_id = "20260521_114336"
         return [{
             **self.get_detection_event(report_id),
@@ -349,22 +426,28 @@ class PartialHandoffPendingDB:
         }]
 
 
+# Section: run the assert workflow with clear inputs and outputs.
 def _assert(condition, message):
+    # Choose the correct branch before the workflow continues.
     if not condition:
+        # Surface the failure with enough context for the caller.
         raise AssertionError(message)
 
 
+# Section: run the test status endpoint uses local artifacts during db backoff workflow with clear inputs and outputs.
 def test_status_endpoint_uses_local_artifacts_during_db_backoff():
     report_id = "20260508_113411"
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
+        # Trigger the side effect required for this stage.
         (report_dir / "original.jpg").write_bytes(b"not-a-real-image-but-present")
 
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
         try:
+            # Prepare violations dir for the next step.
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = BackoffDB()
             casm_app.update_report_progress(
@@ -374,9 +457,11 @@ def test_status_endpoint_uses_local_artifacts_during_db_backoff():
             )
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.get(f"/api/report/{report_id}/status")
                 payload = response.get_json() or {}
 
+            # Trigger the side effect required for this stage.
             _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
             _assert(payload.get("status") == "generating", f"Unexpected payload status: {payload}")
             _assert(payload.get("has_original") is True, "Local original image was not surfaced")
@@ -388,9 +473,12 @@ def test_status_endpoint_uses_local_artifacts_during_db_backoff():
             casm_app.reset_report_progress()
 
 
+# Section: run the test local generation failure overrides partial cloud handoff status workflow with clear inputs and outputs.
 def test_local_generation_failure_overrides_partial_cloud_handoff_status():
+    # Prepare report id for the next step.
     report_id = "20260521_114336"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -403,21 +491,25 @@ def test_local_generation_failure_overrides_partial_cloud_handoff_status():
             encoding="utf-8",
         )
 
+        # Prepare old violations dir for the next step.
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "local"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = PartialHandoffPendingDB()
             casm_app._invalidate_dashboard_snapshot_cache()
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.get(f"/api/report/{report_id}/status")
                 payload = response.get_json() or {}
                 list_response = client.get("/api/violations?limit=10")
                 list_payload = list_response.get_json() or []
 
+            # Trigger the side effect required for this stage.
             _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
             _assert(payload.get("status") == "failed", f"Local failure was hidden by cloud handoff: {payload}")
             _assert(payload.get("has_original") is True, f"Local original missing from status: {payload}")
@@ -430,6 +522,7 @@ def test_local_generation_failure_overrides_partial_cloud_handoff_status():
                 "corrective_actions" in str(payload.get("error_message") or ""),
                 f"Failure reason was not surfaced: {payload}",
             )
+            # Trigger the side effect required for this stage.
             _assert(list_response.status_code == 200, f"Unexpected list status code: {list_response.status_code}")
             row = next((item for item in list_payload if item.get("report_id") == report_id), None)
             _assert(row is not None, f"Failed local report disappeared from list: {list_payload}")
@@ -439,19 +532,24 @@ def test_local_generation_failure_overrides_partial_cloud_handoff_status():
             _assert(row.get("source_scope") == "local", f"List failure scope drifted: {row}")
             _assert(row.get("source_label") == "Local", f"List failure label drifted: {row}")
         finally:
+            # Prepare violations dir for the next step.
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
             casm_app._invalidate_dashboard_snapshot_cache()
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
             casm_app.reset_report_progress()
 
 
+# Section: run the test cloud status keeps cloud source while local staging files exist workflow with clear inputs and outputs.
 def test_cloud_status_keeps_cloud_source_while_local_staging_files_exist():
+    # Prepare report id for the next step.
     report_id = "20260511_164211"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -461,16 +559,20 @@ def test_cloud_status_keeps_cloud_source_while_local_staging_files_exist():
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "cloud"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = CloudDB()
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.get(f"/api/report/{report_id}/status")
                 payload = response.get_json() or {}
 
             _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
+            # Trigger the side effect required for this stage.
             _assert(payload.get("status") == "generating", f"Unexpected payload status: {payload}")
             _assert(payload.get("has_original") is True, "Cloud original image was not surfaced")
             _assert(payload.get("source_scope") == "cloud", f"Cloud source scope drifted: {payload}")
@@ -479,23 +581,31 @@ def test_cloud_status_keeps_cloud_source_while_local_staging_files_exist():
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            # Trigger the side effect required for this stage.
             casm_app.reset_report_progress()
 
 
+# Section: run the test cloud violations list keeps cloud source while local staging files exist workflow with clear inputs and outputs.
 def test_cloud_violations_list_keeps_cloud_source_while_local_staging_files_exist():
+    # Prepare report id for the next step.
     report_id = "20260513_190011"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
         (report_dir / "original.jpg").write_bytes(b"cloud-list-staged-original")
         (report_dir / "annotated.jpg").write_bytes(b"cloud-list-staged-annotated")
 
+        # Section: group cloud violations db state and behaviour in one readable unit.
         class CloudViolationsDB:
+            # Section: run the get all violations with status workflow with clear inputs and outputs.
             def get_all_violations_with_status(self, limit=200):
+                # Return the prepared result to the caller.
                 return [{
                     "report_id": report_id,
                     "timestamp": datetime.now(timezone.utc),
@@ -516,19 +626,23 @@ def test_cloud_violations_list_keeps_cloud_source_while_local_staging_files_exis
                     },
                 }]
 
+        # Prepare old violations dir for the next step.
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "cloud"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = CloudViolationsDB()
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.get("/api/violations?limit=50")
                 payload = response.get_json() or []
 
             _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
+            # Prepare row for the next step.
             row = next((item for item in payload if item.get("report_id") == report_id), None)
             _assert(row is not None, f"Cloud row missing from violations payload: {payload}")
             _assert(row.get("source_scope") == "cloud", f"Cloud report drifted in violations list: {row}")
@@ -537,20 +651,26 @@ def test_cloud_violations_list_keeps_cloud_source_while_local_staging_files_exis
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            # Trigger the side effect required for this stage.
             casm_app.reset_report_progress()
 
 
+# Section: run the test cloud profile does not promote backoff to local pipeline workflow with clear inputs and outputs.
 def test_cloud_profile_does_not_promote_backoff_to_local_pipeline():
+    # Prepare old profile for the next step.
     old_profile = os.environ.get("CASM_ROUTING_PROFILE")
     old_until = casm_app.supabase_offline_backoff_until_epoch
     old_context = casm_app.supabase_offline_backoff_context
     old_error = casm_app.supabase_offline_backoff_error
     try:
+        # Prepare values needed by the next step.
         os.environ["CASM_ROUTING_PROFILE"] = "cloud"
         with casm_app.supabase_offline_backoff_lock:
+            # Prepare supabase offline backoff until epoch for the next step.
             casm_app.supabase_offline_backoff_until_epoch = 9999999999.0
             casm_app.supabase_offline_backoff_context = "contract-test"
             casm_app.supabase_offline_backoff_error = "simulated lag"
@@ -560,6 +680,7 @@ def test_cloud_profile_does_not_promote_backoff_to_local_pipeline():
             "Cloud profile should not switch report generation to local artifact mode",
         )
 
+        # Prepare values needed by the next step.
         os.environ["CASM_ROUTING_PROFILE"] = "local"
         _assert(
             casm_app._is_local_pipeline_runtime_active() is True,
@@ -567,18 +688,23 @@ def test_cloud_profile_does_not_promote_backoff_to_local_pipeline():
         )
     finally:
         if old_profile is None:
+            # Trigger the side effect required for this stage.
             os.environ.pop("CASM_ROUTING_PROFILE", None)
         else:
             os.environ["CASM_ROUTING_PROFILE"] = old_profile
+        # Open the managed resource only for the block that needs it.
         with casm_app.supabase_offline_backoff_lock:
             casm_app.supabase_offline_backoff_until_epoch = old_until
             casm_app.supabase_offline_backoff_context = old_context
             casm_app.supabase_offline_backoff_error = old_error
 
 
+# Section: run the test cloud status repairs stale synced local with cloud artifacts to cloud workflow with clear inputs and outputs.
 def test_cloud_status_repairs_stale_synced_local_with_cloud_artifacts_to_cloud():
+    # Prepare report id for the next step.
     report_id = "20260516_112819"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -588,17 +714,21 @@ def test_cloud_status_repairs_stale_synced_local_with_cloud_artifacts_to_cloud()
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "cloud"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = CloudStaleSyncedLocalDB()
 
             with casm_app.app.test_client() as client:
+                # Prepare status response for the next step.
                 status_response = client.get(f"/api/report/{report_id}/status")
                 status_payload = status_response.get_json() or {}
                 list_response = client.get("/api/violations?limit=10")
                 list_payload = list_response.get_json() or []
 
+            # Trigger the side effect required for this stage.
             _assert(status_response.status_code == 200, f"Unexpected status code: {status_response.status_code}")
             _assert(status_payload.get("source_scope") == "cloud", f"Status stayed stale local: {status_payload}")
             _assert(status_payload.get("source_label") == "Cloud", f"Status label stayed stale local: {status_payload}")
@@ -608,16 +738,20 @@ def test_cloud_status_repairs_stale_synced_local_with_cloud_artifacts_to_cloud()
             _assert(row.get("source_scope") == "cloud", f"List stayed stale local: {row}")
             _assert(row.get("source_label") == "Cloud", f"List label stayed stale local: {row}")
         finally:
+            # Prepare violations dir for the next step.
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
             casm_app.reset_report_progress()
 
 
+# Section: run the test manual cloud reprocess metadata removes stale local handoff markers workflow with clear inputs and outputs.
 def test_manual_cloud_reprocess_metadata_removes_stale_local_handoff_markers():
+    # Prepare payload for the next step.
     payload = casm_app._build_manual_reprocess_detection_data(
         {
             "source_scope": "synced_local",
@@ -629,17 +763,21 @@ def test_manual_cloud_reprocess_metadata_removes_stale_local_handoff_markers():
         force_reprocess=True,
     )
 
+    # Trigger the side effect required for this stage.
     _assert(payload.get("source_scope") == "cloud", f"Cloud scope not persisted: {payload}")
     _assert(payload.get("source") == "manual_cloud_reprocess", f"Cloud repair source missing: {payload}")
     _assert("sync_source" not in payload, f"Stale local sync marker survived: {payload}")
     _assert(payload.get("caption_validation") == {"is_valid": True}, "Existing detection details were lost")
 
 
+# Section: run the test manual cloud reprocess persists source scope repair workflow with clear inputs and outputs.
 def test_manual_cloud_reprocess_persists_source_scope_repair():
     report_id = "20260516_112819"
     fake_db = CaptureUpdateDB()
+    # Prepare old db manager for the next step.
     old_db_manager = casm_app.db_manager
     try:
+        # Prepare db manager for the next step.
         casm_app.db_manager = fake_db
         casm_app._persist_manual_reprocess_source_scope(
             report_id,
@@ -655,8 +793,10 @@ def test_manual_cloud_reprocess_persists_source_scope_repair():
             },
         )
     finally:
+        # Prepare db manager for the next step.
         casm_app.db_manager = old_db_manager
 
+    # Trigger the side effect required for this stage.
     _assert(len(fake_db.calls) == 1, f"Expected one DB repair call, got {fake_db.calls}")
     called_report_id, kwargs = fake_db.calls[0]
     detection_data = kwargs.get("detection_data") or {}
@@ -667,9 +807,12 @@ def test_manual_cloud_reprocess_persists_source_scope_repair():
     _assert(detection_data.get("caption_validation") == {"is_valid": True}, "Persisted repair lost detection details")
 
 
+# Section: run the test generate now repairs stale browser handoff to cloud queue scope workflow with clear inputs and outputs.
 def test_generate_now_repairs_stale_browser_handoff_to_cloud_queue_scope():
+    # Prepare report id for the next step.
     report_id = "stale_handoff_route_001"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -679,12 +822,14 @@ def test_generate_now_repairs_stale_browser_handoff_to_cloud_queue_scope():
 
         fake_queue = CaptureQueue()
         fake_db = ManualReprocessStaleHandoffDB(report_id)
+        # Prepare old violations dir for the next step.
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
         old_violation_queue = casm_app.violation_queue
         old_ensure_queue_worker_running = casm_app.ensure_queue_worker_running
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "cloud"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = fake_db
@@ -692,6 +837,7 @@ def test_generate_now_repairs_stale_browser_handoff_to_cloud_queue_scope():
             casm_app.ensure_queue_worker_running = lambda: True
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.post(
                     f"/api/report/{report_id}/generate-now",
                     json={
@@ -702,6 +848,7 @@ def test_generate_now_repairs_stale_browser_handoff_to_cloud_queue_scope():
                 )
                 payload = response.get_json() or {}
 
+            # Trigger the side effect required for this stage.
             _assert(response.status_code == 200, f"generate-now failed: {response.status_code} {payload}")
             _assert(payload.get("source_scope") == "cloud", f"Response stayed local-synced: {payload}")
             _assert(fake_queue.items, "Manual reprocess did not enqueue")
@@ -711,6 +858,7 @@ def test_generate_now_repairs_stale_browser_handoff_to_cloud_queue_scope():
             _assert(fake_db.calls, "Manual reprocess did not persist source repair")
             repaired_detection_data = fake_db.calls[0][1].get("detection_data") or {}
             _assert(repaired_detection_data.get("source_scope") == "cloud", f"DB repair scope drifted: {repaired_detection_data}")
+            # Trigger the side effect required for this stage.
             _assert(repaired_detection_data.get("source") == "manual_cloud_reprocess", f"DB repair source drifted: {repaired_detection_data}")
             _assert("sync_source" not in repaired_detection_data, f"DB repair kept stale sync marker: {repaired_detection_data}")
         finally:
@@ -719,20 +867,28 @@ def test_generate_now_repairs_stale_browser_handoff_to_cloud_queue_scope():
             casm_app.violation_queue = old_violation_queue
             casm_app.ensure_queue_worker_running = old_ensure_queue_worker_running
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            # Trigger the side effect required for this stage.
             casm_app.reset_report_progress()
 
 
+# Section: run the test generate now recovers uploaded images before placeholder reprocess workflow with clear inputs and outputs.
 def test_generate_now_recovers_uploaded_images_before_placeholder_reprocess():
+    # Prepare report id for the next step.
     report_id = "uploaded_reprocess_image_001"
 
+    # Section: group uploaded image db state and behaviour in one readable unit.
     class UploadedImageDB(CaptureUpdateDB):
+        # Section: run the init workflow with clear inputs and outputs.
         def __init__(self):
             super().__init__()
+            # Prepare status updates for the next step.
             self.status_updates = []
 
+        # Section: run the get detection event workflow with clear inputs and outputs.
         def get_detection_event(self, _report_id):
             return {
                 "report_id": report_id,
@@ -742,7 +898,9 @@ def test_generate_now_recovers_uploaded_images_before_placeholder_reprocess():
                 "updated_at": datetime.now(timezone.utc),
             }
 
+        # Section: run the get violation workflow with clear inputs and outputs.
         def get_violation(self, _report_id):
+            # Return the prepared result to the caller.
             return {
                 "report_id": report_id,
                 "original_image_key": f"violation-images/{report_id}/original.jpg",
@@ -755,9 +913,12 @@ def test_generate_now_recovers_uploaded_images_before_placeholder_reprocess():
                 },
             }
 
+        # Section: run the update detection status workflow with clear inputs and outputs.
         def update_detection_status(self, report_id, status, error_message=None):
+            # Trigger the side effect required for this stage.
             self.status_updates.append((report_id, status, error_message))
 
+    # Open the managed resource only for the block that needs it.
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         report_dir = root / report_id
@@ -766,6 +927,7 @@ def test_generate_now_recovers_uploaded_images_before_placeholder_reprocess():
             ".jpg",
             casm_app.np.full((12, 12, 3), 128, dtype=casm_app.np.uint8),
         )
+        # Trigger the side effect required for this stage.
         _assert(ok, "Could not build original test image")
         ok, annotated_buf = casm_app.cv2.imencode(
             ".jpg",
@@ -775,6 +937,7 @@ def test_generate_now_recovers_uploaded_images_before_placeholder_reprocess():
 
         original_key = f"violation-images/{report_id}/original.jpg"
         annotated_key = f"violation-images/{report_id}/annotated.jpg"
+        # Prepare fake storage for the next step.
         fake_storage = FakeImageStorageManager({
             original_key: original_buf.tobytes(),
             annotated_key: annotated_buf.tobytes(),
@@ -784,11 +947,13 @@ def test_generate_now_recovers_uploaded_images_before_placeholder_reprocess():
 
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
+        # Prepare old storage manager for the next step.
         old_storage_manager = casm_app.storage_manager
         old_violation_queue = casm_app.violation_queue
         old_ensure_queue_worker_running = casm_app.ensure_queue_worker_running
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "cloud"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = fake_db
@@ -797,12 +962,14 @@ def test_generate_now_recovers_uploaded_images_before_placeholder_reprocess():
             casm_app.ensure_queue_worker_running = lambda: True
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.post(
                     f"/api/report/{report_id}/generate-now",
                     json={"force": True},
                 )
                 payload = response.get_json() or {}
 
+            # Trigger the side effect required for this stage.
             _assert(response.status_code == 200, f"generate-now failed: {response.status_code} {payload}")
             _assert((report_dir / "original.jpg").exists(), "Original image was not recovered locally")
             _assert((report_dir / "annotated.jpg").exists(), "Annotated image was not recovered locally")
@@ -812,6 +979,7 @@ def test_generate_now_recovers_uploaded_images_before_placeholder_reprocess():
             _assert(fake_queue.items, "Recovered-image reprocess did not enqueue")
             queue_payload = fake_queue.items[0]["violation_data"]
             _assert(queue_payload.get("original_image_path") == str(report_dir / "original.jpg"), queue_payload)
+            # Trigger the side effect required for this stage.
             _assert(not queue_payload.get("placeholder_original_used"), f"Queue payload marked placeholder: {queue_payload}")
         finally:
             casm_app.VIOLATIONS_DIR = old_violations_dir
@@ -820,15 +988,20 @@ def test_generate_now_recovers_uploaded_images_before_placeholder_reprocess():
             casm_app.violation_queue = old_violation_queue
             casm_app.ensure_queue_worker_running = old_ensure_queue_worker_running
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            # Trigger the side effect required for this stage.
             casm_app.reset_report_progress()
 
 
+# Section: run the test visible local filesystem report triggers supabase sync attempt workflow with clear inputs and outputs.
 def test_visible_local_filesystem_report_triggers_supabase_sync_attempt():
+    # Prepare report id for the next step.
     report_id = "local-visible-sync-001"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -845,12 +1018,16 @@ def test_visible_local_filesystem_report_triggers_supabase_sync_attempt():
             encoding="utf-8",
         )
 
+        # Section: group empty cloud db state and behaviour in one readable unit.
         class EmptyCloudDB:
+            # Section: run the get all violations with status workflow with clear inputs and outputs.
             def get_all_violations_with_status(self, limit=200):
+                # Return the prepared result to the caller.
                 return []
 
         sync_calls = []
 
+        # Section: run the capture visible sync workflow with clear inputs and outputs.
         def capture_visible_sync(reason, **kwargs):
             sync_calls.append((reason, kwargs))
             return {"started": True, "reason": reason}
@@ -860,7 +1037,9 @@ def test_visible_local_filesystem_report_triggers_supabase_sync_attempt():
         old_storage_manager = casm_app.storage_manager
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         old_visible_sync = casm_app._maybe_attempt_visible_local_cache_sync
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "cloud"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = EmptyCloudDB()
@@ -870,9 +1049,11 @@ def test_visible_local_filesystem_report_triggers_supabase_sync_attempt():
             casm_app._invalidate_local_report_state_cache()
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.get("/api/violations?limit=20")
                 payload = response.get_json() or []
 
+            # Trigger the side effect required for this stage.
             _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
             row = next((item for item in payload if item.get("report_id") == report_id), None)
             _assert(row is not None, f"Visible local report was hidden: {payload}")
@@ -882,34 +1063,42 @@ def test_visible_local_filesystem_report_triggers_supabase_sync_attempt():
         finally:
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
+            # Prepare storage manager for the next step.
             casm_app.storage_manager = old_storage_manager
             casm_app._maybe_attempt_visible_local_cache_sync = old_visible_sync
             casm_app._invalidate_dashboard_snapshot_cache()
             casm_app._invalidate_local_report_state_cache()
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
             casm_app.reset_report_progress()
 
 
+# Section: run the test pending reports repairs stale browser handoff to cloud scope workflow with clear inputs and outputs.
 def test_pending_reports_repairs_stale_browser_handoff_to_cloud_scope():
+    # Prepare report id for the next step.
     report_id = "stale_handoff_pending_001"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "cloud"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = PendingStaleHandoffDB(report_id)
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.get("/api/reports/pending")
                 payload = response.get_json() or []
 
             _assert(response.status_code == 200, f"Pending reports failed: {response.status_code} {payload}")
+            # Prepare row for the next step.
             row = next((item for item in payload if item.get("report_id") == report_id), None)
             _assert(row is not None, f"Missing pending row: {payload}")
             _assert(row.get("source_scope") == "cloud", f"Pending row stayed local-synced: {row}")
@@ -918,13 +1107,17 @@ def test_pending_reports_repairs_stale_browser_handoff_to_cloud_scope():
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            # Trigger the side effect required for this stage.
             casm_app.reset_report_progress()
 
 
+# Section: run the test report response injects summary readability styles for legacy reports workflow with clear inputs and outputs.
 def test_report_response_injects_summary_readability_styles_for_legacy_reports():
+    # Prepare legacy html for the next step.
     legacy_html = """
     <html>
       <head><title>Legacy report</title></head>
@@ -943,6 +1136,7 @@ def test_report_response_injects_summary_readability_styles_for_legacy_reports()
       </body>
     </html>
     """
+    # Prepare values needed by the next step.
     response_html, status_code, _headers = casm_app._report_html_response(legacy_html)
 
     _assert(status_code == 200, f"Unexpected report response status: {status_code}")
@@ -954,6 +1148,7 @@ def test_report_response_injects_summary_readability_styles_for_legacy_reports()
         'id="casm-summary-layout-normalizer"' in response_html,
         "Legacy report response did not inject summary layout normalizer",
     )
+    # Trigger the side effect required for this stage.
     _assert(
         "summary-bullet-list" in response_html,
         "Summary bullet-list CSS/normalizer missing from legacy report response",
@@ -968,9 +1163,12 @@ def test_report_response_injects_summary_readability_styles_for_legacy_reports()
     )
 
 
+# Section: run the test local db status stays local until reconnect sync evidence exists workflow with clear inputs and outputs.
 def test_local_db_status_stays_local_until_reconnect_sync_evidence_exists():
+    # Prepare report id for the next step.
     report_id = "20260513_181500"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -980,15 +1178,18 @@ def test_local_db_status_stays_local_until_reconnect_sync_evidence_exists():
         old_db_manager = casm_app.db_manager
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "local"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = LocalUnsyncedDB()
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.get(f"/api/report/{report_id}/status")
                 payload = response.get_json() or {}
 
             _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
+            # Trigger the side effect required for this stage.
             _assert(payload.get("status") in {"pending", "generating"}, f"Unexpected payload status: {payload}")
             _assert(payload.get("source_scope") == "local", f"Unsynced local report drifted: {payload}")
             _assert(payload.get("source_label") == "Local", f"Unsynced local label drifted: {payload}")
@@ -996,15 +1197,20 @@ def test_local_db_status_stays_local_until_reconnect_sync_evidence_exists():
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            # Trigger the side effect required for this stage.
             casm_app.reset_report_progress()
 
 
+# Section: run the test local db status becomes local synced after reconnect sync signal workflow with clear inputs and outputs.
 def test_local_db_status_becomes_local_synced_after_reconnect_sync_signal():
+    # Prepare report id for the next step.
     report_id = "20260513_182200"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -1014,16 +1220,20 @@ def test_local_db_status_becomes_local_synced_after_reconnect_sync_signal():
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "local"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = LocalSyncedDB()
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.get(f"/api/report/{report_id}/status")
                 payload = response.get_json() or {}
 
             _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
+            # Trigger the side effect required for this stage.
             _assert(payload.get("status") in {"completed", "generating"}, f"Unexpected payload status: {payload}")
             _assert(payload.get("source_scope") == "synced_local", f"Reconnected local report did not promote: {payload}")
             _assert(payload.get("source_label") == "Local Synced", f"Reconnected local label drifted: {payload}")
@@ -1031,15 +1241,20 @@ def test_local_db_status_becomes_local_synced_after_reconnect_sync_signal():
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            # Trigger the side effect required for this stage.
             casm_app.reset_report_progress()
 
 
+# Section: run the test violations list exposes thumbnail url for synced local images workflow with clear inputs and outputs.
 def test_violations_list_exposes_thumbnail_url_for_synced_local_images():
+    # Prepare report id for the next step.
     report_id = "20260513_182255"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -1070,19 +1285,23 @@ def test_violations_list_exposes_thumbnail_url_for_synced_local_images():
             "violation_summary": "Missing Hardhat",
         }
 
+        # Prepare old violations dir for the next step.
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "local"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = TagMatrixDB([synced_record])
             casm_app._invalidate_dashboard_snapshot_cache()
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.get("/api/violations?limit=10")
                 payload = response.get_json() or []
 
+            # Prepare row for the next step.
             row = next((item for item in payload if item.get("report_id") == report_id), None)
             expected_thumb = f"/image/{report_id}/annotated.jpg"
             _assert(response.status_code == 200, f"Unexpected list status: {response.status_code}")
@@ -1092,26 +1311,33 @@ def test_violations_list_exposes_thumbnail_url_for_synced_local_images():
             _assert(row.get("image_url") == expected_thumb, f"Primary image URL missing: {row}")
             _assert(row.get("annotated_image_url") == expected_thumb, f"Annotated URL missing: {row}")
             _assert(row.get("original_image_url") == f"/image/{report_id}/original.jpg", f"Original URL missing: {row}")
+            # Trigger the side effect required for this stage.
             _assert(row.get("local_image_url") == expected_thumb, f"Local synced image bridge missing: {row}")
         finally:
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
             casm_app._invalidate_dashboard_snapshot_cache()
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            # Trigger the side effect required for this stage.
             casm_app.reset_report_progress()
 
 
+# Section: run the test auto reconnect sync is not deferred by local runtime profile workflow with clear inputs and outputs.
 def test_auto_reconnect_sync_is_not_deferred_by_local_runtime_profile():
+    # Open the managed resource only for the block that needs it.
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare old violations dir for the next step.
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
         old_storage_manager = casm_app.storage_manager
         old_violation_queue = casm_app.violation_queue
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "local"
             casm_app.VIOLATIONS_DIR = Path(tmpdir)
             casm_app.db_manager = object()
@@ -1124,6 +1350,7 @@ def test_auto_reconnect_sync_is_not_deferred_by_local_runtime_profile():
                 reconcile_reason="manual_api",
                 require_worker=False,
             )
+            # Prepare reconnect result for the next step.
             reconnect_result = casm_app._sync_local_cache_candidates(
                 max_items=10,
                 dry_run=False,
@@ -1133,6 +1360,7 @@ def test_auto_reconnect_sync_is_not_deferred_by_local_runtime_profile():
 
             _assert(manual_result.get("deferred_reason") == "routing_profile_local", manual_result)
             _assert(reconnect_result.get("success") is True, reconnect_result)
+            # Trigger the side effect required for this stage.
             _assert(reconnect_result.get("deferred") is not True, reconnect_result)
             _assert(reconnect_result.get("scanned") == 0, reconnect_result)
         finally:
@@ -1141,18 +1369,25 @@ def test_auto_reconnect_sync_is_not_deferred_by_local_runtime_profile():
             casm_app.storage_manager = old_storage_manager
             casm_app.violation_queue = old_violation_queue
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
 
 
+# Section: run the test reconnect sync requeues completed local report after partial handoff workflow with clear inputs and outputs.
 def test_reconnect_sync_requeues_completed_local_report_after_partial_handoff():
+    # Prepare report id for the next step.
     report_id = "local-reconnect-sync-repair-001"
 
+    # Section: group partial cloud handoff db state and behaviour in one readable unit.
     class PartialCloudHandoffDB:
+        # Section: run the init workflow with clear inputs and outputs.
         def __init__(self):
+            # Prepare status updates for the next step.
             self.status_updates = []
 
+        # Section: run the get detection event workflow with clear inputs and outputs.
         def get_detection_event(self, _report_id):
             return {
                 "report_id": report_id,
@@ -1162,7 +1397,9 @@ def test_reconnect_sync_requeues_completed_local_report_after_partial_handoff():
                 "updated_at": datetime.now(timezone.utc),
             }
 
+        # Section: run the get violation workflow with clear inputs and outputs.
         def get_violation(self, _report_id):
+            # Return the prepared result to the caller.
             return {
                 "report_id": report_id,
                 "original_image_key": f"violation-images/{report_id}/original.jpg",
@@ -1176,15 +1413,19 @@ def test_reconnect_sync_requeues_completed_local_report_after_partial_handoff():
                 },
             }
 
+        # Section: run the update detection status workflow with clear inputs and outputs.
         def update_detection_status(self, report_id_arg, status, error_message=None):
+            # Trigger the side effect required for this stage.
             self.status_updates.append((report_id_arg, status, error_message))
 
+    # Open the managed resource only for the block that needs it.
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
         (report_dir / "original.jpg").write_bytes(b"local-original")
         (report_dir / "annotated.jpg").write_bytes(b"local-annotated")
+        # Trigger the side effect required for this stage.
         (report_dir / "report.html").write_text("<html>local model report</html>", encoding="utf-8")
         (report_dir / "metadata.json").write_text(
             json.dumps({
@@ -1201,6 +1442,7 @@ def test_reconnect_sync_requeues_completed_local_report_after_partial_handoff():
             encoding="utf-8",
         )
 
+        # Prepare fake db for the next step.
         fake_db = PartialCloudHandoffDB()
         fake_queue = CaptureQueue()
         old_violations_dir = casm_app.VIOLATIONS_DIR
@@ -1209,6 +1451,7 @@ def test_reconnect_sync_requeues_completed_local_report_after_partial_handoff():
         old_violation_queue = casm_app.violation_queue
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "local"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = fake_db
@@ -1222,6 +1465,7 @@ def test_reconnect_sync_requeues_completed_local_report_after_partial_handoff():
                 require_worker=False,
             )
 
+            # Trigger the side effect required for this stage.
             _assert(result.get("success") is True, result)
             _assert(result.get("candidates") == 1, result)
             _assert(result.get("enqueued") == 1, result)
@@ -1231,6 +1475,7 @@ def test_reconnect_sync_requeues_completed_local_report_after_partial_handoff():
             _assert(queued_payload.get("source_scope") == "synced_local", queued_payload)
             _assert(queued_payload.get("sync_source") == "sync_local_cache", queued_payload)
             _assert(fake_queue.items[0]["device_id"].startswith(f"local_cache_sync_{report_id}_"), fake_queue.items[0])
+            # Trigger the side effect required for this stage.
             _assert(fake_db.status_updates, "Reconnect sync should mark the row queued for reconciliation")
         finally:
             casm_app.VIOLATIONS_DIR = old_violations_dir
@@ -1238,12 +1483,15 @@ def test_reconnect_sync_requeues_completed_local_report_after_partial_handoff():
             casm_app.storage_manager = old_storage_manager
             casm_app.violation_queue = old_violation_queue
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
 
 
+# Section: run the test report source tag matrix preserves local and synced local cases workflow with clear inputs and outputs.
 def test_report_source_tag_matrix_preserves_local_and_synced_local_cases():
+    # Prepare cases for the next step.
     cases = [
         {
             "report_id": "tag_cloud_inflight",
@@ -1308,30 +1556,39 @@ def test_report_source_tag_matrix_preserves_local_and_synced_local_cases():
         },
     ]
 
+    # Open the managed resource only for the block that needs it.
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         for case in cases:
+            # Prepare report dir for the next step.
             report_dir = root / case["report_id"]
             report_dir.mkdir(parents=True, exist_ok=True)
             for filename in case.get("local_files", []):
+                # Prepare target for the next step.
                 target = report_dir / filename
                 if filename == "metadata.json":
+                    # Trigger the side effect required for this stage.
                     target.write_text(json.dumps(case.get("detection_data") or {}), encoding="utf-8")
                 else:
                     target.write_text(f"fixture for {case['report_id']} {filename}", encoding="utf-8")
 
+        # Prepare old violations dir for the next step.
         old_violations_dir = casm_app.VIOLATIONS_DIR
         old_db_manager = casm_app.db_manager
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "cloud"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = TagMatrixDB(cases)
             casm_app._invalidate_dashboard_snapshot_cache()
 
             with casm_app.app.test_client() as client:
+                # Prepare status payloads for the next step.
                 status_payloads = {}
                 for case in cases:
+                    # Prepare response for the next step.
                     response = client.get(f"/api/report/{case['report_id']}/status")
                     payload = response.get_json() or {}
                     _assert(response.status_code == 200, f"Unexpected status for {case['report_id']}: {payload}")
@@ -1340,12 +1597,14 @@ def test_report_source_tag_matrix_preserves_local_and_synced_local_cases():
                 list_response = client.get("/api/violations?limit=77")
                 list_payload = list_response.get_json() or []
 
+            # Prepare list by id for the next step.
             list_by_id = {
                 row.get("report_id"): row
                 for row in list_payload
                 if isinstance(row, dict) and row.get("report_id")
             }
             for case in cases:
+                # Prepare report id for the next step.
                 report_id = case["report_id"]
                 expected_scope = case["source_scope"]
                 expected_label = case["source_label"]
@@ -1356,6 +1615,7 @@ def test_report_source_tag_matrix_preserves_local_and_synced_local_cases():
                     status_payload.get("source_scope") == expected_scope,
                     f"Status tag drifted for {report_id}: {status_payload}",
                 )
+                # Trigger the side effect required for this stage.
                 _assert(
                     status_payload.get("source_label") == expected_label,
                     f"Status label drifted for {report_id}: {status_payload}",
@@ -1369,18 +1629,23 @@ def test_report_source_tag_matrix_preserves_local_and_synced_local_cases():
                     f"List label drifted for {report_id}: {list_row}",
                 )
         finally:
+            # Prepare violations dir for the next step.
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
             casm_app._invalidate_dashboard_snapshot_cache()
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
             casm_app.reset_report_progress()
 
 
+# Section: run the test cloud enqueue payload keeps cloud scope without browser handoff workflow with clear inputs and outputs.
 def test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff():
+    # Open the managed resource only for the block that needs it.
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         fake_queue = CaptureQueue()
         fake_db = CaptureProcessingDB()
@@ -1390,9 +1655,11 @@ def test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff():
         old_ensure_queue_worker_running = casm_app.ensure_queue_worker_running
         old_last_violation_time = casm_app.last_violation_time
         old_redundant_check = casm_app._is_redundant_live_violation
+        # Prepare old profile for the next step.
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         old_backoff_until = casm_app.supabase_offline_backoff_until_epoch
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "cloud"
             casm_app.supabase_offline_backoff_until_epoch = 0.0
             casm_app.VIOLATIONS_DIR = root
@@ -1402,6 +1669,7 @@ def test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff():
             casm_app.last_violation_time = 0
             casm_app._is_redundant_live_violation = lambda *_args, **_kwargs: False
 
+            # Prepare frame for the next step.
             frame = casm_app.np.zeros((8, 8, 3), dtype=casm_app.np.uint8)
             detections = [
                 {"class_name": "person", "confidence": 0.91, "bbox": [0, 0, 4, 7]},
@@ -1414,6 +1682,7 @@ def test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff():
                 annotated_frame=frame.copy(),
             )
 
+            # Trigger the side effect required for this stage.
             _assert(report_id, "Cloud enqueue did not return a report id")
             _assert(len(fake_queue.items) == 1, f"Expected one queue item, got {fake_queue.items}")
             item = fake_queue.items[0]
@@ -1424,6 +1693,7 @@ def test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff():
             _assert(payload.get("source") == "live_capture", f"Queue payload source marker drifted: {payload}")
             _assert(fake_db.inserts, "Cloud enqueue should still insert a pending DB event through the fake DB")
 
+            # Prepare metadata path for the next step.
             metadata_path = root / report_id / "metadata.json"
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             _assert(metadata.get("source_scope") == "cloud", f"Metadata scope drifted: {metadata}")
@@ -1433,35 +1703,47 @@ def test_cloud_enqueue_payload_keeps_cloud_scope_without_browser_handoff():
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
             casm_app.violation_queue = old_violation_queue
+            # Prepare ensure queue worker running for the next step.
             casm_app.ensure_queue_worker_running = old_ensure_queue_worker_running
             casm_app.last_violation_time = old_last_violation_time
             casm_app._is_redundant_live_violation = old_redundant_check
             casm_app.supabase_offline_backoff_until_epoch = old_backoff_until
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
 
 
+# Section: run the test cloud queued generation finishes with cloud scope without supabase mutation workflow with clear inputs and outputs.
 def test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_mutation():
+    # Section: group fake caption generator state and behaviour in one readable unit.
     class FakeCaptionGenerator:
+        # Section: run the generate caption workflow with clear inputs and outputs.
         def generate_caption(self, _image_path):
+            # Return the prepared result to the caller.
             return "Worker is missing a mask in a monitored work area."
 
+    # Section: group fake report generator state and behaviour in one readable unit.
     class FakeReportGenerator:
+        # Section: run the init workflow with clear inputs and outputs.
         def __init__(self):
             self.calls = []
 
+        # Section: run the generate report workflow with clear inputs and outputs.
         def generate_report(self, report_data):
             self.calls.append(dict(report_data))
             report_dir = Path(report_data["original_image_path"]).parent
+            # Trigger the side effect required for this stage.
             (report_dir / "report.html").write_text("<html>cloud report complete</html>", encoding="utf-8")
             return {
                 "html": "<html>cloud report complete</html>",
                 "storage_keys": {"report_html_key": f"reports/{report_data['report_id']}/report.html"},
             }
 
+    # Open the managed resource only for the block that needs it.
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_id = "cloud_queue_contract_001"
         report_dir = root / report_id
@@ -1472,6 +1754,7 @@ def test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_muta
         casm_app.cv2.imwrite(str(original_path), frame)
         casm_app.cv2.imwrite(str(annotated_path), frame)
 
+        # Prepare fake db for the next step.
         fake_db = CaptureProcessingDB()
         fake_report_generator = FakeReportGenerator()
         old_violations_dir = casm_app.VIOLATIONS_DIR
@@ -1481,7 +1764,9 @@ def test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_muta
         old_env_validation = casm_app.ENVIRONMENT_VALIDATION_ENABLED
         old_push_realtime = casm_app._push_realtime_report_event
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "cloud"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = fake_db
@@ -1514,6 +1799,7 @@ def test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_muta
                 report_id=report_id,
             )
 
+            # Trigger the side effect required for this stage.
             casm_app.process_queued_violation(queued)
 
             _assert((report_dir / "report.html").exists(), "Queued cloud report did not finish generation")
@@ -1523,6 +1809,7 @@ def test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_muta
             _assert(report_call.get("sync_source") == "live_capture", f"Generator sync marker drifted: {report_call}")
             statuses = [status for _rid, status, _err in fake_db.status_updates]
             _assert("generating" in statuses, f"Generating status missing: {fake_db.status_updates}")
+            # Trigger the side effect required for this stage.
             _assert("completed" in statuses, f"Completed status missing: {fake_db.status_updates}")
 
             metadata = json.loads((report_dir / "metadata.json").read_text(encoding="utf-8"))
@@ -1532,20 +1819,25 @@ def test_cloud_queued_generation_finishes_with_cloud_scope_without_supabase_muta
         finally:
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
+            # Prepare caption generator for the next step.
             casm_app.caption_generator = old_caption_generator
             casm_app.report_generator = old_report_generator
             casm_app.ENVIRONMENT_VALIDATION_ENABLED = old_env_validation
             casm_app._push_realtime_report_event = old_push_realtime
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
             casm_app.reset_report_progress()
 
 
+# Section: run the test local pending recovery preserves metadata ppe labels workflow with clear inputs and outputs.
 def test_local_pending_recovery_preserves_metadata_ppe_labels():
+    # Prepare report id for the next step.
     report_id = "local_recovery_metadata_contract_001"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -1564,6 +1856,7 @@ def test_local_pending_recovery_preserves_metadata_ppe_labels():
             "violation_count": 3,
             "person_count": 1,
         }), encoding="utf-8")
+        # Prepare stale epoch for the next step.
         stale_epoch = time.time() - 3600
         os.utime(report_dir, (stale_epoch, stale_epoch))
 
@@ -1573,11 +1866,13 @@ def test_local_pending_recovery_preserves_metadata_ppe_labels():
         old_violation_queue = casm_app.violation_queue
         old_ensure_runtime_ready = casm_app._ensure_violation_queue_runtime_ready
         old_ensure_queue_worker_running = casm_app.ensure_queue_worker_running
+        # Prepare old profile for the next step.
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         old_recovery_enabled = casm_app.LOCAL_PENDING_RECOVERY_ENABLED
         old_recovery_stale = casm_app.LOCAL_PENDING_RECOVERY_STALE_SECONDS
         old_recovery_max = casm_app.LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "local"
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = None
@@ -1588,6 +1883,7 @@ def test_local_pending_recovery_preserves_metadata_ppe_labels():
             casm_app.LOCAL_PENDING_RECOVERY_STALE_SECONDS = 1
             casm_app.LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = 1
 
+            # Prepare summary for the next step.
             summary = casm_app._run_local_pending_recovery_sweep(reason="contract")
 
             _assert(summary.get("enqueued") == 1, f"Recovery did not enqueue: {summary}")
@@ -1597,6 +1893,7 @@ def test_local_pending_recovery_preserves_metadata_ppe_labels():
                 payload.get("violation_types") == ["NO-Hardhat", "NO-Safety Vest", "NO-Mask"],
                 f"Recovered payload lost PPE labels: {payload}",
             )
+            # Trigger the side effect required for this stage.
             _assert(payload.get("violation_count") == 3, f"Recovered count drifted: {payload}")
             _assert(payload.get("source_scope") == "local", f"Recovered scope drifted: {payload}")
         finally:
@@ -1606,18 +1903,23 @@ def test_local_pending_recovery_preserves_metadata_ppe_labels():
             casm_app._ensure_violation_queue_runtime_ready = old_ensure_runtime_ready
             casm_app.ensure_queue_worker_running = old_ensure_queue_worker_running
             casm_app.LOCAL_PENDING_RECOVERY_ENABLED = old_recovery_enabled
+            # Prepare local pending recovery stale seconds for the next step.
             casm_app.LOCAL_PENDING_RECOVERY_STALE_SECONDS = old_recovery_stale
             casm_app.LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = old_recovery_max
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
             casm_app.reset_report_progress()
 
 
+# Section: run the test local pending recovery skips terminal failures workflow with clear inputs and outputs.
 def test_local_pending_recovery_skips_terminal_failures():
+    # Prepare report id for the next step.
     report_id = "local_recovery_terminal_failure_contract_001"
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
@@ -1627,6 +1929,7 @@ def test_local_pending_recovery_skips_terminal_failures():
 
         fake_queue = CaptureQueue()
         old_violations_dir = casm_app.VIOLATIONS_DIR
+        # Prepare old db manager for the next step.
         old_db_manager = casm_app.db_manager
         old_violation_queue = casm_app.violation_queue
         old_ensure_runtime_ready = casm_app._ensure_violation_queue_runtime_ready
@@ -1634,6 +1937,7 @@ def test_local_pending_recovery_skips_terminal_failures():
         old_recovery_stale = casm_app.LOCAL_PENDING_RECOVERY_STALE_SECONDS
         old_recovery_max = casm_app.LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP
         try:
+            # Prepare violations dir for the next step.
             casm_app.VIOLATIONS_DIR = root
             casm_app.db_manager = None
             casm_app.violation_queue = fake_queue
@@ -1644,6 +1948,7 @@ def test_local_pending_recovery_skips_terminal_failures():
 
             summary = casm_app._run_local_pending_recovery_sweep(reason="terminal_contract")
 
+            # Trigger the side effect required for this stage.
             _assert(summary.get("enqueued") == 0, f"Terminal failure was re-enqueued: {summary}")
             _assert(not fake_queue.items, "Terminal failure should not enter local recovery queue")
         finally:
@@ -1653,12 +1958,16 @@ def test_local_pending_recovery_skips_terminal_failures():
             casm_app._ensure_violation_queue_runtime_ready = old_ensure_runtime_ready
             casm_app.LOCAL_PENDING_RECOVERY_ENABLED = old_recovery_enabled
             casm_app.LOCAL_PENDING_RECOVERY_STALE_SECONDS = old_recovery_stale
+            # Prepare local pending recovery max enqueue per sweep for the next step.
             casm_app.LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = old_recovery_max
             casm_app.reset_report_progress()
 
 
+# Section: run the test strict local augmented caption allows model report workflow with clear inputs and outputs.
 def test_strict_local_augmented_caption_allows_model_report():
+    # Section: group real caption generator state and behaviour in one readable unit.
     class RealCaptionGenerator:
+        # Section: run the generate caption workflow with clear inputs and outputs.
         def generate_caption(self, _image_path):
             return (
                 "One individual is visible in a bright indoor workspace near stored materials. "
@@ -1666,10 +1975,14 @@ def test_strict_local_augmented_caption_allows_model_report():
                 "compliant construction PPE from this angle."
             )
 
+    # Section: group fake report generator state and behaviour in one readable unit.
     class FakeReportGenerator:
+        # Section: run the init workflow with clear inputs and outputs.
         def __init__(self):
+            # Prepare calls for the next step.
             self.calls = []
 
+        # Section: run the generate report workflow with clear inputs and outputs.
         def generate_report(self, report_data):
             self.calls.append(dict(report_data))
             report_dir = Path(report_data["original_image_path"]).parent
@@ -1679,7 +1992,9 @@ def test_strict_local_augmented_caption_allows_model_report():
                 "storage_keys": {},
             }
 
+    # Open the managed resource only for the block that needs it.
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Prepare root for the next step.
         root = Path(tmpdir)
         report_id = "local_caption_augmented_contract_001"
         report_dir = root / report_id
@@ -1690,6 +2005,7 @@ def test_strict_local_augmented_caption_allows_model_report():
         casm_app.cv2.imwrite(str(original_path), frame)
         casm_app.cv2.imwrite(str(annotated_path), frame)
 
+        # Prepare fake db for the next step.
         fake_db = CaptureProcessingDB()
         fake_report_generator = FakeReportGenerator()
         old_violations_dir = casm_app.VIOLATIONS_DIR
@@ -1699,8 +2015,10 @@ def test_strict_local_augmented_caption_allows_model_report():
         old_env_validation = casm_app.ENVIRONMENT_VALIDATION_ENABLED
         old_push_realtime = casm_app._push_realtime_report_event
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
+        # Prepare old require caption for the next step.
         old_require_caption = os.environ.get("LOCAL_REPORT_REQUIRE_MODEL_CAPTION")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "local"
             os.environ["LOCAL_REPORT_REQUIRE_MODEL_CAPTION"] = "true"
             casm_app.VIOLATIONS_DIR = root
@@ -1710,6 +2028,7 @@ def test_strict_local_augmented_caption_allows_model_report():
             casm_app.ENVIRONMENT_VALIDATION_ENABLED = False
             casm_app._push_realtime_report_event = lambda *_args, **_kwargs: None
 
+            # Prepare queued for the next step.
             queued = casm_app.QueuedViolation(
                 priority=0,
                 timestamp=time.time(),
@@ -1734,6 +2053,7 @@ def test_strict_local_augmented_caption_allows_model_report():
                 report_id=report_id,
             )
 
+            # Trigger the side effect required for this stage.
             casm_app.process_queued_violation(queued)
 
             _assert(fake_report_generator.calls, "Local report generator should run for augmented real caption")
@@ -1746,6 +2066,7 @@ def test_strict_local_augmented_caption_allows_model_report():
                 report_call.get("caption_quality_fallback_applied") is True,
                 f"Expected augmentation marker to remain available for provenance: {report_call}",
             )
+            # Trigger the side effect required for this stage.
             _assert(
                 "YOLO detection identified" in str(report_call.get("caption") or ""),
                 f"Expected YOLO context in report caption: {report_call}",
@@ -1758,6 +2079,7 @@ def test_strict_local_augmented_caption_allows_model_report():
                 f"Metadata lost augmentation reason: {metadata}",
             )
         finally:
+            # Prepare violations dir for the next step.
             casm_app.VIOLATIONS_DIR = old_violations_dir
             casm_app.db_manager = old_db_manager
             casm_app.caption_generator = old_caption_generator
@@ -1765,9 +2087,11 @@ def test_strict_local_augmented_caption_allows_model_report():
             casm_app.ENVIRONMENT_VALIDATION_ENABLED = old_env_validation
             casm_app._push_realtime_report_event = old_push_realtime
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            # Choose the correct branch before the workflow continues.
             if old_require_caption is None:
                 os.environ.pop("LOCAL_REPORT_REQUIRE_MODEL_CAPTION", None)
             else:
@@ -1775,15 +2099,22 @@ def test_strict_local_augmented_caption_allows_model_report():
             casm_app.reset_report_progress()
 
 
+# Section: run the test strict local caption failure blocks detection only report workflow with clear inputs and outputs.
 def test_strict_local_caption_failure_blocks_detection_only_report():
+    # Section: group failing caption generator state and behaviour in one readable unit.
     class FailingCaptionGenerator:
+        # Section: run the generate caption workflow with clear inputs and outputs.
         def generate_caption(self, _image_path):
+            # Return the prepared result to the caller.
             return "ALERT_LOCAL_MODE_UNAVAILABLE: Ollama vision request timed out"
 
+    # Section: group fake report generator state and behaviour in one readable unit.
     class FakeReportGenerator:
+        # Section: run the init workflow with clear inputs and outputs.
         def __init__(self):
             self.calls = []
 
+        # Section: run the generate report workflow with clear inputs and outputs.
         def generate_report(self, report_data):
             self.calls.append(dict(report_data))
             return {"html": "<html>should not happen</html>"}
@@ -1793,6 +2124,7 @@ def test_strict_local_caption_failure_blocks_detection_only_report():
         report_id = "local_caption_block_contract_001"
         report_dir = root / report_id
         report_dir.mkdir(parents=True, exist_ok=True)
+        # Prepare frame for the next step.
         frame = casm_app.np.zeros((8, 8, 3), dtype=casm_app.np.uint8)
         original_path = report_dir / "original.jpg"
         annotated_path = report_dir / "annotated.jpg"
@@ -1802,6 +2134,7 @@ def test_strict_local_caption_failure_blocks_detection_only_report():
         fake_db = CaptureProcessingDB()
         fake_report_generator = FakeReportGenerator()
         old_violations_dir = casm_app.VIOLATIONS_DIR
+        # Prepare old db manager for the next step.
         old_db_manager = casm_app.db_manager
         old_caption_generator = casm_app.caption_generator
         old_report_generator = casm_app.report_generator
@@ -1810,6 +2143,7 @@ def test_strict_local_caption_failure_blocks_detection_only_report():
         old_profile = os.environ.get("CASM_ROUTING_PROFILE")
         old_require_caption = os.environ.get("LOCAL_REPORT_REQUIRE_MODEL_CAPTION")
         try:
+            # Prepare values needed by the next step.
             os.environ["CASM_ROUTING_PROFILE"] = "local"
             os.environ["LOCAL_REPORT_REQUIRE_MODEL_CAPTION"] = "true"
             casm_app.VIOLATIONS_DIR = root
@@ -1819,6 +2153,7 @@ def test_strict_local_caption_failure_blocks_detection_only_report():
             casm_app.ENVIRONMENT_VALIDATION_ENABLED = False
             casm_app._push_realtime_report_event = lambda *_args, **_kwargs: None
 
+            # Prepare queued for the next step.
             queued = casm_app.QueuedViolation(
                 priority=0,
                 timestamp=time.time(),
@@ -1843,6 +2178,7 @@ def test_strict_local_caption_failure_blocks_detection_only_report():
                 report_id=report_id,
             )
 
+            # Trigger the side effect required for this stage.
             casm_app.process_queued_violation(queued)
 
             _assert(not fake_report_generator.calls, "Local report generator should not run with provider-failure caption")
@@ -1852,15 +2188,18 @@ def test_strict_local_caption_failure_blocks_detection_only_report():
             _assert("Local model caption was not available" in str(metadata.get("failure_reason")), metadata)
         finally:
             casm_app.VIOLATIONS_DIR = old_violations_dir
+            # Prepare db manager for the next step.
             casm_app.db_manager = old_db_manager
             casm_app.caption_generator = old_caption_generator
             casm_app.report_generator = old_report_generator
             casm_app.ENVIRONMENT_VALIDATION_ENABLED = old_env_validation
             casm_app._push_realtime_report_event = old_push_realtime
             if old_profile is None:
+                # Trigger the side effect required for this stage.
                 os.environ.pop("CASM_ROUTING_PROFILE", None)
             else:
                 os.environ["CASM_ROUTING_PROFILE"] = old_profile
+            # Choose the correct branch before the workflow continues.
             if old_require_caption is None:
                 os.environ.pop("LOCAL_REPORT_REQUIRE_MODEL_CAPTION", None)
             else:
@@ -1868,7 +2207,9 @@ def test_strict_local_caption_failure_blocks_detection_only_report():
             casm_app.reset_report_progress()
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main():
+    # Prepare tests for the next step.
     tests = [
         test_status_endpoint_uses_local_artifacts_during_db_backoff,
         test_local_generation_failure_overrides_partial_cloud_handoff_status,
@@ -1896,21 +2237,27 @@ def main():
         test_strict_local_augmented_caption_allows_model_report,
         test_strict_local_caption_failure_blocks_detection_only_report,
     ]
+    # Prepare failures for the next step.
     failures = []
     for test_fn in tests:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Trigger the side effect required for this stage.
             test_fn()
             print(f"PASS: {test_fn.__name__}")
         except Exception as exc:
             failures.append((test_fn.__name__, str(exc)))
             print(f"FAIL: {test_fn.__name__}: {exc}")
 
+    # Choose the correct branch before the workflow continues.
     if failures:
         print("Local report status fallback contract test failed")
+        # Surface the failure with enough context for the caller.
         raise SystemExit(1)
 
     print("Local report status fallback contract test passed")
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
     main()

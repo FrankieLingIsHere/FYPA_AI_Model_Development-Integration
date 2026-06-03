@@ -1,8 +1,10 @@
+-- Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 -- Supabase schema migration for provisioning state persistence.
 -- Run this in the Supabase SQL editor before enabling multi-instance provisioning state.
 
 BEGIN;
 
+-- Section: apply this database structure or data rule.
 CREATE TABLE IF NOT EXISTS public.provisioning_devices (
     machine_id TEXT PRIMARY KEY,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'provisioned', 'rejected')),
@@ -15,6 +17,7 @@ CREATE TABLE IF NOT EXISTS public.provisioning_devices (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Section: apply this database structure or data rule.
 CREATE INDEX IF NOT EXISTS idx_provisioning_devices_status
     ON public.provisioning_devices (status);
 
@@ -27,6 +30,7 @@ CREATE TABLE IF NOT EXISTS public.provisioning_bootstrap_jti (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Section: apply this database structure or data rule.
 CREATE INDEX IF NOT EXISTS idx_provisioning_bootstrap_jti_used_at
     ON public.provisioning_bootstrap_jti (used_at DESC);
 
@@ -41,6 +45,7 @@ END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_provisioning_devices_updated_at ON public.provisioning_devices;
+-- Section: apply this database structure or data rule.
 CREATE TRIGGER trg_provisioning_devices_updated_at
 BEFORE UPDATE ON public.provisioning_devices
 FOR EACH ROW

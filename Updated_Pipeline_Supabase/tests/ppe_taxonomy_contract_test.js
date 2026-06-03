@@ -1,3 +1,4 @@
+// Readability: Test setup: document the contract this file protects.
 /*
  * Contract test for the active PPE taxonomy.
  *
@@ -12,12 +13,15 @@ const vm = require('vm');
 
 const ROOT = path.resolve(__dirname, '..');
 
+// Section: handle the assert workflow.
 function assert(condition, message) {
+  // Choose the correct browser state branch before continuing.
   if (!condition) {
     throw new Error(message);
   }
 }
 
+// Section: handle the load script workflow.
 function loadScript(relativePath, exportName) {
   const filePath = path.join(ROOT, relativePath);
   const code = `${fs.readFileSync(filePath, 'utf8')}\nglobalThis.${exportName} = ${exportName};`;
@@ -32,6 +36,7 @@ function loadScript(relativePath, exportName) {
     },
     document: {
       getElementById(id) {
+        // Choose the correct browser state branch before continuing.
         if (!elements[id]) {
           elements[id] = {
             id,
@@ -42,12 +47,14 @@ function loadScript(relativePath, exportName) {
             getContext: () => ({}),
           };
         }
+        // Return the prepared value to the caller.
         return elements[id];
       },
     },
   };
   context.Chart = function Chart(_ctx, config) {
     chartConfigs.push(config);
+    // Return the prepared value to the caller.
     return { destroy: () => {} };
   };
   context.window.window = context.window;
@@ -55,9 +62,11 @@ function loadScript(relativePath, exportName) {
   context.window.Chart = context.Chart;
   vm.createContext(context);
   vm.runInContext(code, context, { filename: filePath });
+  // Return the prepared value to the caller.
   return { exported: context[exportName], elements, chartConfigs };
 }
 
+// Section: handle the test api ignores removed goggles taxonomy workflow.
 function testApiIgnoresRemovedGogglesTaxonomy() {
   const { exported: API } = loadScript('frontend/js/api.js', 'API');
   assert(API.canonicalViolationKey('NO-Goggles') === null, 'NO-Goggles should not canonicalize');
@@ -76,6 +85,7 @@ function testApiIgnoresRemovedGogglesTaxonomy() {
   assert(breakdown['NO-Mask'] === 1, `expected mask count to remain intact, got ${breakdown['NO-Mask']}`);
 }
 
+// Section: handle the test home dashboard does not render missing goggles workflow.
 function testHomeDashboardDoesNotRenderMissingGoggles() {
   const { exported: HomePage, elements } = loadScript('frontend/js/pages/home.js', 'HomePage');
   const palette = Object.values(HomePage.VIOLATION_TYPE_COLORS || {});
@@ -96,6 +106,7 @@ function testHomeDashboardDoesNotRenderMissingGoggles() {
   assert(html.includes('Missing Mask'), 'home dashboard should keep supported mask bucket');
 }
 
+// Section: handle the test analytics does not render or accept missing goggles workflow.
 function testAnalyticsDoesNotRenderOrAcceptMissingGoggles() {
   const { exported: AnalyticsPage, elements, chartConfigs } = loadScript('frontend/js/pages/analytics.js', 'AnalyticsPage');
   const palette = Object.values(AnalyticsPage.VIOLATION_TYPE_COLORS || {});
@@ -110,6 +121,7 @@ function testAnalyticsDoesNotRenderOrAcceptMissingGoggles() {
   const sanitized = AnalyticsPage.sanitizeAssistantFilters
     ? AnalyticsPage.sanitizeAssistantFilters({ ppeTypes: ['NO-Goggles', 'NO-Mask'] })
     : {};
+  // Choose the correct browser state branch before continuing.
   if (sanitized.ppeTypes) {
     assert(!sanitized.ppeTypes.includes('NO-Goggles'), 'analytics assistant filters should drop NO-Goggles');
   }
@@ -140,6 +152,7 @@ function testAnalyticsDoesNotRenderOrAcceptMissingGoggles() {
   assert(dataset.hoverOffset === 6, `pie chart hover offset should be 6, got ${dataset.hoverOffset}`);
 }
 
+// Section: handle the main workflow.
 function main() {
   testApiIgnoresRemovedGogglesTaxonomy();
   console.log('PASS: testApiIgnoresRemovedGogglesTaxonomy');

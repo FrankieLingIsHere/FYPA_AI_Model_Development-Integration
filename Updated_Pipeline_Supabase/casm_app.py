@@ -17,6 +17,7 @@ Usage:
 
     Then open browser to: http://localhost:5000
 """
+# Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 
 from __future__ import annotations
 
@@ -71,6 +72,7 @@ from infer_image import (
 from pipeline.backend.core.live_source_adapter import LiveSourceAdapter
 
 # Global progress tracking for report generation
+# Prepare report progress for the next step.
 report_progress = {
     'current': None,
     'total': 0,
@@ -86,6 +88,7 @@ report_progress = {
     'elapsed_seconds': 0,
     'stage_elapsed_seconds': 0,
 }
+# Prepare report progress lock for the next step.
 report_progress_lock = Lock()
 
 realtime_event_lock = Lock()
@@ -137,8 +140,11 @@ report_rendered_cache_lock = Lock()
 report_rendered_cache: Dict[str, Dict[str, Any]] = {}
 
 
+# Section: run the env float workflow with clear inputs and outputs.
 def _env_float(name: str, default: float) -> float:
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Return the prepared result to the caller.
         return float(os.getenv(name, str(default)) or default)
     except (TypeError, ValueError):
         return float(default)
@@ -148,6 +154,7 @@ QUEUE_CONTEXT_CACHE_TTL_SECONDS = max(0.0, _env_float('QUEUE_CONTEXT_CACHE_TTL_S
 queue_context_snapshot_cache_lock = Lock()
 queue_context_snapshot_cache: Dict[str, Any] = {'ts': 0.0, 'snapshot': None}
 
+# Prepare local report state cache ttl seconds for the next step.
 LOCAL_REPORT_STATE_CACHE_TTL_SECONDS = max(0.0, _env_float('LOCAL_REPORT_STATE_CACHE_TTL_SECONDS', 0.75))
 local_report_state_cache_lock = Lock()
 local_report_state_cache: Dict[str, Any] = {'ts': 0.0, 'limit': 0, 'rows': []}
@@ -157,6 +164,7 @@ STATS_SNAPSHOT_CACHE_TTL_SECONDS = max(0.0, _env_float('STATS_SNAPSHOT_CACHE_TTL
 CLOUD_STORAGE_STATS_INDEX_TTL_SECONDS = max(0.0, _env_float('CLOUD_STORAGE_STATS_INDEX_TTL_SECONDS', 300.0))
 CLOUD_STORAGE_STATS_INDEX_TIMEOUT_SECONDS = max(1.0, _env_float('CLOUD_STORAGE_STATS_INDEX_TIMEOUT_SECONDS', 4.0))
 CLOUD_STORAGE_STATS_INDEX_MAX_FOLDERS = max(50, int(_env_float('CLOUD_STORAGE_STATS_INDEX_MAX_FOLDERS', 1500.0)))
+# Prepare local mode ollama tags timeout seconds for the next step.
 LOCAL_MODE_OLLAMA_TAGS_TIMEOUT_SECONDS = max(
     0.10,
     min(_env_float('LOCAL_MODE_OLLAMA_TAGS_TIMEOUT_SECONDS', 0.35), 5.0),
@@ -166,16 +174,21 @@ dashboard_snapshot_cache: Dict[str, Dict[str, Dict[str, Any]]] = {
     'violations': {},
     'stats': {},
 }
+# Prepare cloud storage stats index cache lock for the next step.
 cloud_storage_stats_index_cache_lock = Lock()
 cloud_storage_stats_index_cache: Dict[str, Any] = {'ts': 0.0, 'storage_id': '', 'index': None}
 
 
+# Section: run the invalidate queue context snapshot cache workflow with clear inputs and outputs.
 def _invalidate_queue_context_snapshot_cache() -> None:
+    # Open the managed resource only for the block that needs it.
     with queue_context_snapshot_cache_lock:
+        # Prepare values needed by the next step.
         queue_context_snapshot_cache['ts'] = 0.0
         queue_context_snapshot_cache['snapshot'] = None
 
 
+# Section: run the invalidate local report state cache workflow with clear inputs and outputs.
 def _invalidate_local_report_state_cache() -> None:
     with local_report_state_cache_lock:
         local_report_state_cache['ts'] = 0.0
@@ -183,45 +196,60 @@ def _invalidate_local_report_state_cache() -> None:
         local_report_state_cache['rows'] = []
 
 
+# Section: run the invalidate dashboard snapshot cache workflow with clear inputs and outputs.
 def _invalidate_dashboard_snapshot_cache(bucket: Optional[str] = None) -> None:
+    # Open the managed resource only for the block that needs it.
     with dashboard_snapshot_cache_lock:
+        # Choose the correct branch before the workflow continues.
         if bucket:
+            # Trigger the side effect required for this stage.
             dashboard_snapshot_cache.setdefault(bucket, {}).clear()
         else:
             for cache_bucket in dashboard_snapshot_cache.values():
+                # Trigger the side effect required for this stage.
                 cache_bucket.clear()
     if bucket is None or bucket == 'stats':
         _invalidate_cloud_storage_stats_index_cache()
 
 
+# Section: run the invalidate cloud storage stats index cache workflow with clear inputs and outputs.
 def _invalidate_cloud_storage_stats_index_cache() -> None:
+    # Open the managed resource only for the block that needs it.
     with cloud_storage_stats_index_cache_lock:
+        # Prepare values needed by the next step.
         cloud_storage_stats_index_cache['ts'] = 0.0
         cloud_storage_stats_index_cache['storage_id'] = ''
         cloud_storage_stats_index_cache['index'] = None
 
 
+# Section: run the normalize storage list payload workflow with clear inputs and outputs.
 def _normalize_storage_list_payload(raw_payload: Any) -> List[Dict[str, Any]]:
     payload = raw_payload
     if isinstance(payload, dict):
         payload = payload.get('data') or payload.get('items') or []
+    # Choose the correct branch before the workflow continues.
     if not isinstance(payload, list):
+        # Return the prepared result to the caller.
         return []
     return [item for item in payload if isinstance(item, dict)]
 
 
+# Section: run the list storage entries metadata only workflow with clear inputs and outputs.
 def _list_storage_entries_metadata_only(bucket_name: str, path: str = '', *, limit: int = 1000) -> List[Dict[str, Any]]:
     """List Supabase Storage metadata only; this must never download object bytes."""
     if storage_manager is None:
         return []
+    # Prepare bucket for the next step.
     bucket = storage_manager.client.storage.from_(bucket_name)
     normalized_path = str(path or '').strip().strip('/')
     page_limit = max(1, min(int(limit or 1000), 1000))
     entries: List[Dict[str, Any]] = []
     offset = 0
     while offset < CLOUD_STORAGE_STATS_INDEX_MAX_FOLDERS:
+        # Prepare used unpaged fallback for the next step.
         used_unpaged_fallback = False
         try:
+            # Prepare raw page for the next step.
             raw_page = bucket.list(
                 path=normalized_path,
                 options={
@@ -231,9 +259,11 @@ def _list_storage_entries_metadata_only(bucket_name: str, path: str = '', *, lim
                 },
             )
         except TypeError:
+            # Prepare used unpaged fallback for the next step.
             used_unpaged_fallback = True
             raw_page = bucket.list(path=normalized_path)
 
+        # Prepare page for the next step.
         page = _normalize_storage_list_payload(raw_page)
         if not page:
             break
@@ -243,20 +273,26 @@ def _list_storage_entries_metadata_only(bucket_name: str, path: str = '', *, lim
         offset += page_limit
 
         # Older clients that ignore options would return the same page forever.
+        # Choose the correct branch before the workflow continues.
         if used_unpaged_fallback:
             break
     return entries
 
 
+# Section: run the storage entry names workflow with clear inputs and outputs.
 def _storage_entry_names(entries: List[Dict[str, Any]]) -> List[str]:
     names: List[str] = []
     for entry in entries:
         name = str(entry.get('name') or '').strip().strip('/')
+        # Choose the correct branch before the workflow continues.
         if name:
+            # Trigger the side effect required for this stage.
             names.append(name)
+    # Return the prepared result to the caller.
     return names
 
 
+# Section: run the build cloud storage stats index uncached workflow with clear inputs and outputs.
 def _build_cloud_storage_stats_index_uncached() -> Dict[str, Any]:
     if storage_manager is None:
         return {'available': False, 'source': 'storage_manager_unavailable'}
@@ -265,17 +301,21 @@ def _build_cloud_storage_stats_index_uncached() -> Dict[str, Any]:
     images_bucket = str(getattr(storage_manager, 'images_bucket', 'violation-images') or 'violation-images').strip()
     report_ids: set = set()
     image_ids: set = set()
+    # Prepare scanned report folders for the next step.
     scanned_report_folders = 0
     scanned_image_folders = 0
 
     report_root_names = _storage_entry_names(_list_storage_entries_metadata_only(reports_bucket, ''))
     for folder_name in report_root_names[:CLOUD_STORAGE_STATS_INDEX_MAX_FOLDERS]:
+        # Prepare lower name for the next step.
         lower_name = folder_name.lower()
         if lower_name in {'report.html', 'report.pdf'}:
             continue
         if '/' in folder_name:
+            # Prepare values needed by the next step.
             report_id, filename = folder_name.split('/', 1)
             if filename.lower().rsplit('/', 1)[-1] in {'report.html', 'report.pdf'}:
+                # Trigger the side effect required for this stage.
                 report_ids.add(report_id)
             continue
         child_names = {
@@ -283,9 +323,12 @@ def _build_cloud_storage_stats_index_uncached() -> Dict[str, Any]:
             for child in _storage_entry_names(_list_storage_entries_metadata_only(reports_bucket, folder_name, limit=50))
         }
         scanned_report_folders += 1
+        # Choose the correct branch before the workflow continues.
         if 'report.html' in child_names or 'report.pdf' in child_names:
+            # Trigger the side effect required for this stage.
             report_ids.add(folder_name)
 
+    # Prepare image root names for the next step.
     image_root_names = _storage_entry_names(_list_storage_entries_metadata_only(images_bucket, ''))
     for folder_name in image_root_names[:CLOUD_STORAGE_STATS_INDEX_MAX_FOLDERS]:
         lower_name = folder_name.lower()
@@ -293,17 +336,22 @@ def _build_cloud_storage_stats_index_uncached() -> Dict[str, Any]:
             continue
         if '/' in folder_name:
             report_id, filename = folder_name.split('/', 1)
+            # Choose the correct branch before the workflow continues.
             if filename.lower().rsplit('/', 1)[-1] in {'original.jpg', 'annotated.jpg', 'original.jpeg', 'annotated.jpeg', 'original.png', 'annotated.png'}:
+                # Trigger the side effect required for this stage.
                 image_ids.add(report_id)
             continue
+        # Prepare child names for the next step.
         child_names = {
             child.lower()
             for child in _storage_entry_names(_list_storage_entries_metadata_only(images_bucket, folder_name, limit=50))
         }
         scanned_image_folders += 1
         if child_names.intersection({'original.jpg', 'annotated.jpg', 'original.jpeg', 'annotated.jpeg', 'original.png', 'annotated.png'}):
+            # Trigger the side effect required for this stage.
             image_ids.add(folder_name)
 
+    # Prepare artifact ids for the next step.
     artifact_ids = set(image_ids) | set(report_ids)
     return {
         'available': True,
@@ -321,8 +369,11 @@ def _build_cloud_storage_stats_index_uncached() -> Dict[str, Any]:
     }
 
 
+# Section: run the get cloud storage stats index workflow with clear inputs and outputs.
 def _get_cloud_storage_stats_index() -> Optional[Dict[str, Any]]:
+    # Choose the correct branch before the workflow continues.
     if storage_manager is None or _is_supabase_offline_backoff_active():
+        # Return the prepared result to the caller.
         return None
     storage_id = '|'.join([
         str(getattr(storage_manager, 'supabase_url', '') or ''),
@@ -332,6 +383,7 @@ def _get_cloud_storage_stats_index() -> Optional[Dict[str, Any]]:
     now = time.time()
     if CLOUD_STORAGE_STATS_INDEX_TTL_SECONDS > 0:
         with cloud_storage_stats_index_cache_lock:
+            # Prepare cached index for the next step.
             cached_index = cloud_storage_stats_index_cache.get('index')
             cached_ts = float(cloud_storage_stats_index_cache.get('ts') or 0.0)
             cached_storage_id = str(cloud_storage_stats_index_cache.get('storage_id') or '')
@@ -340,9 +392,12 @@ def _get_cloud_storage_stats_index() -> Optional[Dict[str, Any]]:
                 and cached_storage_id == storage_id
                 and (now - cached_ts) < CLOUD_STORAGE_STATS_INDEX_TTL_SECONDS
             ):
+                # Return the prepared result to the caller.
                 return dict(cached_index)
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare index for the next step.
         index = _run_with_timeout(
             _build_cloud_storage_stats_index_uncached,
             int(CLOUD_STORAGE_STATS_INDEX_TIMEOUT_SECONDS),
@@ -352,19 +407,25 @@ def _get_cloud_storage_stats_index() -> Optional[Dict[str, Any]]:
         logger.warning(f"Cloud storage stats metadata index unavailable: {storage_index_error}")
         return None
 
+    # Choose the correct branch before the workflow continues.
     if not isinstance(index, dict) or not index.get('available'):
+        # Return the prepared result to the caller.
         return None
 
     if CLOUD_STORAGE_STATS_INDEX_TTL_SECONDS > 0:
         with cloud_storage_stats_index_cache_lock:
+            # Prepare values needed by the next step.
             cloud_storage_stats_index_cache['ts'] = now
             cloud_storage_stats_index_cache['storage_id'] = storage_id
             cloud_storage_stats_index_cache['index'] = dict(index)
     return index
 
 
+# Section: run the get cached dashboard snapshot workflow with clear inputs and outputs.
 def _get_cached_dashboard_snapshot(bucket: str, cache_key: str, ttl_seconds: float):
+    # Choose the correct branch before the workflow continues.
     if ttl_seconds <= 0:
+        # Return the prepared result to the caller.
         return None
 
     now = time.time()
@@ -372,45 +433,57 @@ def _get_cached_dashboard_snapshot(bucket: str, cache_key: str, ttl_seconds: flo
         bucket_cache = dashboard_snapshot_cache.setdefault(bucket, {})
         entry = bucket_cache.get(cache_key)
         if not entry:
+            # Return the prepared result to the caller.
             return None
         expires_at = float(entry.get('expires_at') or 0.0)
+        # Choose the correct branch before the workflow continues.
         if expires_at <= now:
             bucket_cache.pop(cache_key, None)
             return None
         return entry.get('payload')
 
 
+# Section: run the set cached dashboard snapshot workflow with clear inputs and outputs.
 def _set_cached_dashboard_snapshot(bucket: str, cache_key: str, payload: Any, ttl_seconds: float) -> None:
+    # Choose the correct branch before the workflow continues.
     if ttl_seconds <= 0:
         return
 
     with dashboard_snapshot_cache_lock:
+        # Prepare bucket cache for the next step.
         bucket_cache = dashboard_snapshot_cache.setdefault(bucket, {})
         bucket_cache[cache_key] = {
             'expires_at': time.time() + ttl_seconds,
             'payload': payload,
         }
         if len(bucket_cache) > 48:
+            # Prepare stale keys for the next step.
             stale_keys = sorted(
                 bucket_cache,
                 key=lambda key: float(bucket_cache[key].get('expires_at') or 0.0)
             )[:16]
             for key in stale_keys:
+                # Trigger the side effect required for this stage.
                 bucket_cache.pop(key, None)
 
 
+# Section: run the get cached report html content workflow with clear inputs and outputs.
 def _get_cached_report_html_content(report_id: str, report_html_key: str) -> Optional[str]:
+    # Choose the correct branch before the workflow continues.
     if REPORT_HTML_CACHE_TTL_SECONDS <= 0:
+        # Return the prepared result to the caller.
         return None
 
     now = time.time()
     with report_html_cache_lock:
         entry = report_html_cache.get(report_id)
         if not entry:
+            # Return the prepared result to the caller.
             return None
         if entry.get('report_html_key') != report_html_key:
             report_html_cache.pop(report_id, None)
             return None
+        # Prepare expires at for the next step.
         expires_at = float(entry.get('expires_at') or 0)
         if expires_at <= now:
             report_html_cache.pop(report_id, None)
@@ -419,8 +492,11 @@ def _get_cached_report_html_content(report_id: str, report_html_key: str) -> Opt
         return content if isinstance(content, str) else None
 
 
+# Section: run the set cached report html content workflow with clear inputs and outputs.
 def _set_cached_report_html_content(report_id: str, report_html_key: str, content: str) -> None:
+    # Choose the correct branch before the workflow continues.
     if REPORT_HTML_CACHE_TTL_SECONDS <= 0:
+        # Return the prepared result to the caller.
         return
     if not isinstance(content, str) or not content:
         return
@@ -431,18 +507,24 @@ def _set_cached_report_html_content(report_id: str, report_html_key: str, conten
             'content': content,
             'expires_at': time.time() + REPORT_HTML_CACHE_TTL_SECONDS,
         }
+        # Choose the correct branch before the workflow continues.
         if len(report_html_cache) > 300:
             # Evict oldest expiring entries to bound memory usage.
+            # Prepare stale keys for the next step.
             stale_keys = sorted(
                 report_html_cache,
                 key=lambda k: float(report_html_cache[k].get('expires_at') or 0)
             )[:80]
             for key in stale_keys:
+                # Trigger the side effect required for this stage.
                 report_html_cache.pop(key, None)
 
 
+# Section: run the persist local report html cache workflow with clear inputs and outputs.
 def _persist_local_report_html_cache(report_id: str, html_content: str) -> None:
+    # Choose the correct branch before the workflow continues.
     if not report_id:
+        # Return the prepared result to the caller.
         return
     if not isinstance(html_content, str) or not html_content:
         return
@@ -452,16 +534,21 @@ def _persist_local_report_html_cache(report_id: str, html_content: str) -> None:
     try:
         violation_dir = VIOLATIONS_DIR / report_id
         violation_dir.mkdir(parents=True, exist_ok=True)
+        # Prepare report path for the next step.
         report_path = violation_dir / 'report.html'
 
         if report_path.exists():
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare existing for the next step.
                 existing = report_path.read_text(encoding='utf-8', errors='ignore')
                 if existing and not _looks_like_fallback_template_html(existing):
+                    # Return the prepared result to the caller.
                     return
             except Exception:
                 return
 
+        # Open the managed resource only for the block that needs it.
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
         _invalidate_local_report_state_cache()
@@ -470,8 +557,11 @@ def _persist_local_report_html_cache(report_id: str, html_content: str) -> None:
         logger.debug(f"Could not persist cached report HTML for {report_id}: {e}")
 
 
+# Section: run the egress budget blocked response workflow with clear inputs and outputs.
 def _egress_budget_blocked_response():
+    # Choose the correct branch before the workflow continues.
     if storage_manager is None:
+        # Return the prepared result to the caller.
         return None
     try:
         usage = storage_manager.get_egress_usage()
@@ -486,18 +576,23 @@ def _egress_budget_blocked_response():
     }), 429
 
 
+# Section: run the get cached rendered report html workflow with clear inputs and outputs.
 def _get_cached_rendered_report_html(report_id: str, report_html_key: str) -> Optional[str]:
+    # Choose the correct branch before the workflow continues.
     if REPORT_RENDERED_CACHE_TTL_SECONDS <= 0:
+        # Return the prepared result to the caller.
         return None
 
     now = time.time()
     with report_rendered_cache_lock:
         entry = report_rendered_cache.get(report_id)
         if not entry:
+            # Return the prepared result to the caller.
             return None
         if entry.get('report_html_key') != report_html_key:
             report_rendered_cache.pop(report_id, None)
             return None
+        # Prepare expires at for the next step.
         expires_at = float(entry.get('expires_at') or 0)
         if expires_at <= now:
             report_rendered_cache.pop(report_id, None)
@@ -506,45 +601,56 @@ def _get_cached_rendered_report_html(report_id: str, report_html_key: str) -> Op
         return content if isinstance(content, str) else None
 
 
+# Section: run the get any cached rendered report html workflow with clear inputs and outputs.
 def _get_any_cached_rendered_report_html(report_id: str) -> Optional[str]:
     """Return a warm rendered report by report_id before slower metadata lookups."""
+    # Choose the correct branch before the workflow continues.
     if REPORT_RENDERED_CACHE_TTL_SECONDS <= 0:
+        # Return the prepared result to the caller.
         return None
 
     now = time.time()
     with report_rendered_cache_lock:
         entry = report_rendered_cache.get(report_id)
         if not entry:
+            # Return the prepared result to the caller.
             return None
         expires_at = float(entry.get('expires_at') or 0)
         if expires_at <= now:
             report_rendered_cache.pop(report_id, None)
             return None
+        # Prepare content for the next step.
         content = entry.get('content')
         return content if isinstance(content, str) else None
 
 
+# Section: run the set cached rendered report html workflow with clear inputs and outputs.
 def _set_cached_rendered_report_html(report_id: str, report_html_key: str, content: str) -> None:
+    # Choose the correct branch before the workflow continues.
     if REPORT_RENDERED_CACHE_TTL_SECONDS <= 0:
         return
     if not isinstance(content, str) or not content:
         return
 
     with report_rendered_cache_lock:
+        # Prepare values needed by the next step.
         report_rendered_cache[report_id] = {
             'report_html_key': report_html_key,
             'content': content,
             'expires_at': time.time() + REPORT_RENDERED_CACHE_TTL_SECONDS,
         }
         if len(report_rendered_cache) > 300:
+            # Prepare stale keys for the next step.
             stale_keys = sorted(
                 report_rendered_cache,
                 key=lambda k: float(report_rendered_cache[k].get('expires_at') or 0)
             )[:80]
             for key in stale_keys:
+                # Trigger the side effect required for this stage.
                 report_rendered_cache.pop(key, None)
 
 # Import pipeline components for violation handling
+# Protect this step so expected failures can fall back cleanly.
 try:
     from pipeline.backend.core.violation_detector import ViolationDetector
     from pipeline.backend.integration.caption_generator import CaptionGenerator
@@ -554,6 +660,7 @@ try:
     from pipeline.backend.core.supabase_storage import create_storage_manager_from_env
     from pipeline.backend.core.violation_queue import ViolationQueueManager, QueuedViolation
     from pipeline.config import VIOLATION_RULES, LLAVA_CONFIG, OLLAMA_CONFIG, GEMINI_CONFIG, MODEL_API_CONFIG, RAG_CONFIG, REPORT_CONFIG, BRAND_COLORS, VIOLATIONS_DIR, REPORTS_DIR, SUPABASE_CONFIG
+    # Prepare full pipeline available for the next step.
     FULL_PIPELINE_AVAILABLE = True
 except ImportError as e:
     FULL_PIPELINE_AVAILABLE = False
@@ -562,6 +669,7 @@ except ImportError as e:
     except Exception:
         from dataclasses import dataclass, field
 
+        # Section: group queued violation state and behaviour in one readable unit.
         @dataclass(order=True)
         class QueuedViolation:
             priority: int
@@ -571,6 +679,7 @@ except ImportError as e:
             report_id: str = field(compare=False, default='')
             retry_count: int = field(compare=False, default=0)
 
+    # Prepare violation rules for the next step.
     VIOLATION_RULES = {}
     LLAVA_CONFIG = {}
     OLLAMA_CONFIG = {}
@@ -580,10 +689,12 @@ except ImportError as e:
     REPORT_CONFIG = {}
     BRAND_COLORS = {}
     REPORTS_DIR = Path('pipeline/reports')
+    # Prepare supabase config for the next step.
     SUPABASE_CONFIG = {}
     logging.warning(f"Full pipeline components not available - violations will be detected but reports won't be generated: {e}")
 
 # Setup logging
+# Trigger the side effect required for this stage.
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -604,6 +715,7 @@ FRONTEND_APP_URL = os.getenv(
     'FRONTEND_APP_URL',
     'https://fypa-ai-model-development-integrati.vercel.app'
 ).strip().rstrip('/')
+# Prepare api only root redirect enabled for the next step.
 API_ONLY_ROOT_REDIRECT_ENABLED = os.getenv('API_ONLY_ROOT_REDIRECT_ENABLED', 'true').lower() == 'true'
 ALLOWED_ORIGINS = [
     origin.strip() for origin in os.getenv('ALLOWED_ORIGINS', '*').split(',') if origin.strip()
@@ -615,6 +727,7 @@ STARTUP_MODEL_WARMUP_ENABLED = os.getenv(
     'STARTUP_MODEL_WARMUP_ENABLED',
     'true' if SERVE_FRONTEND else 'false'
 ).lower() == 'true'
+# Prepare startup model warmup timeout seconds for the next step.
 STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS = int(os.getenv('STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS', '120'))
 STARTUP_COMPONENT_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_COMPONENT_INIT_TIMEOUT_SECONDS', '90'))
 STARTUP_MODEL_PATH_CHECK_TIMEOUT_SECONDS = int(os.getenv('STARTUP_MODEL_PATH_CHECK_TIMEOUT_SECONDS', '15'))
@@ -624,6 +737,7 @@ STARTUP_MODEL_PATH_CHECK_ENABLED = os.getenv(
 ).lower() == 'true'
 STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS', '20'))
 STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS', '20'))
+# Prepare startup report generator init timeout seconds for the next step.
 STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS = int(os.getenv('STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS', '30'))
 STARTUP_AUTO_PREPARE_LOCAL_MODE = os.getenv('STARTUP_AUTO_PREPARE_LOCAL_MODE', 'false').lower() == 'true'
 STARTUP_AUTO_PULL_LOCAL_MODEL = os.getenv('STARTUP_AUTO_PULL_LOCAL_MODEL', 'true').lower() == 'true'
@@ -631,21 +745,25 @@ STARTUP_LOCAL_MODE_PREP_WAIT_SECONDS = int(os.getenv('STARTUP_LOCAL_MODE_PREP_WA
 STARTUP_LOCAL_MODE_PULL_TIMEOUT_SECONDS = int(os.getenv('STARTUP_LOCAL_MODE_PULL_TIMEOUT_SECONDS', '240'))
 STARTUP_AUTO_PROVISION_LOCAL_MODE = os.getenv('STARTUP_AUTO_PROVISION_LOCAL_MODE', 'false').lower() == 'true'
 try:
+    # Prepare startup auto provision poll interval seconds for the next step.
     STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS = int(
         os.getenv('STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS', '15')
     )
 except (TypeError, ValueError):
     STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS = 15
+# Prepare startup auto provision poll interval seconds for the next step.
 STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS = max(
     5,
     min(STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS, 300),
 )
 try:
+    # Prepare startup auto provision max attempts for the next step.
     STARTUP_AUTO_PROVISION_MAX_ATTEMPTS = int(
         os.getenv('STARTUP_AUTO_PROVISION_MAX_ATTEMPTS', '120')
     )
 except (TypeError, ValueError):
     STARTUP_AUTO_PROVISION_MAX_ATTEMPTS = 120
+# Prepare startup auto provision max attempts for the next step.
 STARTUP_AUTO_PROVISION_MAX_ATTEMPTS = max(0, min(STARTUP_AUTO_PROVISION_MAX_ATTEMPTS, 100000))
 LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED = os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED', 'true').lower() == 'true'
 # Adaptive heartbeat: cycle starts at MIN interval after any state change or
@@ -659,15 +777,18 @@ try:
     )
 except (TypeError, ValueError):
     LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS = 60
+# Prepare local mode cloud heartbeat min interval seconds for the next step.
 LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS = max(
     15, min(LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS, 600)
 )
 try:
+    # Prepare local mode cloud heartbeat max interval seconds for the next step.
     LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS = int(
         os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS', '600')
     )
 except (TypeError, ValueError):
     LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS = 600
+# Prepare local mode cloud heartbeat max interval seconds for the next step.
 LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS = max(
     LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS,
     min(LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS, 3600),
@@ -678,6 +799,7 @@ try:
     _legacy_hb_interval = int(os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_INTERVAL_SECONDS', '0'))
 except (TypeError, ValueError):
     _legacy_hb_interval = 0
+# Choose the correct branch before the workflow continues.
 if _legacy_hb_interval > 0:
     LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS = max(
         15, min(_legacy_hb_interval, LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS)
@@ -692,55 +814,66 @@ try:
     )
 except (TypeError, ValueError):
     LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N = 5
+# Prepare local mode cloud heartbeat auth fetch every n for the next step.
 LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N = max(
     1, min(LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N, 100)
 )
 try:
+    # Prepare local mode cloud heartbeat timeout seconds for the next step.
     LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = int(
         os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS', '20')
     )
 except (TypeError, ValueError):
     LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = 20
+# Prepare local mode cloud heartbeat timeout seconds for the next step.
 LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS = max(
     3,
     min(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS, 30),
 )
 try:
+    # Prepare local mode provision http timeout seconds for the next step.
     LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS = int(
         os.getenv('LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS', '30')
     )
 except (TypeError, ValueError):
     LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS = 30
+# Prepare local mode provision http timeout seconds for the next step.
 LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS = max(
     12,
     min(LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS, 60),
 )
 try:
+    # Prepare local mode cloud heartbeat retry attempts for the next step.
     LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS = int(
         os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS', '2')
     )
 except (TypeError, ValueError):
     LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS = 2
+# Prepare local mode cloud heartbeat retry attempts for the next step.
 LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS = max(
     1,
     min(LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS, 3),
 )
 try:
+    # Prepare local mode cloud heartbeat retry delay seconds for the next step.
     LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS = float(
         os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS', '1.5')
     )
 except (TypeError, ValueError):
     LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS = 1.5
+# Prepare local mode cloud heartbeat retry delay seconds for the next step.
 LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS = max(
     0.0,
     min(LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS, 5.0),
 )
 try:
+    # Prepare local mode cloud heartbeat fresh seconds for the next step.
     LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS = int(
         os.getenv('LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS', '180')
     )
 except (TypeError, ValueError):
     LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS = 180
+# Prepare local mode cloud heartbeat fresh seconds for the next step.
 LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS = max(
     30,
     min(LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS, 3600),
@@ -752,7 +885,9 @@ LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS = min(
         int(LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS // 2),
     ),
 )
+# Protect this step so expected failures can fall back cleanly.
 try:
+    # Prepare local mode provision secret stale recovery seconds for the next step.
     LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS = int(
         os.getenv('LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS', '45')
     )
@@ -762,7 +897,9 @@ LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS = max(
     15,
     min(LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS, 300),
 )
+# Protect this step so expected failures can fall back cleanly.
 try:
+    # Prepare provision credential proof ttl seconds for the next step.
     PROVISION_CREDENTIAL_PROOF_TTL_SECONDS = int(
         os.getenv('PROVISION_CREDENTIAL_PROOF_TTL_SECONDS', '300')
     )
@@ -772,7 +909,9 @@ PROVISION_CREDENTIAL_PROOF_TTL_SECONDS = max(
     60,
     min(PROVISION_CREDENTIAL_PROOF_TTL_SECONDS, 900),
 )
+# Protect this step so expected failures can fall back cleanly.
 try:
+    # Prepare local mode heartbeat retention seconds for the next step.
     LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS = int(
         os.getenv('LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS', '172800')
     )
@@ -782,6 +921,7 @@ LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS = max(
     LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS,
     min(LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS, 7 * 24 * 3600),
 )
+# Prepare enable testing endpoints for the next step.
 ENABLE_TESTING_ENDPOINTS = os.getenv('ENABLE_TESTING_ENDPOINTS', 'false').lower() == 'true'
 ALLOW_OFFLINE_LOCAL_MODE = os.getenv('ALLOW_OFFLINE_LOCAL_MODE', 'true').lower() == 'true'
 LOCAL_OLLAMA_UNIFIED_MODEL = str(
@@ -791,6 +931,7 @@ LOCAL_OLLAMA_UNIFIED_MODEL = str(
     or (OLLAMA_CONFIG or {}).get('model')
     or 'gemma3:4b'
 ).strip()
+# Prepare strict local ollama model for the next step.
 STRICT_LOCAL_OLLAMA_MODEL = str(os.getenv('STRICT_LOCAL_OLLAMA_MODEL', 'gemma3:4b') or 'gemma3:4b').strip() or 'gemma3:4b'
 
 STRICT_PROVIDER_MODE_SPLIT = os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true').lower() in ('1', 'true', 'yes', 'on')
@@ -811,9 +952,12 @@ PROVIDER_PROFILE_PRESETS = {
     },
 }
 
+# Choose the correct branch before the workflow continues.
 if STRICT_PROVIDER_MODE_SPLIT:
+    # Prepare initial profile raw for the next step.
     _initial_profile_raw = str(os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower()
     if _initial_profile_raw in ('local', 'cloud'):
+        # Prepare initial profile for the next step.
         _initial_profile = _initial_profile_raw
     else:
         # Safe default when profile is unset: cloud (Gemini). Local/Ollama must be explicit.
@@ -821,6 +965,7 @@ if STRICT_PROVIDER_MODE_SPLIT:
     _initial_preset = PROVIDER_PROFILE_PRESETS.get(_initial_profile, PROVIDER_PROFILE_PRESETS['cloud'])
     MODEL_API_CONFIG['enabled'] = bool(_initial_preset.get('model_api_enabled', False))
     MODEL_API_CONFIG['nlp_provider_order'] = list(_initial_preset.get('nlp_provider_order', ['gemini']))
+    # Prepare values needed by the next step.
     MODEL_API_CONFIG['embedding_provider_order'] = list(_initial_preset.get('embedding_provider_order', ['model_api']))
     GEMINI_CONFIG['enabled'] = bool(_initial_preset.get('gemini_enabled', True))
     os.environ['CASM_ROUTING_PROFILE'] = _initial_profile
@@ -830,46 +975,59 @@ if STRICT_PROVIDER_MODE_SPLIT:
     os.environ['EMBEDDING_PROVIDER_ORDER'] = ','.join(MODEL_API_CONFIG['embedding_provider_order'])
     os.environ['VISION_PROVIDER_ORDER'] = ','.join(_initial_preset.get('vision_provider_order', ['gemini']))
     if _initial_profile == 'local':
+        # Prepare values needed by the next step.
         OLLAMA_CONFIG['model'] = STRICT_LOCAL_OLLAMA_MODEL
         os.environ['LOCAL_OLLAMA_UNIFIED_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
         os.environ['OLLAMA_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
         os.environ['OLLAMA_VISION_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
 
 
+# Section: run the is edge ingest authorized workflow with clear inputs and outputs.
 def _is_edge_ingest_authorized() -> bool:
     """Validate edge relay ingest token when configured."""
+    # Choose the correct branch before the workflow continues.
     if not EDGE_INGEST_TOKEN:
+        # Return the prepared result to the caller.
         return True
     supplied = (request.headers.get('X-Edge-Token') or '').strip()
     return supplied == EDGE_INGEST_TOKEN
 
 
+# Section: run the is origin allowed workflow with clear inputs and outputs.
 def _is_origin_allowed(origin: str) -> bool:
     """Check whether an Origin is allowed for CORS."""
     if not origin:
         return False
+    # Choose the correct branch before the workflow continues.
     if '*' in ALLOWED_ORIGINS:
+        # Return the prepared result to the caller.
         return True
     for allowed in ALLOWED_ORIGINS:
         # Allow wildcard subdomains, e.g. https://*.vercel.app
         if allowed.startswith('https://*.'):
+            # Prepare suffix for the next step.
             suffix = allowed[len('https://*'):]
             if origin.startswith('https://') and origin.endswith(suffix):
+                # Return the prepared result to the caller.
                 return True
         if allowed.startswith('http://*.'):
             suffix = allowed[len('http://*'):]
             if origin.startswith('http://') and origin.endswith(suffix):
                 return True
+    # Return the prepared result to the caller.
     return origin in ALLOWED_ORIGINS
 
 
+# Section: run the apply cors headers workflow with clear inputs and outputs.
 def _apply_cors_headers(response):
     """Attach CORS headers to API/report/image responses for split frontend/backend deployments."""
     origin = request.headers.get('Origin')
     path = request.path or ''
     should_apply = path.startswith('/api/') or path.startswith('/report/') or path.startswith('/image/')
 
+    # Choose the correct branch before the workflow continues.
     if not should_apply:
+        # Return the prepared result to the caller.
         return response
 
     allow_origin = None
@@ -878,7 +1036,9 @@ def _apply_cors_headers(response):
     elif _is_origin_allowed(origin):
         allow_origin = origin
 
+    # Choose the correct branch before the workflow continues.
     if allow_origin:
+        # Prepare values needed by the next step.
         response.headers['Access-Control-Allow-Origin'] = allow_origin
 
     response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
@@ -895,12 +1055,16 @@ def _apply_cors_headers(response):
     return response
 
 
+# Section: run the run with timeout workflow with clear inputs and outputs.
 def _run_with_timeout(task_fn, timeout_seconds: int, task_name: str):
     """Run a blocking startup task with timeout and bubble up errors."""
     result = {'value': None, 'error': None}
 
+    # Section: run the worker workflow with clear inputs and outputs.
     def _worker():
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare values needed by the next step.
             result['value'] = task_fn()
         except Exception as e:
             result['error'] = e
@@ -909,51 +1073,65 @@ def _run_with_timeout(task_fn, timeout_seconds: int, task_name: str):
     worker.start()
     worker.join(max(1, int(timeout_seconds)))
 
+    # Choose the correct branch before the workflow continues.
     if worker.is_alive():
+        # Surface the failure with enough context for the caller.
         raise TimeoutError(f"{task_name} timed out after {timeout_seconds}s")
     if result['error'] is not None:
         raise result['error']
     return result['value']
 
 
+# Section: run the handle preflight workflow with clear inputs and outputs.
 @app.before_request
 def _handle_preflight():
     """Respond to browser preflight requests before route handlers run."""
+    # Choose the correct branch before the workflow continues.
     if request.method == 'OPTIONS':
+        # Prepare response for the next step.
         response = app.make_default_options_response()
         return _apply_cors_headers(response)
     return None
 
 
+# Section: run the add cors headers workflow with clear inputs and outputs.
 @app.after_request
 def _add_cors_headers(response):
     """Apply CORS headers to outgoing responses."""
+    # Return the prepared result to the caller.
     return _apply_cors_headers(response)
 
 
+# Section: run the ensure startup sequence running workflow with clear inputs and outputs.
 @app.before_request
 def _ensure_startup_sequence_running():
     """Kick off startup checks on first meaningful request."""
     path = request.path or ''
     if path.startswith('/static/') or path == '/favicon.ico':
+        # Return the prepared result to the caller.
         return None
+    # Trigger the side effect required for this stage.
     ensure_startup_thread()
     return None
 
 
+# Section: run the protect installer static asset workflow with clear inputs and outputs.
 @app.before_request
 def _protect_installer_static_asset():
     """Prevent bypassing installer gating through direct static file access."""
     if (request.path or '').strip() == '/static/CASM_LocalInstaller.bat':
+        # Return the prepared result to the caller.
         return Response(
             "Installer download requires a signed one-time bootstrap token. "
             "Request it via /api/bootstrap/installer/request.",
             status=403,
             mimetype='text/plain'
         )
+    # Return the prepared result to the caller.
     return None
 
 # Directories
+# Prepare violations dir for the next step.
 VIOLATIONS_DIR = Path('pipeline/violations')
 VIOLATIONS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -962,59 +1140,77 @@ live_source_adapter = LiveSourceAdapter()
 camera_lock = live_source_adapter.lock
 
 
+# Section: run the is active live source locked workflow with clear inputs and outputs.
 def _is_active_live_source_locked() -> bool:
     """Return whether currently selected live source is active (lock must be held)."""
+    # Return the prepared result to the caller.
     return live_source_adapter.is_active_locked()
 
 
+# Section: run the stop live source locked workflow with clear inputs and outputs.
 def _stop_live_source_locked() -> None:
     """Stop whichever live source is active (lock must be held)."""
     live_source_adapter.stop_locked()
 
 
+# Section: run the get realsense probe source workflow with clear inputs and outputs.
 def _get_realsense_probe_source():
     """Compatibility wrapper retained for existing call sites."""
+    # Return the prepared result to the caller.
     return None
 
 
+# Section: run the get realsense snapshot workflow with clear inputs and outputs.
 def _get_realsense_snapshot() -> Dict[str, Any]:
     """Collect RealSense availability/capabilities in a uniform format."""
     return live_source_adapter.get_realsense_snapshot()
 
 
+# Section: run the get default live source workflow with clear inputs and outputs.
 def _get_default_live_source() -> str:
     """Pick default source based on currently available hardware."""
+    # Return the prepared result to the caller.
     return live_source_adapter.get_default_source()
 
 
+# Section: run the start live source locked workflow with clear inputs and outputs.
 def _start_live_source_locked(requested_source: str, camera_index: Optional[int] = None) -> Dict[str, Any]:
     """Start requested source with graceful fallback behavior (lock must be held)."""
     return live_source_adapter.start_locked(requested_source, camera_index=camera_index)
 
 
+# Section: run the read active frame locked workflow with clear inputs and outputs.
 def _read_active_frame_locked():
     """Read one frame from current source (lock must be held)."""
+    # Return the prepared result to the caller.
     return live_source_adapter.read_frame_locked()
 
 
+# Section: run the build live state payload workflow with clear inputs and outputs.
 def _build_live_state_payload(force_webcam_refresh: bool = False) -> Dict[str, Any]:
     """Build live state payload consumed by frontend controls."""
     return live_source_adapter.build_state_payload(force_webcam_refresh=bool(force_webcam_refresh))
 
 
+# Section: run the normalize label workflow with clear inputs and outputs.
 def _normalize_label(value: str) -> str:
     """Normalize class labels for robust keyword matching across naming styles."""
+    # Choose the correct branch before the workflow continues.
     if not value:
+        # Return the prepared result to the caller.
         return ''
     normalized = str(value).strip().lower().replace('_', '-').replace(' ', '-')
     normalized = re.sub(r'-+', '-', normalized)
     return normalized
 
 
+# Section: run the is violation label workflow with clear inputs and outputs.
 def _is_violation_label(class_name: str) -> bool:
     """Return True if class name indicates missing PPE."""
+    # Prepare normalized for the next step.
     normalized = _normalize_label(class_name)
     if normalized in {'no-goggles', 'no-goggle', 'without-goggles', 'without-goggle', 'no-eye-protection', 'no-safety-glasses'}:
+        # Return the prepared result to the caller.
         return False
     return (
         normalized.startswith('no-')
@@ -1022,49 +1218,63 @@ def _is_violation_label(class_name: str) -> bool:
     )
 
 
+# Section: run the extract violation detections workflow with clear inputs and outputs.
 def _extract_violation_detections(detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Filter detections to likely PPE-violation classes."""
+    # Return the prepared result to the caller.
     return [d for d in detections if _is_violation_label(d.get('class_name', ''))]
 
 
+# Section: run the extract violation types from detections workflow with clear inputs and outputs.
 def _extract_violation_types_from_detections(detections: List[Dict[str, Any]]) -> List[str]:
     """Extract violation labels from detections using class_name/class with normalized matching."""
     types: List[str] = []
     for item in detections or []:
+        # Choose the correct branch before the workflow continues.
         if not isinstance(item, dict):
             continue
         label = str(item.get('class_name') or item.get('class') or '').strip()
         if not label:
             continue
         if _is_violation_label(label):
+            # Trigger the side effect required for this stage.
             types.append(label)
+    # Return the prepared result to the caller.
     return types
 
 
+# Section: run the extract violation types from summary workflow with clear inputs and outputs.
 def _extract_violation_types_from_summary(summary: str) -> List[str]:
     """Best-effort parse of persisted summary text into NO-* style violation labels."""
     summary_text = str(summary or '').strip()
     if not summary_text:
+        # Return the prepared result to the caller.
         return []
 
     out: List[str] = []
+    # Prepare lower summary for the next step.
     lower_summary = summary_text.lower()
 
     if 'ppe violation detected:' in lower_summary:
         _, _, rhs = summary_text.partition(':')
         for raw_item in rhs.split(','):
+            # Prepare item for the next step.
             item = str(raw_item or '').strip()
             if not item:
                 continue
             if _is_violation_label(item):
+                # Trigger the side effect required for this stage.
                 out.append(item)
                 continue
             if item.lower().startswith('missing '):
                 out.append(f"NO-{item[8:].strip()}")
                 continue
+            # Trigger the side effect required for this stage.
             out.append(f"NO-{item}")
+        # Return the prepared result to the caller.
         return out
 
+    # Process each item in this collection using the same rule set.
     for match in re.findall(r'Missing ([\\w\\s]+?)(?:,|\\.|$)', summary_text, flags=re.IGNORECASE):
         ppe_item = str(match or '').strip()
         if ppe_item:
@@ -1073,10 +1283,13 @@ def _extract_violation_types_from_summary(summary: str) -> List[str]:
     return out
 
 
+# Section: run the normalize violation type label workflow with clear inputs and outputs.
 def _normalize_violation_type_label(value: Any) -> str:
     """Normalize PPE evidence labels to the YOLO-style NO-* form used by UI tags."""
+    # Prepare raw for the next step.
     raw = str(value or '').strip()
     if not raw:
+        # Return the prepared result to the caller.
         return ''
     if _is_violation_label(raw):
         cleaned_no = re.sub(r'^(NO[-\s]+)', '', raw, flags=re.IGNORECASE).strip()
@@ -1084,9 +1297,11 @@ def _normalize_violation_type_label(value: Any) -> str:
         cleaned_no = re.sub(r'^(Missing|Without|No)[-\s]+', '', raw, flags=re.IGNORECASE).strip()
 
     normalized = _normalize_label(cleaned_no)
+    # Choose the correct branch before the workflow continues.
     if normalized in {'hardhat', 'hard-hat', 'helmet'}:
         return 'NO-Hardhat'
     if normalized in {'mask', 'respirator'}:
+        # Return the prepared result to the caller.
         return 'NO-Mask'
     if normalized in {'safety-vest', 'hi-vis', 'high-vis', 'high-visibility-vest', 'vest'}:
         return 'NO-Safety Vest'
@@ -1094,62 +1309,79 @@ def _normalize_violation_type_label(value: Any) -> str:
         return 'NO-Gloves'
     if normalized in {'goggle', 'goggles', 'eye-protection', 'safety-glasses'}:
         return ''
+    # Choose the correct branch before the workflow continues.
     if normalized in {'safety-shoe', 'safety-shoes', 'safety-boot', 'safety-boots', 'footwear', 'boot', 'boots'}:
         return 'NO-Safety Shoes'
     if normalized in {'ppe', 'ppe-violation', 'missing-ppe', 'violation'}:
+        # Return the prepared result to the caller.
         return ''
     if raw.lower().startswith(('missing ', 'without ', 'no-', 'no ')):
         return f"NO-{cleaned_no}"
     return ''
 
 
+# Section: run the normalize violation type list workflow with clear inputs and outputs.
 def _normalize_violation_type_list(*sources: Any) -> List[str]:
     """Collect unique normalized NO-* PPE labels from mixed persisted sources."""
     normalized: List[str] = []
     seen: set = set()
 
+    # Section: run the consume workflow with clear inputs and outputs.
     def _consume(value: Any) -> None:
+        # Choose the correct branch before the workflow continues.
         if value is None:
+            # Return the prepared result to the caller.
             return
         if isinstance(value, dict):
             _consume(value.get('class_name') or value.get('class') or value.get('label') or value.get('name'))
             return
         if isinstance(value, (list, tuple, set)):
             for item in value:
+                # Trigger the side effect required for this stage.
                 _consume(item)
             return
+        # Prepare label for the next step.
         label = _normalize_violation_type_label(value)
         key = label.lower()
         if label and key not in seen:
+            # Trigger the side effect required for this stage.
             seen.add(key)
             normalized.append(label)
 
+    # Process each item in this collection using the same rule set.
     for source in sources:
         _consume(source)
 
     return normalized
 
 
+# Section: run the violation types are generic workflow with clear inputs and outputs.
 def _violation_types_are_generic(violation_types: Any) -> bool:
     normalized = _normalize_violation_type_list(violation_types)
     return not normalized
 
 
+# Section: run the missing ppe from violation types workflow with clear inputs and outputs.
 def _missing_ppe_from_violation_types(violation_types: List[str]) -> List[str]:
     missing: List[str] = []
     seen: set = set()
+    # Process each item in this collection using the same rule set.
     for raw_type in violation_types or []:
+        # Prepare formatted for the next step.
         formatted = format_violation_type(raw_type)
         clean = re.sub(r'^(Missing\s+)', '', formatted, flags=re.IGNORECASE).strip()
         if not clean:
             continue
         key = clean.lower()
         if key not in seen:
+            # Trigger the side effect required for this stage.
             seen.add(key)
             missing.append(clean)
+    # Return the prepared result to the caller.
     return missing
 
 
+# Section: run the resolve violation types and count workflow with clear inputs and outputs.
 def _resolve_violation_types_and_count(
     detections: List[Dict[str, Any]],
     *,
@@ -1158,18 +1390,23 @@ def _resolve_violation_types_and_count(
     fallback_count: Optional[int] = None
 ) -> Tuple[List[str], int]:
     """Resolve robust violation labels/count even when stored detection payload is partial."""
+    # Prepare violation types for the next step.
     violation_types = _normalize_violation_type_list(_extract_violation_types_from_detections(detections))
     if not violation_types:
+        # Prepare violation types for the next step.
         violation_types = _normalize_violation_type_list(_extract_violation_types_from_summary(violation_summary or ''))
 
     candidate_counts: List[int] = []
     if fallback_count is not None:
         try:
+            # Trigger the side effect required for this stage.
             candidate_counts.append(int(fallback_count))
         except Exception:
             pass
 
+    # Choose the correct branch before the workflow continues.
     if isinstance(event, dict):
+        # Protect this step so expected failures can fall back cleanly.
         try:
             candidate_counts.append(int(event.get('violation_count') or 0))
         except Exception:
@@ -1179,12 +1416,15 @@ def _resolve_violation_types_and_count(
     if resolved_count <= 0:
         resolved_count = 1
 
+    # Choose the correct branch before the workflow continues.
     if not violation_types:
+        # Prepare violation types for the next step.
         violation_types = ['NO-PPE Violation']
 
     return violation_types, resolved_count
 
 
+# Prepare report severity rank for the next step.
 _REPORT_SEVERITY_RANK = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
 
 _LOW_RISK_CONTEXT_TERMS = {
@@ -1194,6 +1434,7 @@ _LOW_RISK_CONTEXT_TERMS = {
     'indoor public area', 'ordinary public area'
 }
 
+# Prepare public review context terms for the next step.
 _PUBLIC_REVIEW_CONTEXT_TERMS = {
     'public area', 'public street', 'street scene', 'sidewalk', 'pavement',
     'pedestrian', 'parking lot', 'bus stop', 'public transport', 'open yard'
@@ -1208,6 +1449,7 @@ _WORK_ZONE_CONTEXT_TERMS = {
     'traffic control', 'safety cone', 'barricade', 'barrier tape'
 }
 
+# Prepare high risk context terms for the next step.
 _HIGH_RISK_CONTEXT_TERMS = {
     'construction', 'worksite', 'industrial', 'factory', 'warehouse', 'loading bay',
     'loading dock', 'forklift', 'truck', 'vehicle', 'traffic', 'road', 'highway',
@@ -1219,6 +1461,7 @@ _HIGH_RISK_CONTEXT_TERMS = {
     'overhead', 'struck-by', 'struck by', 'moving equipment', 'mobile equipment'
 }
 
+# Prepare ppe high risk context terms for the next step.
 _PPE_HIGH_RISK_CONTEXT_TERMS = {
     'NO-Hardhat': {
         'construction', 'worksite', 'industrial', 'warehouse', 'scaffold', 'ladder',
@@ -1250,10 +1493,13 @@ _PPE_HIGH_RISK_CONTEXT_TERMS = {
 }
 
 
+# Section: run the normalize report severity workflow with clear inputs and outputs.
 def _normalize_report_severity(value: Any, default: str = 'MEDIUM') -> str:
     """Normalize persisted report severity to the user-facing report levels."""
+    # Prepare normalized for the next step.
     normalized = str(value or '').strip().upper()
     if normalized == 'CRITICAL':
+        # Return the prepared result to the caller.
         return 'HIGH'
     if normalized in _REPORT_SEVERITY_RANK:
         return normalized
@@ -1261,15 +1507,19 @@ def _normalize_report_severity(value: Any, default: str = 'MEDIUM') -> str:
     return fallback if fallback in _REPORT_SEVERITY_RANK else 'MEDIUM'
 
 
+# Section: run the severity from violation label workflow with clear inputs and outputs.
 def _severity_from_violation_label(label: Any) -> str:
     """Resolve a single PPE violation label to LOW/MEDIUM/HIGH from config rules."""
+    # Prepare normalized label for the next step.
     normalized_label = _normalize_violation_type_label(label)
     if not normalized_label:
+        # Return the prepared result to the caller.
         return ''
 
     try:
         required_ppe = (VIOLATION_RULES or {}).get('required_ppe') or {}
         for rule in required_ppe.values():
+            # Choose the correct branch before the workflow continues.
             if not isinstance(rule, dict):
                 continue
             negative_classes = rule.get('negative_classes') or []
@@ -1279,12 +1529,15 @@ def _severity_from_violation_label(label: Any) -> str:
                 if _normalize_violation_type_label(item)
             }
             if normalized_label.lower() in normalized_negative:
+                # Return the prepared result to the caller.
                 return _normalize_report_severity(rule.get('severity'), default='MEDIUM')
     except Exception:
         pass
 
+    # Prepare normalized key for the next step.
     normalized_key = normalized_label.lower()
     if normalized_key in {'no-hardhat', 'no-safety vest', 'no-safety-vest', 'no-harness'}:
+        # Return the prepared result to the caller.
         return 'HIGH'
     if normalized_key in {'no-mask', 'no-gloves', 'no-safety shoes', 'no-safety-shoes'}:
         return 'MEDIUM'
@@ -1293,6 +1546,7 @@ def _severity_from_violation_label(label: Any) -> str:
     return ''
 
 
+# Section: run the build severity context text workflow with clear inputs and outputs.
 def _build_severity_context_text(
     *,
     detections: Optional[List[Dict[str, Any]]] = None,
@@ -1301,8 +1555,11 @@ def _build_severity_context_text(
     caption: Optional[str] = None,
 ) -> str:
     parts: List[str] = []
+    # Process each item in this collection using the same rule set.
     for value in (violation_summary, context_text, caption):
+        # Choose the correct branch before the workflow continues.
         if value:
+            # Trigger the side effect required for this stage.
             parts.append(str(value))
     for item in detections or []:
         if not isinstance(item, dict):
@@ -1310,19 +1567,24 @@ def _build_severity_context_text(
         for key in ('class_name', 'class', 'label', 'name', 'description'):
             value = item.get(key)
             if value:
+                # Trigger the side effect required for this stage.
                 parts.append(str(value))
+    # Prepare normalized for the next step.
     normalized = _normalize_label(' '.join(parts)).replace('-', ' ')
     return re.sub(r'[^a-z0-9]+', ' ', normalized).strip()
 
 
+# Section: run the context has any workflow with clear inputs and outputs.
 def _context_has_any(context_text: str, terms: Any) -> bool:
     normalized_context = f" {str(context_text or '').lower()} "
     for term in terms or []:
+        # Prepare normalized term for the next step.
         normalized_term = str(term or '').strip().lower().replace('_', ' ').replace('-', ' ')
         if not normalized_term:
             continue
         term_pattern = re.escape(normalized_term).replace(r'\ ', r'\s+')
         for match in re.finditer(rf'\b{term_pattern}\b', normalized_context):
+            # Prepare window start for the next step.
             window_start = max(0, match.start() - 80)
             window_end = min(len(normalized_context), match.end() + 36)
             window = normalized_context[window_start:window_end]
@@ -1335,20 +1597,26 @@ def _context_has_any(context_text: str, terms: Any) -> bool:
                 rf'\b{term_pattern}\b(?:\s+\w+){{0,4}}\s+\b(absent|not\s+visible|not\s+present)\b',
                 window,
             )
+            # Choose the correct branch before the workflow continues.
             if not negated_before and not negated_after:
+                # Return the prepared result to the caller.
                 return True
+    # Return the prepared result to the caller.
     return False
 
 
+# Section: run the contextual severity for label workflow with clear inputs and outputs.
 def _contextual_severity_for_label(label: str, base_severity: str, context_text: str) -> str:
     normalized_label = _normalize_violation_type_label(label)
     if not normalized_label:
+        # Return the prepared result to the caller.
         return ''
 
     high_for_label = _context_has_any(
         context_text,
         _PPE_HIGH_RISK_CONTEXT_TERMS.get(normalized_label, set()),
     )
+    # Prepare broad high for the next step.
     broad_high = _context_has_any(context_text, _HIGH_RISK_CONTEXT_TERMS)
     low_context = _context_has_any(context_text, _LOW_RISK_CONTEXT_TERMS) and not broad_high
     public_review_context = (
@@ -1358,7 +1626,9 @@ def _contextual_severity_for_label(label: str, base_severity: str, context_text:
     environment_review_context = low_context or public_review_context
 
     if high_for_label:
+        # Choose the correct branch before the workflow continues.
         if normalized_label in {'NO-Hardhat', 'NO-Safety Vest'} and environment_review_context:
+            # Return the prepared result to the caller.
             return 'MEDIUM'
         return 'HIGH'
 
@@ -1376,9 +1646,11 @@ def _contextual_severity_for_label(label: str, base_severity: str, context_text:
             return 'HIGH'
         return 'MEDIUM' if base_severity in {'HIGH', 'MEDIUM'} else base_severity
 
+    # Return the prepared result to the caller.
     return base_severity
 
 
+# Section: run the classify violation severity workflow with clear inputs and outputs.
 def _classify_violation_severity(
     *,
     violation_types: Optional[List[str]] = None,
@@ -1389,6 +1661,7 @@ def _classify_violation_severity(
     caption: Optional[str] = None,
 ) -> str:
     """Classify report severity from PPE evidence and surrounding scene context."""
+    # Prepare labels for the next step.
     labels = _normalize_violation_type_list(
         violation_types,
         _extract_violation_types_from_detections(detections or []),
@@ -1401,6 +1674,7 @@ def _classify_violation_severity(
         caption=caption,
     )
 
+    # Prepare severities for the next step.
     severities = [
         _contextual_severity_for_label(
             label,
@@ -1410,7 +1684,9 @@ def _classify_violation_severity(
         for label in labels
     ]
     severities = [severity for severity in severities if severity]
+    # Choose the correct branch before the workflow continues.
     if severities:
+        # Prepare distinct medium for the next step.
         distinct_medium = {
             label.lower()
             for label in labels
@@ -1420,6 +1696,7 @@ def _classify_violation_severity(
                 severity_context,
             ) == 'MEDIUM'
         }
+        # Prepare highest for the next step.
         highest = max(severities, key=lambda value: _REPORT_SEVERITY_RANK.get(value, 2))
         low_context = _context_has_any(severity_context, _LOW_RISK_CONTEXT_TERMS) and not _context_has_any(
             severity_context,
@@ -1429,10 +1706,13 @@ def _classify_violation_severity(
             _context_has_any(severity_context, _PUBLIC_REVIEW_CONTEXT_TERMS)
             and not _context_has_any(severity_context, _WORK_ZONE_CONTEXT_TERMS)
         )
+        # Choose the correct branch before the workflow continues.
         if highest == 'MEDIUM' and len(distinct_medium) >= 3 and not low_context and not public_review_context:
+            # Return the prepared result to the caller.
             return 'HIGH'
         return highest
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
         count = int(violation_count or 0)
     except Exception:
@@ -1440,6 +1720,7 @@ def _classify_violation_severity(
     return 'MEDIUM' if count > 0 else 'LOW'
 
 
+# Prepare caption hard failure markers for the next step.
 _CAPTION_HARD_FAILURE_MARKERS = (
     'caption generation failed',
     'caption generation returned empty',
@@ -1452,19 +1733,25 @@ _CAPTION_HARD_FAILURE_MARKERS = (
 )
 
 
+# Section: run the caption requires quality fallback workflow with clear inputs and outputs.
 def _caption_requires_quality_fallback(caption: Any) -> Tuple[bool, str]:
     """Return whether caption needs replacement or YOLO-grounded augmentation."""
+    # Prepare normalized for the next step.
     normalized = str(caption or '').strip()
     if not normalized:
+        # Return the prepared result to the caller.
         return True, 'empty_caption'
 
     lowered = normalized.lower()
     for marker in _CAPTION_HARD_FAILURE_MARKERS:
         if marker in lowered:
+            # Return the prepared result to the caller.
             return True, marker
 
+    # Prepare words for the next step.
     words = re.findall(r"[a-z0-9']+", lowered)
     if len(normalized) < 60 or len(words) < 10:
+        # Return the prepared result to the caller.
         return True, 'too_short'
 
     generic_markers = (
@@ -1473,7 +1760,9 @@ def _caption_requires_quality_fallback(caption: Any) -> Tuple[bool, str]:
         'unable to determine',
         'cannot determine',
     )
+    # Choose the correct branch before the workflow continues.
     if any(marker in lowered for marker in generic_markers) and len(words) < 24:
+        # Return the prepared result to the caller.
         return True, 'generic_caption'
 
     unique_ratio = (len(set(words)) / len(words)) if words else 0.0
@@ -1483,31 +1772,39 @@ def _caption_requires_quality_fallback(caption: Any) -> Tuple[bool, str]:
     return False, ''
 
 
+# Section: run the caption quality reason is augmented workflow with clear inputs and outputs.
 def _caption_quality_reason_is_augmented(reason: Any) -> bool:
     """Return true when model text was preserved and only YOLO context was appended."""
+    # Return the prepared result to the caller.
     return str(reason or '').strip().lower().startswith('augmented_')
 
 
+# Section: run the caption quality reason blocks model report workflow with clear inputs and outputs.
 def _caption_quality_reason_blocks_model_report(reason: Any) -> bool:
     """Return true only for hard caption failures that would create detection-only output."""
     normalized = str(reason or '').strip().lower()
     if not normalized:
+        # Return the prepared result to the caller.
         return False
     if _caption_quality_reason_is_augmented(normalized):
         return False
+    # Choose the correct branch before the workflow continues.
     if normalized == 'empty_caption':
         return True
     return any(marker in normalized for marker in _CAPTION_HARD_FAILURE_MARKERS)
 
 
+# Section: run the build detection grounded caption workflow with clear inputs and outputs.
 def _build_detection_grounded_caption(
     detections: List[Dict[str, Any]],
     violation_types: Optional[List[str]] = None
 ) -> str:
     """Build a factual detection-only caption when VLM text truly failed."""
+    # Prepare detection rows for the next step.
     detection_rows = detections if isinstance(detections, list) else []
     person_count = 0
     for det in detection_rows:
+        # Prepare label for the next step.
         label = _normalize_label((det or {}).get('class_name') or (det or {}).get('class') or '')
         if label in {'person', 'worker', 'man', 'woman'}:
             person_count += 1
@@ -1515,12 +1812,14 @@ def _build_detection_grounded_caption(
     raw_violation_types: List[str] = []
     if isinstance(violation_types, list):
         raw_violation_types.extend([str(v).strip() for v in violation_types if str(v or '').strip()])
+    # Choose the correct branch before the workflow continues.
     if not raw_violation_types:
         raw_violation_types.extend(_extract_violation_types_from_detections(detection_rows))
 
     formatted_types: List[str] = []
     seen: set = set()
     for raw_type in raw_violation_types:
+        # Prepare formatted for the next step.
         formatted = format_violation_type(str(raw_type))
         key = formatted.lower()
         if not formatted or key in seen:
@@ -1528,9 +1827,11 @@ def _build_detection_grounded_caption(
         seen.add(key)
         formatted_types.append(formatted)
 
+    # Choose the correct branch before the workflow continues.
     if person_count > 0:
         worker_phrase = f"{person_count} worker" + ('s' if person_count != 1 else '')
     else:
+        # Prepare worker phrase for the next step.
         worker_phrase = 'one or more individuals'
 
     if formatted_types:
@@ -1540,8 +1841,10 @@ def _build_detection_grounded_caption(
             "corrective action follow-up."
         )
 
+    # Prepare total detections for the next step.
     total_detections = len(detection_rows)
     if total_detections > 0:
+        # Return the prepared result to the caller.
         return (
             f"Detection-only safety summary: {worker_phrase} observed in the monitored area with "
             f"{total_detections} detected object(s). PPE details were inconclusive in this frame, "
@@ -1554,14 +1857,17 @@ def _build_detection_grounded_caption(
     )
 
 
+# Section: run the build detection caption context workflow with clear inputs and outputs.
 def _build_detection_caption_context(
     detections: List[Dict[str, Any]],
     violation_types: Optional[List[str]] = None
 ) -> str:
     """Build a concise YOLO evidence addendum without replacing model prose."""
+    # Prepare detection rows for the next step.
     detection_rows = detections if isinstance(detections, list) else []
     person_count = 0
     for det in detection_rows:
+        # Prepare label for the next step.
         label = _normalize_label((det or {}).get('class_name') or (det or {}).get('class') or '')
         if label in {'person', 'worker', 'man', 'woman'}:
             person_count += 1
@@ -1570,7 +1876,9 @@ def _build_detection_caption_context(
         person_count = 1
 
     raw_violation_types: List[str] = []
+    # Choose the correct branch before the workflow continues.
     if isinstance(violation_types, list):
+        # Trigger the side effect required for this stage.
         raw_violation_types.extend([str(v).strip() for v in violation_types if str(v or '').strip()])
     if not raw_violation_types:
         raw_violation_types.extend(_extract_violation_types_from_detections(detection_rows))
@@ -1580,11 +1888,13 @@ def _build_detection_caption_context(
     for raw_type in raw_violation_types:
         formatted = format_violation_type(str(raw_type))
         key = formatted.lower()
+        # Choose the correct branch before the workflow continues.
         if not formatted or key in seen:
             continue
         seen.add(key)
         formatted_types.append(formatted)
 
+    # Choose the correct branch before the workflow continues.
     if not formatted_types:
         return ''
 
@@ -1594,8 +1904,10 @@ def _build_detection_caption_context(
     )
 
 
+# Section: run the caption has yolo ppe context workflow with clear inputs and outputs.
 def _caption_has_yolo_ppe_context(caption: str) -> bool:
     """Return true when a YOLO PPE evidence clause is already present."""
+    # Prepare normalized for the next step.
     normalized = re.sub(r'\s+', ' ', str(caption or '')).strip().lower()
     return (
         'yolo detection identified' in normalized
@@ -1603,26 +1915,32 @@ def _caption_has_yolo_ppe_context(caption: str) -> bool:
     )
 
 
+# Section: run the enforce caption quality floor workflow with clear inputs and outputs.
 def _enforce_caption_quality_floor(
     caption: Any,
     detections: List[Dict[str, Any]],
     violation_types: Optional[List[str]] = None
 ) -> Tuple[str, bool, str]:
     """Apply quality floor without erasing real model output."""
+    # Prepare normalized for the next step.
     normalized = str(caption or '').strip()
     needs_fallback, reason = _caption_requires_quality_fallback(normalized)
     if not needs_fallback:
+        # Prepare context caption for the next step.
         context_caption = _build_detection_caption_context(
             detections,
             violation_types=violation_types,
         )
         normalized_single = re.sub(r'\s+', ' ', normalized).strip()
         if context_caption and _caption_has_yolo_ppe_context(normalized_single):
+            # Return the prepared result to the caller.
             return normalized_single, False, ''
         if context_caption and context_caption.lower() not in normalized_single.lower():
             return f"{normalized_single.rstrip(' .')}. {context_caption}", True, 'augmented_yolo_context'
+        # Return the prepared result to the caller.
         return normalized_single, False, ''
 
+    # Prepare hard failure for the next step.
     hard_failure = (
         reason == 'empty_caption'
         or any(marker in reason for marker in _CAPTION_HARD_FAILURE_MARKERS)
@@ -1632,8 +1950,10 @@ def _enforce_caption_quality_floor(
             detections,
             violation_types=violation_types,
         )
+        # Return the prepared result to the caller.
         return fallback_caption, True, reason
 
+    # Prepare context caption for the next step.
     context_caption = _build_detection_caption_context(
         detections,
         violation_types=violation_types,
@@ -1643,17 +1963,22 @@ def _enforce_caption_quality_floor(
 
     normalized_single = re.sub(r'\s+', ' ', normalized).strip()
     if _caption_has_yolo_ppe_context(normalized_single):
+        # Return the prepared result to the caller.
         return normalized_single, False, ''
+    # Choose the correct branch before the workflow continues.
     if context_caption.lower() in normalized_single.lower():
         return normalized_single, False, ''
     return f"{normalized_single.rstrip(' .')}. {context_caption}", True, f"augmented_{reason}"
 
 
 
+# Section: run the safe bbox workflow with clear inputs and outputs.
 def _safe_bbox(det: Dict[str, Any]) -> List[float]:
     """Extract bbox as [x1, y1, x2, y2] floats; return [] if invalid."""
     bbox = det.get('bbox') if isinstance(det, dict) else None
+    # Choose the correct branch before the workflow continues.
     if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        # Return the prepared result to the caller.
         return []
     try:
         x1, y1, x2, y2 = [float(v) for v in bbox]
@@ -1664,9 +1989,12 @@ def _safe_bbox(det: Dict[str, Any]) -> List[float]:
     return [x1, y1, x2, y2]
 
 
+# Section: run the bbox iou workflow with clear inputs and outputs.
 def _bbox_iou(a: List[float], b: List[float]) -> float:
     """Compute IoU between two [x1, y1, x2, y2] boxes."""
+    # Choose the correct branch before the workflow continues.
     if len(a) != 4 or len(b) != 4:
+        # Return the prepared result to the caller.
         return 0.0
 
     ax1, ay1, ax2, ay2 = a
@@ -1675,15 +2003,18 @@ def _bbox_iou(a: List[float], b: List[float]) -> float:
     inter_x1 = max(ax1, bx1)
     inter_y1 = max(ay1, by1)
     inter_x2 = min(ax2, bx2)
+    # Prepare inter y2 for the next step.
     inter_y2 = min(ay2, by2)
 
     inter_w = max(0.0, inter_x2 - inter_x1)
     inter_h = max(0.0, inter_y2 - inter_y1)
     inter_area = inter_w * inter_h
     if inter_area <= 0:
+        # Return the prepared result to the caller.
         return 0.0
 
     area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    # Prepare area b for the next step.
     area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
     denom = area_a + area_b - inter_area
     if denom <= 0:
@@ -1691,9 +2022,12 @@ def _bbox_iou(a: List[float], b: List[float]) -> float:
     return inter_area / denom
 
 
+# Section: run the bbox center distance workflow with clear inputs and outputs.
 def _bbox_center_distance(a: List[float], b: List[float]) -> float:
     """Compute Euclidean distance between bbox centers."""
+    # Choose the correct branch before the workflow continues.
     if len(a) != 4 or len(b) != 4:
+        # Return the prepared result to the caller.
         return float('inf')
     acx = (a[0] + a[2]) * 0.5
     acy = (a[1] + a[3]) * 0.5
@@ -1704,10 +2038,13 @@ def _bbox_center_distance(a: List[float], b: List[float]) -> float:
     return float((dx * dx + dy * dy) ** 0.5)
 
 
+# Section: run the build violation spatial signature workflow with clear inputs and outputs.
 def _build_violation_spatial_signature(violation_detections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Build compact spatial signatures for violation detections in current frame."""
+    # Prepare signature for the next step.
     signature = []
     for det in violation_detections:
+        # Prepare bbox for the next step.
         bbox = _safe_bbox(det)
         if not bbox:
             continue
@@ -1717,10 +2054,12 @@ def _build_violation_spatial_signature(violation_detections: List[Dict[str, Any]
             'score': float(det.get('score', det.get('confidence', 0.0)) or 0.0)
         })
 
+    # Trigger the side effect required for this stage.
     signature.sort(key=lambda item: item.get('score', 0.0), reverse=True)
     return signature[:6]
 
 # Violation detection state
+# Prepare violation detector for the next step.
 violation_detector = None
 caption_generator = None
 report_generator = None
@@ -1728,9 +2067,11 @@ db_manager = None
 storage_manager = None
 last_violation_time = 0
 try:
+    # Prepare violation cooldown for the next step.
     VIOLATION_COOLDOWN = int(os.getenv('VIOLATION_COOLDOWN_SECONDS', '10') or 10)
 except (TypeError, ValueError):
     VIOLATION_COOLDOWN = 10
+# Prepare violation cooldown for the next step.
 VIOLATION_COOLDOWN = max(1, min(VIOLATION_COOLDOWN, 300))  # seconds between repeated captures
 
 # Live-stream dedup window to reduce redundant captures for same standing violators.
@@ -1739,7 +2080,9 @@ try:
         os.getenv('LIVE_VIOLATION_DEDUP_WINDOW_SECONDS', str(VIOLATION_COOLDOWN)) or VIOLATION_COOLDOWN
     )
 except (TypeError, ValueError):
+    # Prepare live violation dedup window seconds for the next step.
     LIVE_VIOLATION_DEDUP_WINDOW_SECONDS = VIOLATION_COOLDOWN
+# Prepare live violation dedup window seconds for the next step.
 LIVE_VIOLATION_DEDUP_WINDOW_SECONDS = max(1, min(LIVE_VIOLATION_DEDUP_WINDOW_SECONDS, 300))
 LIVE_VIOLATION_DEDUP_IOU_THRESHOLD = 0.50
 LIVE_VIOLATION_DEDUP_CENTER_FACTOR = 0.65
@@ -1747,12 +2090,15 @@ recent_live_violation_signatures: List[Dict[str, Any]] = []
 recent_live_violation_lock = Lock()
 
 
+# Section: run the is redundant live violation workflow with clear inputs and outputs.
 def _is_redundant_live_violation(violation_detections: List[Dict[str, Any]], now_ts: float) -> bool:
     """Return True when current live violation closely matches recent ones in space + class."""
     global recent_live_violation_signatures
 
+    # Prepare current signature for the next step.
     current_signature = _build_violation_spatial_signature(violation_detections)
     if not current_signature:
+        # Return the prepared result to the caller.
         return False
 
     cutoff = now_ts - float(LIVE_VIOLATION_DEDUP_WINDOW_SECONDS)
@@ -1762,22 +2108,27 @@ def _is_redundant_live_violation(violation_detections: List[Dict[str, Any]], now
             if float(item.get('timestamp', 0.0)) >= cutoff
         ]
 
+        # Prepare has new for the next step.
         has_new = False
         for current in current_signature:
+            # Prepare current bbox for the next step.
             current_bbox = current.get('bbox', [])
             current_label = current.get('label', '')
             matched = False
 
             for previous in recent_live_violation_signatures:
+                # Choose the correct branch before the workflow continues.
                 if previous.get('label') != current_label:
                     continue
                 previous_bbox = previous.get('bbox', [])
 
                 iou = _bbox_iou(current_bbox, previous_bbox)
                 if iou >= LIVE_VIOLATION_DEDUP_IOU_THRESHOLD:
+                    # Prepare matched for the next step.
                     matched = True
                     break
 
+                # Prepare distance for the next step.
                 distance = _bbox_center_distance(current_bbox, previous_bbox)
                 prev_w = max(1.0, float(previous_bbox[2]) - float(previous_bbox[0])) if len(previous_bbox) == 4 else 1.0
                 prev_h = max(1.0, float(previous_bbox[3]) - float(previous_bbox[1])) if len(previous_bbox) == 4 else 1.0
@@ -1786,10 +2137,13 @@ def _is_redundant_live_violation(violation_detections: List[Dict[str, Any]], now
                     matched = True
                     break
 
+            # Choose the correct branch before the workflow continues.
             if not matched:
+                # Prepare has new for the next step.
                 has_new = True
                 break
 
+        # Choose the correct branch before the workflow continues.
         if not has_new:
             return True
 
@@ -1799,9 +2153,11 @@ def _is_redundant_live_violation(violation_detections: List[Dict[str, Any]], now
                 'label': current.get('label', ''),
                 'bbox': current.get('bbox', [])
             })
+        # Return the prepared result to the caller.
         return False
 
 # Queue-based violation handling (to prevent missing violations)
+# Prepare violation queue for the next step.
 violation_queue = None  # ViolationQueueManager instance
 queue_worker_thread = None  # Background worker for processing queue
 queue_worker_running = False
@@ -1811,6 +2167,7 @@ queue_worker_watchdog_thread = None
 queue_worker_watchdog_running = False
 queue_worker_watchdog_lock = Lock()
 last_queue_worker_forced_restart_epoch = 0.0
+# Prepare queue worker maintenance lock for the next step.
 queue_worker_maintenance_lock = Lock()
 queue_worker_maintenance_running = set()
 QUEUE_WORKER_WATCHDOG_ENABLED = os.getenv(
@@ -1821,6 +2178,7 @@ QUEUE_WORKER_WATCHDOG_INTERVAL_SECONDS = max(
     3,
     int(os.getenv('QUEUE_WORKER_WATCHDOG_INTERVAL_SECONDS', '20') or 20)
 )
+# Prepare queue worker heartbeat stale seconds for the next step.
 QUEUE_WORKER_HEARTBEAT_STALE_SECONDS = max(
     20,
     int(os.getenv('QUEUE_WORKER_HEARTBEAT_STALE_SECONDS', '180') or 180)
@@ -1833,6 +2191,7 @@ QUEUE_STUCK_REPORT_SWEEP_ENABLED = os.getenv(
     'QUEUE_STUCK_REPORT_SWEEP_ENABLED',
     'true'
 ).strip().lower() in ('1', 'true', 'yes', 'on')
+# Prepare queue stuck report sweep interval seconds for the next step.
 QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS = max(
     30,
     int(os.getenv('QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS', '300') or 300)
@@ -1845,6 +2204,7 @@ LOCAL_PENDING_RECOVERY_ENABLED = os.getenv(
     'LOCAL_PENDING_RECOVERY_ENABLED',
     'true'
 ).strip().lower() in ('1', 'true', 'yes', 'on')
+# Prepare local pending recovery interval seconds for the next step.
 LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS = max(
     30,
     int(os.getenv('LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS', '180') or 180)
@@ -1857,6 +2217,7 @@ LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = max(
     1,
     min(30, int(os.getenv('LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP', '2') or 2))
 )
+# Prepare local pending recovery defer queue threshold for the next step.
 LOCAL_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD = max(
     1,
     int(os.getenv('LOCAL_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD', '8') or 8)
@@ -1880,6 +2241,7 @@ CLOUD_PENDING_RECOVERY_MIN_AGE_MINUTES = max(
     5,
     int(os.getenv('CLOUD_PENDING_RECOVERY_MIN_AGE_MINUTES', '20') or 20)
 )
+# Prepare cloud pending recovery max enqueue per sweep for the next step.
 CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP = max(
     1,
     min(20, int(os.getenv('CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP', '3') or 3))
@@ -1889,6 +2251,7 @@ CLOUD_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD = max(
     int(os.getenv('CLOUD_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD', '8') or 8)
 )
 supabase_runtime_recovery_lock = Lock()
+# Prepare last supabase runtime recovery epoch for the next step.
 last_supabase_runtime_recovery_epoch = 0.0
 SUPABASE_RUNTIME_RECOVERY_MIN_INTERVAL_SECONDS = max(
     5,
@@ -1898,6 +2261,7 @@ SUPABASE_RUNTIME_RECOVERY_CHECK_INTERVAL_SECONDS = max(
     10,
     int(os.getenv('SUPABASE_RUNTIME_RECOVERY_CHECK_INTERVAL_SECONDS', '45') or 45)
 )
+# Prepare supabase auto sync interval seconds for the next step.
 SUPABASE_AUTO_SYNC_INTERVAL_SECONDS = max(
     30,
     int(os.getenv('SUPABASE_AUTO_SYNC_INTERVAL_SECONDS', '30') or 30)
@@ -1910,6 +2274,7 @@ VISIBLE_LOCAL_CACHE_SYNC_ENABLED = os.getenv(
     'VISIBLE_LOCAL_CACHE_SYNC_ENABLED',
     'true'
 ).strip().lower() in ('1', 'true', 'yes', 'on')
+# Prepare visible local cache sync interval seconds for the next step.
 VISIBLE_LOCAL_CACHE_SYNC_INTERVAL_SECONDS = max(
     5,
     int(os.getenv('VISIBLE_LOCAL_CACHE_SYNC_INTERVAL_SECONDS', '20') or 20)
@@ -1921,6 +2286,7 @@ VISIBLE_LOCAL_CACHE_SYNC_BATCH_SIZE = max(
         int(os.getenv('VISIBLE_LOCAL_CACHE_SYNC_BATCH_SIZE', str(SUPABASE_AUTO_SYNC_BATCH_SIZE or 4)) or 4)
     )
 )
+# Prepare local pipeline force local artifacts for the next step.
 LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS = os.getenv(
     'LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS',
     'true'
@@ -1933,6 +2299,7 @@ LOCAL_CACHE_PARTIAL_HANDOFF_ADOPT_GRACE_SECONDS = max(
     30,
     int(os.getenv('LOCAL_CACHE_PARTIAL_HANDOFF_ADOPT_GRACE_SECONDS', '330') or 330)
 )
+# Prepare browser local draft handoff max image bytes for the next step.
 BROWSER_LOCAL_DRAFT_HANDOFF_MAX_IMAGE_BYTES = max(
     128 * 1024,
     int(os.getenv('BROWSER_LOCAL_DRAFT_HANDOFF_MAX_IMAGE_BYTES', str(5 * 1024 * 1024)) or (5 * 1024 * 1024))
@@ -1945,6 +2312,7 @@ LOCAL_CACHE_SYNC_CLEANUP_DELETE_WHOLE_DIR = os.getenv(
     'LOCAL_CACHE_SYNC_CLEANUP_DELETE_WHOLE_DIR',
     'true'
 ).strip().lower() in ('1', 'true', 'yes', 'on')
+# Prepare local cache sync keep offline artifacts for the next step.
 LOCAL_CACHE_SYNC_KEEP_OFFLINE_ARTIFACTS = os.getenv(
     'LOCAL_CACHE_SYNC_KEEP_OFFLINE_ARTIFACTS',
     'true'
@@ -1954,6 +2322,7 @@ LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS = max(
     int(os.getenv('LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS', '0') or 0)
 )
 visible_local_cache_sync_lock = Lock()
+# Prepare last visible local cache sync epoch for the next step.
 last_visible_local_cache_sync_epoch = 0.0
 supabase_offline_backoff_lock = Lock()
 supabase_offline_backoff_until_epoch = 0.0
@@ -1975,6 +2344,7 @@ REALTIME_SUPABASE_POLL_INTERVAL_SECONDS = max(
     5,
     int(os.getenv('REALTIME_SUPABASE_POLL_INTERVAL_SECONDS', '20') or 20)
 )
+# Prepare realtime supabase poll interval seconds for the next step.
 REALTIME_SUPABASE_POLL_INTERVAL_SECONDS = min(REALTIME_SUPABASE_POLL_INTERVAL_SECONDS, 600)
 REALTIME_SUPABASE_POLL_DURING_ACTIVE_LOCAL = os.getenv(
     'REALTIME_SUPABASE_POLL_DURING_ACTIVE_LOCAL',
@@ -1987,24 +2357,32 @@ realtime_supabase_cache = {
 }
 
 
+# Section: run the get realtime supabase cached rows workflow with clear inputs and outputs.
 def _get_realtime_supabase_cached_rows() -> Tuple[List[Dict[str, Any]], float]:
+    # Open the managed resource only for the block that needs it.
     with realtime_supabase_cache_lock:
+        # Prepare rows for the next step.
         rows = list(realtime_supabase_cache.get('rows') or [])
         fetched_at = float(realtime_supabase_cache.get('fetched_at') or 0.0)
     return rows, fetched_at
 
 
+# Section: run the set realtime supabase cached rows workflow with clear inputs and outputs.
 def _set_realtime_supabase_cached_rows(rows: List[Dict[str, Any]]) -> None:
     with realtime_supabase_cache_lock:
         realtime_supabase_cache['rows'] = list(rows or [])
         realtime_supabase_cache['fetched_at'] = time.time()
 
 
+# Section: run the is supabase offline backoff active workflow with clear inputs and outputs.
 def _is_supabase_offline_backoff_active() -> bool:
+    # Open the managed resource only for the block that needs it.
     with supabase_offline_backoff_lock:
+        # Return the prepared result to the caller.
         return time.time() < float(supabase_offline_backoff_until_epoch or 0.0)
 
 
+# Section: run the get supabase offline backoff snapshot workflow with clear inputs and outputs.
 def _get_supabase_offline_backoff_snapshot() -> Dict[str, Any]:
     with supabase_offline_backoff_lock:
         now_epoch = time.time()
@@ -2018,9 +2396,12 @@ def _get_supabase_offline_backoff_snapshot() -> Dict[str, Any]:
         }
 
 
+# Section: run the is supabase restriction failure workflow with clear inputs and outputs.
 def _is_supabase_restriction_failure(raw_error: Any) -> bool:
+    # Prepare normalized for the next step.
     normalized = str(raw_error or '').strip().lower()
     if not normalized:
+        # Return the prepared result to the caller.
         return False
 
     markers = (
@@ -2030,17 +2411,21 @@ def _is_supabase_restriction_failure(raw_error: Any) -> bool:
         'egress',
         'exceed_egress_quota',
     )
+    # Return the prepared result to the caller.
     return any(marker in normalized for marker in markers)
 
 
+# Section: run the is supabase connectivity failure workflow with clear inputs and outputs.
 def _is_supabase_connectivity_failure(raw_error: Any) -> bool:
     normalized = str(raw_error or '').strip().lower()
     if not normalized:
+        # Return the prepared result to the caller.
         return False
 
     if '_local_mode_is_name_resolution_error' in globals() and _local_mode_is_name_resolution_error(normalized):
         return True
 
+    # Choose the correct branch before the workflow continues.
     if _is_supabase_restriction_failure(normalized):
         return True
 
@@ -2061,29 +2446,36 @@ def _is_supabase_connectivity_failure(raw_error: Any) -> bool:
         'ssl syscall error',
         'eof detected',
     )
+    # Return the prepared result to the caller.
     return any(marker in normalized for marker in markers)
 
 
+# Section: run the clear supabase offline backoff workflow with clear inputs and outputs.
 def _clear_supabase_offline_backoff(reason: str = '') -> None:
     global supabase_offline_backoff_until_epoch, supabase_offline_backoff_context, supabase_offline_backoff_error
     global supabase_offline_failure_count
     with supabase_offline_backoff_lock:
+        # Choose the correct branch before the workflow continues.
         if supabase_offline_backoff_until_epoch <= 0:
+            # Return the prepared result to the caller.
             return
         supabase_offline_backoff_until_epoch = 0.0
         supabase_offline_backoff_context = ''
         supabase_offline_backoff_error = ''
     # H3  Reset failure counter on a confirmed successful Supabase connection.
+    # Prepare supabase offline failure count for the next step.
     supabase_offline_failure_count = 0
     if reason:
         logger.info(f"Supabase offline backoff cleared ({reason})")
 
 
+# Section: run the activate local offline runtime workflow with clear inputs and outputs.
 def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
     global db_manager, storage_manager, report_generator
     global supabase_offline_backoff_until_epoch, supabase_offline_backoff_context, supabase_offline_backoff_error
     global supabase_offline_failure_count
 
+    # Prepare active profile for the next step.
     active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
     allow_demotion = (
         ALLOW_OFFLINE_LOCAL_MODE
@@ -2093,9 +2485,12 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
 
     error_text = str(error or '').strip()
     if error_text and not _is_supabase_connectivity_failure(error_text):
+        # Return the prepared result to the caller.
         return
+    # Choose the correct branch before the workflow continues.
     if not allow_demotion and not _is_supabase_restriction_failure(error_text):
         if active_profile == 'cloud':
+            # Trigger the side effect required for this stage.
             logger.warning(
                 "Cloud profile retained after cloud persistence warning "
                 f"(context={context}, error={error_text or 'none'})"
@@ -2105,18 +2500,23 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
     now_epoch = time.time()
     supabase_offline_failure_count += 1
 
+    # Open the managed resource only for the block that needs it.
     with supabase_offline_backoff_lock:
+        # Prepare previous until for the next step.
         previous_until = float(supabase_offline_backoff_until_epoch or 0.0)
         new_until = now_epoch + float(SUPABASE_OFFLINE_BACKOFF_SECONDS)
         if previous_until > now_epoch:
+            # Prepare extended until for the next step.
             extended_until = previous_until + float(SUPABASE_OFFLINE_BACKOFF_SECONDS)
             cap_until = now_epoch + float(SUPABASE_OFFLINE_BACKOFF_MAX_SECONDS)
             new_until = min(extended_until, cap_until)
 
         supabase_offline_backoff_until_epoch = new_until
         supabase_offline_backoff_context = str(context or '').strip() or 'runtime'
+        # Prepare supabase offline backoff error for the next step.
         supabase_offline_backoff_error = error_text[:300]
 
+    # Choose the correct branch before the workflow continues.
     if not allow_demotion:
         logger.warning(
             "Supabase restriction detected; backoff engaged in hosted runtime "
@@ -2124,6 +2524,7 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
             f"backoff_seconds={int(max(0, supabase_offline_backoff_until_epoch - now_epoch))}, "
             f"error={error_text or 'none'})"
         )
+        # Return the prepared result to the caller.
         return
 
     # H3  Only wipe managers after at least 2 consecutive failures so a single
@@ -2131,9 +2532,11 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
     if supabase_offline_failure_count >= 2:
         demoted_parts = []
         if db_manager is not None:
+            # Prepare db manager for the next step.
             db_manager = None
             demoted_parts.append('db_manager')
 
+        # Choose the correct branch before the workflow continues.
         if storage_manager is not None:
             storage_manager = None
             demoted_parts.append('storage_manager')
@@ -2144,8 +2547,11 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
             f"(context={context!r}): managers preserved  need >= 2 consecutive failures to trigger offline demotion."
         )
 
+    # Choose the correct branch before the workflow continues.
     if report_generator is not None and _is_supabase_report_generator_active():
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare report generator for the next step.
             report_generator = _run_with_timeout(
                 lambda: ReportGenerator(_build_report_generator_config()),
                 STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS,
@@ -2155,7 +2561,9 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
         except Exception as local_gen_err:
             logger.warning(f"Could not switch to local report generator during offline demotion: {local_gen_err}")
 
+    # Choose the correct branch before the workflow continues.
     if demoted_parts:
+        # Trigger the side effect required for this stage.
         logger.warning(
             "Supabase connectivity failure detected; switched to local-only runtime "
             f"(context={supabase_offline_backoff_context}, parts={','.join(demoted_parts)}, "
@@ -2164,9 +2572,12 @@ def _activate_local_offline_runtime(context: str, error: Any = None) -> None:
         )
 
 
+# Section: run the is local pipeline runtime active workflow with clear inputs and outputs.
 def _is_local_pipeline_runtime_active() -> bool:
     """Return True when this local host should generate/cache reports locally."""
+    # Choose the correct branch before the workflow continues.
     if not ALLOW_OFFLINE_LOCAL_MODE or _is_hosted_runtime_environment():
+        # Return the prepared result to the caller.
         return False
     active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
     if active_profile == 'cloud':
@@ -2175,16 +2586,20 @@ def _is_local_pipeline_runtime_active() -> bool:
         return True
     if _is_supabase_offline_backoff_active():
         return True
+    # Return the prepared result to the caller.
     return db_manager is None or storage_manager is None
 
 
+# Section: run the is queue worker alive workflow with clear inputs and outputs.
 def _is_queue_worker_alive() -> bool:
     """Return True only when worker flag is set and thread is alive."""
     return bool(queue_worker_running and queue_worker_thread is not None and queue_worker_thread.is_alive())
 
 
+# Section: run the create violation queue manager workflow with clear inputs and outputs.
 def _create_violation_queue_manager() -> ViolationQueueManager:
     """Create queue manager with centralized defaults for startup and runtime recovery."""
+    # Return the prepared result to the caller.
     return ViolationQueueManager(
         max_size=100,
         rate_limit_per_device=20,
@@ -2193,11 +2608,14 @@ def _create_violation_queue_manager() -> ViolationQueueManager:
     )
 
 
+# Section: run the ensure violation queue runtime ready workflow with clear inputs and outputs.
 def _ensure_violation_queue_runtime_ready(reason: str = 'runtime') -> bool:
     """Lazily initialize queue manager if runtime starts partially and queue is missing."""
     global violation_queue
 
+    # Choose the correct branch before the workflow continues.
     if violation_queue is not None:
+        # Return the prepared result to the caller.
         return True
 
     try:
@@ -2208,6 +2626,7 @@ def _ensure_violation_queue_runtime_ready(reason: str = 'runtime') -> bool:
         )
         return True
     except Exception as queue_init_error:
+        # Trigger the side effect required for this stage.
         logger.error(
             "Failed to lazily initialize violation queue manager "
             f"(reason={reason}): {queue_init_error}"
@@ -2215,9 +2634,12 @@ def _ensure_violation_queue_runtime_ready(reason: str = 'runtime') -> bool:
         return False
 
 
+# Section: run the ensure queue worker running workflow with clear inputs and outputs.
 def ensure_queue_worker_running() -> bool:
     """Best-effort worker self-heal for endpoints that require queue processing."""
+    # Choose the correct branch before the workflow continues.
     if not _ensure_violation_queue_runtime_ready(reason='ensure_queue_worker_running'):
+        # Return the prepared result to the caller.
         return False
 
     with queue_worker_state_lock:
@@ -2227,9 +2649,12 @@ def ensure_queue_worker_running() -> bool:
 
     if worker_running_flag and worker_thread_alive:
         if QUEUE_WORKER_WATCHDOG_ENABLED:
+            # Trigger the side effect required for this stage.
             start_queue_worker_watchdog()
+        # Return the prepared result to the caller.
         return True
 
+    # Choose the correct branch before the workflow continues.
     if worker_thread is None:
         logger.info("Queue worker not started yet; starting worker thread")
     elif not worker_thread_alive:
@@ -2247,6 +2672,7 @@ def ensure_queue_worker_running() -> bool:
 ollama_semaphore = Semaphore(1)  # Only 1 concurrent Ollama call allowed
 
 try:
+    # Prepare report generation max concurrency for the next step.
     REPORT_GENERATION_MAX_CONCURRENCY = int(os.getenv('REPORT_GENERATION_MAX_CONCURRENCY', '1') or '1')
 except (TypeError, ValueError):
     REPORT_GENERATION_MAX_CONCURRENCY = 1
@@ -2255,6 +2681,7 @@ try:
     REPORT_GENERATION_SLOT_WAIT_SECONDS = float(os.getenv('REPORT_GENERATION_SLOT_WAIT_SECONDS', '5') or '5')
 except (TypeError, ValueError):
     REPORT_GENERATION_SLOT_WAIT_SECONDS = 5.0
+# Prepare report generation slot wait seconds for the next step.
 REPORT_GENERATION_SLOT_WAIT_SECONDS = max(0.0, min(REPORT_GENERATION_SLOT_WAIT_SECONDS, 30.0))
 report_generation_semaphore = Semaphore(REPORT_GENERATION_MAX_CONCURRENCY)
 
@@ -2290,6 +2717,7 @@ VALID_ENVIRONMENT_KEYWORDS = [
 ]
 
 # Keywords that suggest NON-work environment (only used for warning, not skipping)
+# Prepare invalid environment keywords for the next step.
 INVALID_ENVIRONMENT_KEYWORDS = [
     'living room', 'bedroom', 'kitchen', 'bathroom', 'dining', 'lounge',
     'office desk', 'computer screen', 'monitor', 'keyboard', 'coffee',
@@ -2314,30 +2742,38 @@ def update_report_progress(
 ):
     """Update the global report generation progress."""
     global report_progress
+    # Open the managed resource only for the block that needs it.
     with report_progress_lock:
+        # Prepare now epoch for the next step.
         now_epoch = time.time()
         now_iso = datetime.now(timezone.utc).isoformat()
         previous_current = report_progress.get('current')
         previous_step = report_progress.get('current_step')
         if current is not None:
+            # Prepare values needed by the next step.
             report_progress['current'] = current
         if total is not None:
             report_progress['total'] = total
         step_value = current_step if current_step is not None else step
+        # Prepare current changed for the next step.
         current_changed = current is not None and current != previous_current
         if status in ('waiting', 'processing', 'generating', 'running', 'active') and (
             current_changed or not report_progress.get('started_at_epoch')
         ):
             report_progress['started_at_epoch'] = now_epoch
+            # Prepare values needed by the next step.
             report_progress['started_at'] = now_iso
         if step_value:
             report_progress['current_step'] = step_value
             if step_value != previous_step or current_changed or not report_progress.get('stage_started_at_epoch'):
+                # Prepare values needed by the next step.
                 report_progress['stage_started_at_epoch'] = now_epoch
                 report_progress['stage_started_at'] = now_iso
+        # Prepare values needed by the next step.
         report_progress['status'] = status
         error_value = error_message if error_message is not None else error
         if error_value:
+            # Prepare values needed by the next step.
             report_progress['error_message'] = error_value
         if completed is not None:
             report_progress['completed'] = completed
@@ -2347,6 +2783,7 @@ def update_report_progress(
             report_progress['started_at_epoch'] = None
             report_progress['stage_started_at_epoch'] = None
             report_progress['started_at'] = None
+            # Prepare values needed by the next step.
             report_progress['stage_started_at'] = None
             report_progress['elapsed_seconds'] = 0
             report_progress['stage_elapsed_seconds'] = 0
@@ -2354,32 +2791,41 @@ def update_report_progress(
             started_epoch = report_progress.get('started_at_epoch')
             stage_epoch = report_progress.get('stage_started_at_epoch')
             if started_epoch:
+                # Prepare values needed by the next step.
                 report_progress['elapsed_seconds'] = round(max(0.0, now_epoch - float(started_epoch)), 1)
             if stage_epoch:
                 report_progress['stage_elapsed_seconds'] = round(max(0.0, now_epoch - float(stage_epoch)), 1)
+        # Prepare values needed by the next step.
         report_progress['updated_at'] = now_iso
+    # Trigger the side effect required for this stage.
     _invalidate_queue_context_snapshot_cache()
 
+# Section: run the get report progress workflow with clear inputs and outputs.
 def get_report_progress():
     """Get current report generation progress."""
     with report_progress_lock:
         progress = report_progress.copy()
     now_epoch = time.time()
     try:
+        # Prepare started epoch for the next step.
         started_epoch = progress.get('started_at_epoch')
         if started_epoch:
+            # Prepare values needed by the next step.
             progress['elapsed_seconds'] = round(max(0.0, now_epoch - float(started_epoch)), 1)
         stage_epoch = progress.get('stage_started_at_epoch')
         if stage_epoch:
             progress['stage_elapsed_seconds'] = round(max(0.0, now_epoch - float(stage_epoch)), 1)
     except Exception:
         pass
+    # Return the prepared result to the caller.
     return progress
 
+# Section: run the reset report progress workflow with clear inputs and outputs.
 def reset_report_progress():
     """Reset report progress tracking."""
     global report_progress
     with report_progress_lock:
+        # Prepare report progress for the next step.
         report_progress = {
             'current': None,
             'total': 0,
@@ -2395,17 +2841,22 @@ def reset_report_progress():
             'elapsed_seconds': 0,
             'stage_elapsed_seconds': 0,
         }
+    # Trigger the side effect required for this stage.
     _invalidate_queue_context_snapshot_cache()
 
 
+# Section: run the get queue context snapshot workflow with clear inputs and outputs.
 def _get_queue_context_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
     """Capture queue/progress state once so list endpoints can reuse it cheaply."""
     now = time.time()
     if not force_refresh and QUEUE_CONTEXT_CACHE_TTL_SECONDS > 0:
+        # Open the managed resource only for the block that needs it.
         with queue_context_snapshot_cache_lock:
+            # Prepare cached snapshot for the next step.
             cached_snapshot = queue_context_snapshot_cache.get('snapshot')
             cached_ts = float(queue_context_snapshot_cache.get('ts') or 0.0)
             if cached_snapshot is not None and (now - cached_ts) < QUEUE_CONTEXT_CACHE_TTL_SECONDS:
+                # Return the prepared result to the caller.
                 return dict(cached_snapshot)
 
     snapshot: Dict[str, Any] = {
@@ -2418,9 +2869,12 @@ def _get_queue_context_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
         'queue_positions': {},
     }
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare heartbeat age for the next step.
         heartbeat_age = _queue_worker_heartbeat_age_seconds()
         if heartbeat_age is not None:
+            # Prepare values needed by the next step.
             snapshot['worker_heartbeat_age_seconds'] = round(heartbeat_age, 2)
     except Exception:
         pass
@@ -2430,21 +2884,27 @@ def _get_queue_context_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
             stats = violation_queue.get_stats() if hasattr(violation_queue, 'get_stats') else {}
             snapshot['queue_size'] = int((stats or {}).get('current_size', 0) or 0)
             if hasattr(violation_queue, 'get_queue_preview'):
+                # Prepare preview for the next step.
                 preview = violation_queue.get_queue_preview(limit=100)
                 queue_positions: Dict[str, int] = {}
                 for index, item in enumerate(preview, start=1):
+                    # Prepare preview report id for the next step.
                     preview_report_id = str((item or {}).get('report_id') or '').strip()
                     if preview_report_id and preview_report_id not in queue_positions:
+                        # Prepare values needed by the next step.
                         queue_positions[preview_report_id] = index
                 snapshot['queue_positions'] = queue_positions
     except Exception:
         pass
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare progress for the next step.
         progress = get_report_progress() or {}
         progress_status = str(progress.get('status') or '').strip().lower()
         progress_current = str(progress.get('current') or '').strip()
         if progress_status in ('waiting', 'processing', 'generating', 'running', 'active'):
+            # Prepare values needed by the next step.
             snapshot['active_report_id'] = progress_current or None
             snapshot['active_step'] = progress.get('current_step')
             snapshot['active_status'] = progress_status
@@ -2455,15 +2915,20 @@ def _get_queue_context_snapshot(force_refresh: bool = False) -> Dict[str, Any]:
     except Exception:
         pass
 
+    # Choose the correct branch before the workflow continues.
     if QUEUE_CONTEXT_CACHE_TTL_SECONDS > 0:
+        # Open the managed resource only for the block that needs it.
         with queue_context_snapshot_cache_lock:
+            # Prepare values needed by the next step.
             queue_context_snapshot_cache['ts'] = now
             queue_context_snapshot_cache['snapshot'] = dict(snapshot)
 
     return snapshot
 
 
+# Section: run the queue context for target from snapshot workflow with clear inputs and outputs.
 def _queue_context_for_target_from_snapshot(report_id: str, snapshot: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # Prepare target for the next step.
     target = str(report_id or '').strip()
     snapshot = snapshot if isinstance(snapshot, dict) else {}
     queue_positions = snapshot.get('queue_positions') if isinstance(snapshot.get('queue_positions'), dict) else {}
@@ -2484,17 +2949,22 @@ def _queue_context_for_target_from_snapshot(report_id: str, snapshot: Optional[D
     }
 
 
+# Section: run the get queue context for report workflow with clear inputs and outputs.
 def _get_queue_context_for_report(report_id: str) -> Dict[str, Any]:
     """Return queue/progress context for a report without mutating worker state."""
+    # Return the prepared result to the caller.
     return _queue_context_for_target_from_snapshot(report_id, _get_queue_context_snapshot())
 
 
+# Section: run the is report queued or processing workflow with clear inputs and outputs.
 def _is_report_queued_or_processing(report_id: str) -> bool:
     """Return true if a report is either waiting in queue or currently active."""
     target = str(report_id or '').strip()
     if not target:
+        # Return the prepared result to the caller.
         return False
 
+    # Prepare snapshot for the next step.
     snapshot = _get_queue_context_snapshot()
     queue_positions = snapshot.get('queue_positions') if isinstance(snapshot.get('queue_positions'), dict) else {}
     if target in queue_positions:
@@ -2502,12 +2972,16 @@ def _is_report_queued_or_processing(report_id: str) -> bool:
     return str(snapshot.get('active_report_id') or '').strip() == target
 
 
+# Section: run the utc now iso workflow with clear inputs and outputs.
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Section: run the extract project ref from supabase url workflow with clear inputs and outputs.
 def _extract_project_ref_from_supabase_url(value: str) -> str:
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare host for the next step.
         host = (urlparse(value).hostname or '').strip().lower()
     except Exception:
         host = ''
@@ -2518,16 +2992,21 @@ def _extract_project_ref_from_supabase_url(value: str) -> str:
     return ''
 
 
+# Section: run the extract db host workflow with clear inputs and outputs.
 def _extract_db_host(value: str) -> str:
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare host for the next step.
         host = (urlparse(value).hostname or '').strip().lower()
         return host
     except Exception:
         return ''
 
 
+# Section: run the startup env diagnostics workflow with clear inputs and outputs.
 def _startup_env_diagnostics() -> Dict[str, Any]:
     supabase_url = os.getenv('SUPABASE_URL', '').strip()
+    # Prepare db url for the next step.
     db_url = os.getenv('SUPABASE_DB_URL', '').strip()
     project_ref = _extract_project_ref_from_supabase_url(supabase_url)
     return {
@@ -2544,7 +3023,9 @@ def _startup_env_diagnostics() -> Dict[str, Any]:
     }
 
 
+# Section: run the is hosted runtime environment workflow with clear inputs and outputs.
 def _is_hosted_runtime_environment() -> bool:
+    # Prepare hosted markers for the next step.
     hosted_markers = (
         'RAILWAY_SERVICE_ID',
         'RAILWAY_PROJECT_ID',
@@ -2556,20 +3037,28 @@ def _is_hosted_runtime_environment() -> bool:
     return any(str(os.getenv(marker) or '').strip() for marker in hosted_markers)
 
 
+# Section: run the set startup step workflow with clear inputs and outputs.
 def _set_startup_step(step_key: str, step_status: str, detail: str = None):
     """Update a startup check step status in a thread-safe manner."""
+    # Open the managed resource only for the block that needs it.
     with startup_state_lock:
+        # Prepare checks for the next step.
         checks = startup_state.get('checks', {})
         if step_key in checks:
+            # Prepare values needed by the next step.
             checks[step_key]['status'] = step_status
             if detail is not None:
+                # Prepare values needed by the next step.
                 checks[step_key]['detail'] = detail
         startup_state['updated_at'] = _utc_now_iso()
 
 
+# Section: run the set startup progress workflow with clear inputs and outputs.
 def _set_startup_progress(progress: int, current_step: str):
     """Update startup progress and status text."""
+    # Open the managed resource only for the block that needs it.
     with startup_state_lock:
+        # Prepare values needed by the next step.
         startup_state['status'] = 'running'
         startup_state['ready'] = False
         startup_state['progress'] = max(0, min(100, int(progress)))
@@ -2577,18 +3066,24 @@ def _set_startup_progress(progress: int, current_step: str):
         startup_state['updated_at'] = _utc_now_iso()
 
 
+# Section: run the set startup error workflow with clear inputs and outputs.
 def _set_startup_error(message: str):
     """Mark startup as failed and keep UI locked behind loader."""
+    # Open the managed resource only for the block that needs it.
     with startup_state_lock:
+        # Prepare values needed by the next step.
         startup_state['status'] = 'error'
         startup_state['ready'] = False
         startup_state['error_message'] = str(message)
         startup_state['updated_at'] = _utc_now_iso()
 
 
+# Section: run the set startup ready workflow with clear inputs and outputs.
 def _set_startup_ready():
     """Mark startup as fully ready."""
+    # Open the managed resource only for the block that needs it.
     with startup_state_lock:
+        # Prepare values needed by the next step.
         startup_state['status'] = 'ready'
         startup_state['ready'] = True
         startup_state['progress'] = 100
@@ -2597,8 +3092,11 @@ def _set_startup_ready():
         startup_state['updated_at'] = _utc_now_iso()
 
 
+# Section: run the get startup state snapshot workflow with clear inputs and outputs.
 def get_startup_state_snapshot() -> Dict[str, Any]:
+    # Open the managed resource only for the block that needs it.
     with startup_state_lock:
+        # Prepare checks for the next step.
         checks = startup_state.get('checks', {})
         completed_checks = sum(1 for c in checks.values() if c.get('status') == 'ok')
         total_checks = len(checks)
@@ -2617,20 +3115,26 @@ def get_startup_state_snapshot() -> Dict[str, Any]:
         }
 
 
+# Section: run the is offline local fallback available workflow with clear inputs and outputs.
 def _is_offline_local_fallback_available(local_diag: Optional[Dict[str, Any]]) -> bool:
     """Allow startup to continue in offline mode when local runtime is reachable, even if model pull failed."""
+    # Prepare diagnostics for the next step.
     diagnostics = local_diag or {}
 
     if bool(diagnostics.get('local_mode_possible')):
+        # Return the prepared result to the caller.
         return True
 
     return bool(diagnostics.get('ollama_installed') and diagnostics.get('ollama_running'))
 
 
+# Section: run the run startup sequence workflow with clear inputs and outputs.
 def _run_startup_sequence():
     """Background startup sequence so frontend can show setup progress."""
+    # Protect this step so expected failures can fall back cleanly.
     try:
         with startup_state_lock:
+            # Prepare values needed by the next step.
             startup_state['status'] = 'running'
             startup_state['ready'] = False
             startup_state['progress'] = 0
@@ -2639,6 +3143,7 @@ def _run_startup_sequence():
             startup_state['started_at'] = _utc_now_iso()
             startup_state['updated_at'] = startup_state['started_at']
             for key in startup_state.get('checks', {}):
+                # Prepare values needed by the next step.
                 startup_state['checks'][key]['status'] = 'pending'
                 startup_state['checks'][key]['detail'] = 'Not started yet'
 
@@ -2655,8 +3160,10 @@ def _run_startup_sequence():
         except Exception as heartbeat_start_err:
             logger.debug(f"Startup cloud heartbeat fast-start skipped: {heartbeat_start_err}")
 
+        # Trigger the side effect required for this stage.
         _set_startup_progress(8, 'Checking pipeline modules')
         if not FULL_PIPELINE_AVAILABLE:
+            # Trigger the side effect required for this stage.
             _set_startup_step('pipeline_imports', 'error', 'Required pipeline modules failed to import')
             raise RuntimeError('Pipeline modules are unavailable. Check environment dependencies and imports.')
         _set_startup_step('pipeline_imports', 'ok', 'Pipeline modules imported successfully')
@@ -2664,7 +3171,9 @@ def _run_startup_sequence():
         if STARTUP_MODEL_WARMUP_ENABLED:
             _set_startup_progress(24, 'Loading YOLO model')
 
+            # Section: run the warmup yolo workflow with clear inputs and outputs.
             def _warmup_yolo():
+                # Prepare dummy for the next step.
                 dummy = np.zeros((640, 640, 3), dtype=np.uint8)
                 return predict_image(dummy, conf=0.25)
 
@@ -2673,11 +3182,14 @@ def _run_startup_sequence():
                 STARTUP_MODEL_WARMUP_TIMEOUT_SECONDS,
                 'yolo-warmup'
             )
+            # Trigger the side effect required for this stage.
             _set_startup_step('yolo_model', 'ok', 'YOLO model loaded and warm-up inference completed')
         else:
             _set_startup_progress(24, 'Skipping YOLO warm-up for this deployment')
             if STARTUP_MODEL_PATH_CHECK_ENABLED:
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Prepare resolved path for the next step.
                     resolved_path = _run_with_timeout(
                         lambda: resolve_model_path(),
                         STARTUP_MODEL_PATH_CHECK_TIMEOUT_SECONDS,
@@ -2689,15 +3201,18 @@ def _run_startup_sequence():
                         f'Skipped warm-up (STARTUP_MODEL_WARMUP_ENABLED=false), model found at {resolved_path}'
                     )
                 except Exception as yolo_path_exc:
+                    # Trigger the side effect required for this stage.
                     _set_startup_step('yolo_model', 'error', str(yolo_path_exc))
                     raise RuntimeError(f'YOLO model path check failed: {yolo_path_exc}')
             else:
+                # Trigger the side effect required for this stage.
                 _set_startup_step(
                     'yolo_model',
                     'ok',
                     'Skipped warm-up (STARTUP_MODEL_WARMUP_ENABLED=false); startup model path check disabled'
                 )
 
+        # Trigger the side effect required for this stage.
         _set_startup_progress(50, 'Initializing detection and report pipeline')
         init_success = _run_with_timeout(
             initialize_pipeline_components,
@@ -2705,13 +3220,16 @@ def _run_startup_sequence():
             'pipeline-components-init'
         )
         if not init_success:
+            # Trigger the side effect required for this stage.
             _set_startup_step('pipeline_components', 'error', 'Component initialization returned failure')
             raise RuntimeError('Pipeline components failed to initialize')
+        # Trigger the side effect required for this stage.
         _set_startup_step('pipeline_components', 'ok', 'Core components initialized')
 
         _set_startup_progress(60, 'Checking local mode readiness (Ollama)')
         try:
             if not STARTUP_AUTO_PREPARE_LOCAL_MODE:
+                # Trigger the side effect required for this stage.
                 _set_startup_step('local_mode', 'ok', 'Startup local-mode preparation disabled by env')
             else:
                 before_local = _get_local_mode_diagnostics()
@@ -2721,6 +3239,7 @@ def _run_startup_sequence():
                     'already_running': bool(before_local.get('ollama_running')),
                     'error': None,
                 }
+                # Prepare pull action for the next step.
                 pull_action = {
                     'attempted': False,
                     'pulled': False,
@@ -2729,8 +3248,10 @@ def _run_startup_sequence():
                 }
 
                 if before_local.get('ollama_installed') and not before_local.get('ollama_running'):
+                    # Prepare start action for the next step.
                     start_action = _start_ollama_service_if_needed(wait_seconds=STARTUP_LOCAL_MODE_PREP_WAIT_SECONDS)
 
+                # Prepare mid local for the next step.
                 mid_local = _get_local_mode_diagnostics()
                 if (
                     STARTUP_AUTO_PULL_LOCAL_MODEL
@@ -2743,8 +3264,10 @@ def _run_startup_sequence():
                         timeout_seconds=STARTUP_LOCAL_MODE_PULL_TIMEOUT_SECONDS,
                     )
 
+                # Prepare after local for the next step.
                 after_local = _get_local_mode_diagnostics()
                 if after_local.get('local_mode_possible'):
+                    # Trigger the side effect required for this stage.
                     _set_startup_step(
                         'local_mode',
                         'ok',
@@ -2755,7 +3278,9 @@ def _run_startup_sequence():
                         f"running={after_local.get('ollama_running')}",
                         f"model_available={after_local.get('model_available')}",
                     ]
+                    # Choose the correct branch before the workflow continues.
                     if start_action.get('error'):
+                        # Trigger the side effect required for this stage.
                         detail_parts.append(f"start_error={start_action.get('error')}")
                     if pull_action.get('error'):
                         detail_parts.append(f"pull_error={pull_action.get('error')}")
@@ -2763,12 +3288,16 @@ def _run_startup_sequence():
                 else:
                     _set_startup_step('local_mode', 'ok', 'Ollama is not installed on this host; local mode unavailable until installed')
         except Exception as local_mode_exc:
+            # Trigger the side effect required for this stage.
             _set_startup_step('local_mode', 'ok', f'Local mode check skipped due to non-blocking error: {local_mode_exc}')
 
+        # Trigger the side effect required for this stage.
         _set_startup_progress(68, 'Verifying Supabase database connection')
         if db_manager is None:
             if ALLOW_OFFLINE_LOCAL_MODE:
+                # Choose the correct branch before the workflow continues.
                 if _local_mode_has_supabase_credentials():
+                    # Trigger the side effect required for this stage.
                     _set_startup_step('supabase_database', 'ok', 'Supabase DB unavailable; running local-only mode until reconnect')
                 else:
                     _set_startup_step('supabase_database', 'ok', 'Supabase credentials pending provisioning; local-only mode active')
@@ -2776,10 +3305,14 @@ def _run_startup_sequence():
                 _set_startup_step('supabase_database', 'error', 'Database manager is unavailable')
                 raise RuntimeError('Supabase database manager is not available')
 
+        # Choose the correct branch before the workflow continues.
         if db_manager is not None:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Trigger the side effect required for this stage.
                 db_manager._ensure_connection()
                 with db_manager.conn.cursor() as cur:
+                    # Trigger the side effect required for this stage.
                     cur.execute('SELECT 1 AS startup_ok')
                     _ = cur.fetchone()
                 _set_startup_step('supabase_database', 'ok', 'Database query test passed')
@@ -2787,9 +3320,11 @@ def _run_startup_sequence():
                 safe_rollback = getattr(db_manager, '_safe_rollback', None)
                 if callable(safe_rollback):
                     safe_rollback()
+                # Choose the correct branch before the workflow continues.
                 if ALLOW_OFFLINE_LOCAL_MODE:
                     _set_startup_step('supabase_database', 'ok', f'Supabase DB unreachable; local-only mode active ({db_exc})')
                 else:
+                    # Trigger the side effect required for this stage.
                     _set_startup_step('supabase_database', 'error', str(db_exc))
                     raise RuntimeError(f'Supabase database check failed: {db_exc}')
             finally:
@@ -2797,10 +3332,14 @@ def _run_startup_sequence():
                 if callable(cleanup_tx):
                     cleanup_tx()
 
+        # Trigger the side effect required for this stage.
         _set_startup_progress(82, 'Verifying Supabase storage connection')
         if storage_manager is None:
+            # Choose the correct branch before the workflow continues.
             if ALLOW_OFFLINE_LOCAL_MODE:
+                # Choose the correct branch before the workflow continues.
                 if _local_mode_has_supabase_credentials():
+                    # Trigger the side effect required for this stage.
                     _set_startup_step('supabase_storage', 'ok', 'Supabase Storage unavailable; local artifacts will sync after reconnect')
                 else:
                     _set_startup_step('supabase_storage', 'ok', 'Supabase credentials pending provisioning; local artifacts stay local until approval')
@@ -2808,19 +3347,25 @@ def _run_startup_sequence():
                 _set_startup_step('supabase_storage', 'error', 'Storage manager is unavailable')
                 raise RuntimeError('Supabase storage manager is not available')
 
+        # Choose the correct branch before the workflow continues.
         if storage_manager is not None:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare this step for the next step.
                 _ = storage_manager.client.storage.list_buckets()
                 _set_startup_step('supabase_storage', 'ok', 'Storage buckets reachable')
             except Exception as storage_exc:
                 if ALLOW_OFFLINE_LOCAL_MODE:
+                    # Trigger the side effect required for this stage.
                     _set_startup_step('supabase_storage', 'ok', f'Supabase Storage unreachable; local-only mode active ({storage_exc})')
                 else:
                     _set_startup_step('supabase_storage', 'error', str(storage_exc))
                     raise RuntimeError(f'Supabase storage check failed: {storage_exc}')
 
+        # Trigger the side effect required for this stage.
         _set_startup_progress(93, 'Checking background queue worker')
         if not ensure_queue_worker_running():
+            # Trigger the side effect required for this stage.
             _set_startup_step('queue_worker', 'error', 'Queue worker thread is not healthy')
             raise RuntimeError('Queue worker failed to start')
         _set_startup_step('queue_worker', 'ok', 'Queue worker is running')
@@ -2828,6 +3373,7 @@ def _run_startup_sequence():
         _set_startup_progress(99, 'Finalizing startup')
         _ensure_startup_local_auto_provision_worker()
         _ensure_local_mode_cloud_heartbeat_worker()
+        # Trigger the side effect required for this stage.
         _set_startup_ready()
         _send_local_mode_cloud_heartbeat_background(
             reason='startup-ready',
@@ -2837,16 +3383,21 @@ def _run_startup_sequence():
         logger.info(' Startup sequence completed. System is ready.')
 
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f' Startup sequence failed: {e}', exc_info=True)
         _set_startup_error(str(e))
 
 
+# Section: run the ensure startup thread workflow with clear inputs and outputs.
 def ensure_startup_thread():
     """Ensure startup sequence is running (or already completed)."""
     global startup_thread
 
+    # Open the managed resource only for the block that needs it.
     with startup_state_lock:
+        # Choose the correct branch before the workflow continues.
         if startup_state.get('ready'):
+            # Return the prepared result to the caller.
             return
         # Preserve failure details for debugging; do not auto-restart on every request.
         if startup_state.get('status') == 'error':
@@ -2854,17 +3405,21 @@ def ensure_startup_thread():
         if startup_state.get('status') == 'running' and startup_thread and startup_thread.is_alive():
             return
 
+    # Prepare startup thread for the next step.
     startup_thread = Thread(target=_run_startup_sequence, daemon=True, name='startup-sequence')
     startup_thread.start()
 
 
+# Section: run the startup gate response workflow with clear inputs and outputs.
 def _startup_gate_response():
     """Return 503 until startup checks are fully ready."""
     ensure_startup_thread()
     snapshot = get_startup_state_snapshot()
     if snapshot.get('ready'):
+        # Return the prepared result to the caller.
         return None
 
+    # Prepare status code for the next step.
     status_code = 500 if snapshot.get('status') == 'error' else 503
     message = 'System setup failed' if status_code == 500 else 'System setup in progress'
     return jsonify({
@@ -2874,15 +3429,19 @@ def _startup_gate_response():
     }), status_code
 
 
+# Section: run the refresh cloud generation clients workflow with clear inputs and outputs.
 def _refresh_cloud_generation_clients(reason: str = 'runtime') -> Dict[str, bool]:
     """Best-effort refresh of cloud caption/NLP clients without doing provider work."""
+    # Prepare refreshed for the next step.
     refreshed = {'caption': False, 'report': False}
     active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
     if active_profile != 'cloud':
+        # Return the prepared result to the caller.
         return refreshed
 
     if caption_generator is not None and hasattr(caption_generator, '_ensure_gemini_client'):
         try:
+            # Prepare values needed by the next step.
             refreshed['caption'] = bool(caption_generator._ensure_gemini_client())
         except Exception as caption_refresh_error:
             logger.debug(
@@ -2891,8 +3450,11 @@ def _refresh_cloud_generation_clients(reason: str = 'runtime') -> Dict[str, bool
                 caption_refresh_error,
             )
 
+    # Choose the correct branch before the workflow continues.
     if report_generator is not None and hasattr(report_generator, 'nlp_provider_order'):
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare report gemini client for the next step.
             report_gemini_client = getattr(report_generator, 'gemini_client', None)
             report_gemini_ready = bool(
                 getattr(report_generator, 'use_gemini', False)
@@ -2900,6 +3462,7 @@ def _refresh_cloud_generation_clients(reason: str = 'runtime') -> Dict[str, bool
                 and getattr(report_gemini_client, 'is_available', False)
             )
             if not report_gemini_ready:
+                # Trigger the side effect required for this stage.
                 _sync_report_generator_provider_runtime(
                     routing_profile=active_profile,
                     model_api_enabled=bool(MODEL_API_CONFIG.get('enabled', False)),
@@ -2909,11 +3472,13 @@ def _refresh_cloud_generation_clients(reason: str = 'runtime') -> Dict[str, bool
                     reason=f'cloud-client-refresh:{reason}',
                 )
                 report_gemini_client = getattr(report_generator, 'gemini_client', None)
+                # Prepare report gemini ready for the next step.
                 report_gemini_ready = bool(
                     getattr(report_generator, 'use_gemini', False)
                     and report_gemini_client is not None
                     and getattr(report_gemini_client, 'is_available', False)
                 )
+            # Prepare values needed by the next step.
             refreshed['report'] = report_gemini_ready
         except Exception as report_refresh_error:
             logger.debug(
@@ -2922,9 +3487,11 @@ def _refresh_cloud_generation_clients(reason: str = 'runtime') -> Dict[str, bool
                 report_refresh_error,
             )
 
+    # Return the prepared result to the caller.
     return refreshed
 
 
+# Section: run the prepare live runtime workflow with clear inputs and outputs.
 def _prepare_live_runtime(
     reason: str = 'live-runtime',
     *,
@@ -2932,6 +3499,7 @@ def _prepare_live_runtime(
     refresh_cloud_clients: bool = False,
 ) -> Dict[str, Any]:
     """Prime the live/report path so first-use cloud mode does less work on the hot path."""
+    # Prepare started at for the next step.
     started_at = time.perf_counter()
     result: Dict[str, Any] = {
         'success': False,
@@ -2943,18 +3511,24 @@ def _prepare_live_runtime(
         'error': None,
     }
 
+    # Open the managed resource only for the block that needs it.
     with live_runtime_prepare_lock:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare pipeline started for the next step.
             pipeline_started = time.perf_counter()
             if FULL_PIPELINE_AVAILABLE:
+                # Prepare needs component init for the next step.
                 needs_component_init = any(
                     component is None
                     for component in (violation_detector, caption_generator, report_generator)
                 ) or violation_queue is None
                 if needs_component_init:
+                    # Prepare values needed by the next step.
                     result['pipeline_ready'] = bool(initialize_pipeline_components())
                 else:
                     result['pipeline_ready'] = True
+            # Prepare values needed by the next step.
             result['timings_ms']['pipeline'] = round((time.perf_counter() - pipeline_started) * 1000.0, 1)
 
             queue_started = time.perf_counter()
@@ -2964,6 +3538,7 @@ def _prepare_live_runtime(
             result['timings_ms']['queue_worker'] = round((time.perf_counter() - queue_started) * 1000.0, 1)
 
             if refresh_cloud_clients:
+                # Prepare cloud started for the next step.
                 cloud_started = time.perf_counter()
                 result['cloud_clients'] = _refresh_cloud_generation_clients(reason=reason)
                 result['timings_ms']['cloud_clients'] = round(
@@ -2971,8 +3546,10 @@ def _prepare_live_runtime(
                     1,
                 )
 
+            # Prepare yolo started for the next step.
             yolo_started = time.perf_counter()
             if warmup_yolo_runtime:
+                # Trigger the side effect required for this stage.
                 warmup_model(conf=0.25, imgsz=640)
             result['yolo_ready'] = bool(is_model_ready())
             result['timings_ms']['yolo'] = round((time.perf_counter() - yolo_started) * 1000.0, 1)
@@ -2983,12 +3560,15 @@ def _prepare_live_runtime(
                 and (result['yolo_ready'] if warmup_yolo_runtime else True)
             )
         except Exception as prepare_error:
+            # Prepare values needed by the next step.
             result['error'] = str(prepare_error)
             logger.warning(f"Live runtime preparation warning ({reason}): {prepare_error}")
 
+    # Prepare values needed by the next step.
     result['elapsed_ms'] = round((time.perf_counter() - started_at) * 1000.0, 1)
     return result
 
+# Section: run the format violation type workflow with clear inputs and outputs.
 def format_violation_type(class_name: str) -> str:
     """
     Format violation class name for display.
@@ -2999,10 +3579,12 @@ def format_violation_type(class_name: str) -> str:
         'no-hardhat' -> 'Missing Hard Hat'
     """
     # Handle both 'NO-' prefix and lowercase 'no-' prefix
+    # Prepare class name upper for the next step.
     class_name_upper = class_name.upper()
     if class_name_upper.startswith('NO-'):
         item = class_name[3:]  # Remove 'NO-' or 'no-'
         if _normalize_label(item) in {'goggle', 'goggles', 'eye-protection', 'safety-glasses'}:
+            # Return the prepared result to the caller.
             return ''
         # Format specific items
         item = item.replace('hardhat', 'Hard Hat').replace('Hardhat', 'Hard Hat')
@@ -3010,6 +3592,7 @@ def format_violation_type(class_name: str) -> str:
         item = item.replace('gloves', 'Gloves').replace('Gloves', 'Gloves')
         item = item.replace('mask', 'Mask').replace('Mask', 'Mask')
         return f"Missing {item}"
+    # Return the prepared result to the caller.
     return class_name
 
 # =========================================================================
@@ -3030,15 +3613,19 @@ def _build_report_generator_config() -> Dict[str, Any]:
         'SUPABASE_CONFIG': SUPABASE_CONFIG
     }
 
+# Section: run the initialize pipeline components workflow with clear inputs and outputs.
 def initialize_pipeline_components():
     """Initialize violation detector, caption generator, report generator, and Supabase managers."""
     global violation_detector, caption_generator, report_generator, db_manager, storage_manager
     global violation_queue, queue_worker_thread, queue_worker_running
 
+    # Section: run the log supabase offline workflow with clear inputs and outputs.
     def _log_supabase_offline(message: str) -> None:
         """Log deferred Supabase init messages with configurable severity for local/offline runs."""
+        # Prepare level for the next step.
         level = str(os.getenv('SUPABASE_OFFLINE_LOG_LEVEL', 'warning') or 'warning').strip().lower()
         if level in ('none', 'silent', 'off'):
+            # Return the prepared result to the caller.
             return
         if level == 'debug':
             logger.debug(message)
@@ -3046,10 +3633,13 @@ def initialize_pipeline_components():
         if level == 'info':
             logger.info(message)
             return
+        # Trigger the side effect required for this stage.
         logger.warning(message)
 
+    # Section: run the can run local offline workflow with clear inputs and outputs.
     def _can_run_local_offline() -> bool:
         if not ALLOW_OFFLINE_LOCAL_MODE:
+            # Return the prepared result to the caller.
             return False
         try:
             local_diag = _get_local_mode_diagnostics()
@@ -3058,8 +3648,11 @@ def initialize_pipeline_components():
         except Exception:
             return True
 
+    # Section: run the supabase credentials ready workflow with clear inputs and outputs.
     def _supabase_credentials_ready() -> bool:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Return the prepared result to the caller.
             return _local_mode_has_supabase_credentials()
         except Exception:
             return True
@@ -3068,8 +3661,11 @@ def initialize_pipeline_components():
         logger.warning("Full pipeline not available - skipping component initialization")
         return False
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Choose the correct branch before the workflow continues.
         if violation_detector is None:
+            # Trigger the side effect required for this stage.
             _set_startup_step('pipeline_components', 'pending', 'Initializing violation detector')
             logger.info("Initializing violation detector...")
             violation_detector = ViolationDetector(VIOLATION_RULES)
@@ -3080,10 +3676,13 @@ def initialize_pipeline_components():
             caption_config = {'LLAVA_CONFIG': LLAVA_CONFIG, 'GEMINI_CONFIG': GEMINI_CONFIG}
             caption_generator = CaptionGenerator(caption_config)
 
+        # Choose the correct branch before the workflow continues.
         if db_manager is None:
+            # Trigger the side effect required for this stage.
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase database manager')
             logger.info("Initializing Supabase database manager...")
             if ALLOW_OFFLINE_LOCAL_MODE and not _supabase_credentials_ready():
+                # Trigger the side effect required for this stage.
                 _log_supabase_offline(
                     "Offline Mode Allowed: Supabase DB credentials are missing/placeholder. "
                     "Deferring DB initialization until provisioning completes."
@@ -3091,6 +3690,7 @@ def initialize_pipeline_components():
                 db_manager = None
             else:
                 try:
+                    # Prepare db manager for the next step.
                     db_manager = _run_with_timeout(
                         create_db_manager_from_env,
                         STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS,
@@ -3098,6 +3698,7 @@ def initialize_pipeline_components():
                     )
                 except Exception as db_init_error:
                     if _can_run_local_offline():
+                        # Trigger the side effect required for this stage.
                         _log_supabase_offline(
                             f"Offline Mode Allowed: Skipping Supabase DB initialization error: {db_init_error}"
                         )
@@ -3106,20 +3707,26 @@ def initialize_pipeline_components():
                         raise
 
             # Fix any stuck reports from previous sessions
+            # Choose the correct branch before the workflow continues.
             if db_manager and hasattr(db_manager, 'fix_stuck_reports'):
                 _set_startup_step('pipeline_components', 'pending', 'Recovering stuck reports')
                 logger.info("Checking for stuck reports...")
                 try:
+                    # Prepare fixed for the next step.
                     fixed = db_manager.fix_stuck_reports()
                     if fixed > 0:
+                        # Trigger the side effect required for this stage.
                         logger.info(f" Fixed {fixed} stuck reports")
                 except Exception as sweep_error:
                     logger.warning(f"Stuck report recovery skipped during startup: {sweep_error}")
 
+        # Choose the correct branch before the workflow continues.
         if storage_manager is None:
+            # Trigger the side effect required for this stage.
             _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase storage manager')
             logger.info("Initializing Supabase storage manager...")
             if ALLOW_OFFLINE_LOCAL_MODE and not _supabase_credentials_ready():
+                # Trigger the side effect required for this stage.
                 _log_supabase_offline(
                     "Offline Mode Allowed: Supabase Storage credentials are missing/placeholder. "
                     "Deferring Storage initialization until provisioning completes."
@@ -3127,6 +3734,7 @@ def initialize_pipeline_components():
                 storage_manager = None
             else:
                 try:
+                    # Prepare storage manager for the next step.
                     storage_manager = _run_with_timeout(
                         create_storage_manager_from_env,
                         STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS,
@@ -3134,6 +3742,7 @@ def initialize_pipeline_components():
                     )
                 except Exception as storage_init_error:
                     if _can_run_local_offline():
+                        # Trigger the side effect required for this stage.
                         _log_supabase_offline(
                             f"Offline Mode Allowed: Skipping Supabase Storage initialization error: {storage_init_error}"
                         )
@@ -3141,9 +3750,12 @@ def initialize_pipeline_components():
                     else:
                         raise
 
+        # Choose the correct branch before the workflow continues.
         if report_generator is None:
+            # Prepare use supabase generator for the next step.
             use_supabase_generator = db_manager is not None and storage_manager is not None
             if use_supabase_generator:
+                # Trigger the side effect required for this stage.
                 _set_startup_step('pipeline_components', 'pending', 'Initializing Supabase report generator')
                 logger.info("Initializing Supabase report generator...")
             else:
@@ -3151,6 +3763,7 @@ def initialize_pipeline_components():
                 logger.info("Initializing local report generator fallback...")
 
             report_config = _build_report_generator_config()
+            # Choose the correct branch before the workflow continues.
             if use_supabase_generator:
                 report_generator = _run_with_timeout(
                     lambda: create_supabase_report_generator(report_config),
@@ -3158,7 +3771,9 @@ def initialize_pipeline_components():
                     'report-generator-init'
                 )
             else:
+                # Choose the correct branch before the workflow continues.
                 if not _can_run_local_offline():
+                    # Surface the failure with enough context for the caller.
                     raise RuntimeError('Supabase report generator is unavailable and local-offline mode is not ready')
 
                 report_generator = _run_with_timeout(
@@ -3180,19 +3795,24 @@ def initialize_pipeline_components():
             _set_startup_step('pipeline_components', 'pending', 'Initializing violation queue manager')
             logger.info("Initializing violation queue manager...")
             if not _ensure_violation_queue_runtime_ready(reason='startup_component_init'):
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError('Violation queue manager initialization failed')
+            # Trigger the side effect required for this stage.
             logger.info(f" Violation queue initialized (max_size=100)")
 
         # Start queue worker thread if not running
+        # Choose the correct branch before the workflow continues.
         if not ensure_queue_worker_running():
             _set_startup_step('pipeline_components', 'pending', 'Starting queue worker thread')
             logger.info("Starting violation queue worker thread...")
             if not start_queue_worker():
                 logger.error("Failed to start queue worker thread")
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError('Queue worker thread failed to start during component initialization')
 
         _set_startup_step('pipeline_components', 'ok', 'All pipeline components initialized')
         logger.info("[OK] All pipeline components initialized")
+        # Return the prepared result to the caller.
         return True
 
     except Exception as e:
@@ -3203,8 +3823,10 @@ def initialize_pipeline_components():
         raise
 
 
+# Section: run the is supabase report generator active workflow with clear inputs and outputs.
 def _is_supabase_report_generator_active() -> bool:
     """Return True when report generator is cloud-capable with db/storage managers."""
+    # Return the prepared result to the caller.
     return bool(
         report_generator is not None
         and hasattr(report_generator, 'storage_manager')
@@ -3212,11 +3834,14 @@ def _is_supabase_report_generator_active() -> bool:
     )
 
 
+# Section: run the attempt supabase runtime recovery workflow with clear inputs and outputs.
 def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = False) -> Dict[str, Any]:
     """Best-effort runtime recovery when backend started offline and network later returns."""
     global db_manager, storage_manager, report_generator, last_supabase_runtime_recovery_epoch
 
+    # Choose the correct branch before the workflow continues.
     if not FULL_PIPELINE_AVAILABLE:
+        # Return the prepared result to the caller.
         return {
             'success': False,
             'recovered': False,
@@ -3225,7 +3850,9 @@ def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = Fa
             'errors': []
         }
 
+    # Choose the correct branch before the workflow continues.
     if not force and _is_supabase_offline_backoff_active():
+        # Prepare snapshot for the next step.
         snapshot = _get_supabase_offline_backoff_snapshot()
         return {
             'success': False,
@@ -3238,10 +3865,13 @@ def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = Fa
             ],
         }
 
+    # Prepare now epoch for the next step.
     now_epoch = time.time()
     with supabase_runtime_recovery_lock:
+        # Prepare elapsed for the next step.
         elapsed = now_epoch - float(last_supabase_runtime_recovery_epoch or 0.0)
         if not force and elapsed < SUPABASE_RUNTIME_RECOVERY_MIN_INTERVAL_SECONDS:
+            # Return the prepared result to the caller.
             return {
                 'success': bool(db_manager is not None and storage_manager is not None),
                 'recovered': False,
@@ -3249,56 +3879,72 @@ def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = Fa
                 'parts': [],
                 'errors': []
             }
+        # Prepare last supabase runtime recovery epoch for the next step.
         last_supabase_runtime_recovery_epoch = now_epoch
 
+    # Prepare recovered parts for the next step.
     recovered_parts = []
     errors = []
 
     if db_manager is None:
         try:
+            # Prepare db candidate for the next step.
             db_candidate = _run_with_timeout(
                 create_db_manager_from_env,
                 STARTUP_DB_MANAGER_INIT_TIMEOUT_SECONDS,
                 'db-manager-recover'
             )
             if db_candidate is not None:
+                # Prepare db manager for the next step.
                 db_manager = db_candidate
                 recovered_parts.append('db_manager')
         except Exception as db_err:
+            # Trigger the side effect required for this stage.
             errors.append(f"db_manager: {db_err}")
 
+    # Choose the correct branch before the workflow continues.
     if storage_manager is None:
+        # Protect this step so expected failures can fall back cleanly.
         try:
             storage_candidate = _run_with_timeout(
                 create_storage_manager_from_env,
                 STARTUP_STORAGE_MANAGER_INIT_TIMEOUT_SECONDS,
                 'storage-manager-recover'
             )
+            # Choose the correct branch before the workflow continues.
             if storage_candidate is not None:
+                # Prepare storage manager for the next step.
                 storage_manager = storage_candidate
                 recovered_parts.append('storage_manager')
         except Exception as storage_err:
             errors.append(f"storage_manager: {storage_err}")
 
+    # Choose the correct branch before the workflow continues.
     if (
         db_manager is not None
         and storage_manager is not None
         and report_generator is not None
         and not _is_supabase_report_generator_active()
     ):
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare upgraded generator for the next step.
             upgraded_generator = _run_with_timeout(
                 lambda: create_supabase_report_generator(_build_report_generator_config()),
                 STARTUP_REPORT_GENERATOR_INIT_TIMEOUT_SECONDS,
                 'report-generator-recover'
             )
             if upgraded_generator is not None:
+                # Prepare report generator for the next step.
                 report_generator = upgraded_generator
                 recovered_parts.append('report_generator_supabase')
         except Exception as report_err:
+            # Trigger the side effect required for this stage.
             errors.append(f"report_generator: {report_err}")
 
+    # Choose the correct branch before the workflow continues.
     if recovered_parts:
+        # Trigger the side effect required for this stage.
         logger.info(
             f"Supabase runtime recovery ({reason}) recovered: {', '.join(recovered_parts)}"
         )
@@ -3307,9 +3953,12 @@ def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = Fa
             f"Supabase runtime recovery ({reason}) warnings: {' | '.join(errors)}"
         )
 
+    # Choose the correct branch before the workflow continues.
     if errors and not (db_manager is not None and storage_manager is not None):
+        # Prepare connectivity errors for the next step.
         connectivity_errors = [entry for entry in errors if _is_supabase_connectivity_failure(entry)]
         if connectivity_errors:
+            # Trigger the side effect required for this stage.
             _activate_local_offline_runtime(
                 f'supabase_runtime_recovery:{reason}',
                 ' | '.join(connectivity_errors)
@@ -3318,6 +3967,7 @@ def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = Fa
     if db_manager is not None and storage_manager is not None:
         _clear_supabase_offline_backoff('runtime_recovery_success')
 
+    # Return the prepared result to the caller.
     return {
         'success': bool(db_manager is not None and storage_manager is not None),
         'recovered': bool(recovered_parts),
@@ -3327,34 +3977,45 @@ def _attempt_supabase_runtime_recovery(reason: str = 'runtime', force: bool = Fa
     }
 
 
+# Section: run the mark queue worker heartbeat workflow with clear inputs and outputs.
 def _mark_queue_worker_heartbeat(now_epoch: Optional[float] = None):
     """Update worker heartbeat timestamp for watchdog recovery decisions."""
     global queue_worker_last_heartbeat_epoch
 
+    # Open the managed resource only for the block that needs it.
     with queue_worker_state_lock:
+        # Prepare queue worker last heartbeat epoch for the next step.
         queue_worker_last_heartbeat_epoch = float(now_epoch if now_epoch is not None else time.time())
 
 
+# Section: run the queue worker heartbeat age seconds workflow with clear inputs and outputs.
 def _queue_worker_heartbeat_age_seconds(now_epoch: Optional[float] = None) -> Optional[float]:
     """Return queue worker heartbeat age in seconds, or None when heartbeat is unknown."""
     with queue_worker_state_lock:
         last_heartbeat = float(queue_worker_last_heartbeat_epoch or 0.0)
 
+    # Choose the correct branch before the workflow continues.
     if last_heartbeat <= 0:
+        # Return the prepared result to the caller.
         return None
 
     now_value = float(now_epoch if now_epoch is not None else time.time())
     return max(0.0, now_value - last_heartbeat)
 
 
+# Section: run the start queue worker maintenance task workflow with clear inputs and outputs.
 def _start_queue_worker_maintenance_task(name: str, task_fn) -> bool:
     """Run slow queue maintenance away from the user-facing dequeue path."""
+    # Prepare task name for the next step.
     task_name = str(name or 'maintenance').strip() or 'maintenance'
     with queue_worker_maintenance_lock:
+        # Choose the correct branch before the workflow continues.
         if task_name in queue_worker_maintenance_running:
+            # Return the prepared result to the caller.
             return False
         queue_worker_maintenance_running.add(task_name)
 
+    # Section: run the runner workflow with clear inputs and outputs.
     def _runner():
         try:
             task_fn()
@@ -3363,9 +4024,12 @@ def _start_queue_worker_maintenance_task(name: str, task_fn) -> bool:
                 f"Queue worker maintenance task {task_name} failed: {maintenance_error}"
             )
         finally:
+            # Open the managed resource only for the block that needs it.
             with queue_worker_maintenance_lock:
+                # Trigger the side effect required for this stage.
                 queue_worker_maintenance_running.discard(task_name)
 
+    # Trigger the side effect required for this stage.
     Thread(
         target=_runner,
         name=f"QueueMaintenance-{task_name}",
@@ -3374,8 +4038,10 @@ def _start_queue_worker_maintenance_task(name: str, task_fn) -> bool:
     return True
 
 
+# Section: run the is queue watchdog alive workflow with clear inputs and outputs.
 def _is_queue_watchdog_alive() -> bool:
     """Return True only when watchdog flag is set and watchdog thread is alive."""
+    # Return the prepared result to the caller.
     return bool(
         queue_worker_watchdog_running
         and queue_worker_watchdog_thread is not None
@@ -3383,18 +4049,23 @@ def _is_queue_watchdog_alive() -> bool:
     )
 
 
+# Section: run the run queue stuck report sweep workflow with clear inputs and outputs.
 def _run_queue_stuck_report_sweep(reason: str = 'watchdog') -> int:
     """Best-effort periodic fix for stale pending/generating report statuses."""
+    # Choose the correct branch before the workflow continues.
     if db_manager is None or not hasattr(db_manager, 'fix_stuck_reports'):
+        # Return the prepared result to the caller.
         return 0
 
     try:
         fixed_count = db_manager.fix_stuck_reports()
         normalized_count = max(0, int(fixed_count or 0))
         if normalized_count > 0:
+            # Trigger the side effect required for this stage.
             logger.info(
                 f"Queue auto-recovery sweep ({reason}) fixed {normalized_count} stuck report(s)"
             )
+        # Return the prepared result to the caller.
         return normalized_count
     except Exception as sweep_error:
         if _is_supabase_connectivity_failure(sweep_error):
@@ -3406,6 +4077,7 @@ def _run_queue_stuck_report_sweep(reason: str = 'watchdog') -> int:
         return 0
 
 
+# Section: run the run local pending recovery sweep workflow with clear inputs and outputs.
 def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any]:
     """Best-effort local pending recovery after interrupted runtime sessions."""
     summary: Dict[str, Any] = {
@@ -3421,7 +4093,9 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
         'skipped_queue_unavailable': 0,
     }
 
+    # Choose the correct branch before the workflow continues.
     if not LOCAL_PENDING_RECOVERY_ENABLED:
+        # Return the prepared result to the caller.
         return summary
 
     if not _ensure_violation_queue_runtime_ready(reason=f'local_pending_recovery:{reason}'):
@@ -3432,7 +4106,9 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
         summary['skipped_queue_unavailable'] = 1
         return summary
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare queue size now for the next step.
         queue_size_now = int(violation_queue.get_queue_size() or 0)
     except Exception:
         queue_size_now = 0
@@ -3441,7 +4117,9 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
         summary['skipped_queue_busy'] = 1
         return summary
 
+    # Choose the correct branch before the workflow continues.
     if not VIOLATIONS_DIR.exists():
+        # Return the prepared result to the caller.
         return summary
 
     try:
@@ -3451,9 +4129,11 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             key=lambda path: path.stat().st_mtime
         )[:scan_limit]
     except Exception as scan_error:
+        # Trigger the side effect required for this stage.
         logger.debug(f"Local pending recovery scan skipped ({reason}): {scan_error}")
         return summary
 
+    # Prepare now epoch for the next step.
     now_epoch = time.time()
     tz_info = get_timezone_info()
 
@@ -3462,6 +4142,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             break
 
         summary['scanned'] += 1
+        # Prepare report id for the next step.
         report_id = str(violation_dir.name or '').strip()
         if not report_id:
             continue
@@ -3471,6 +4152,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             continue
 
         # Respect intentional skip markers and avoid requeue loops.
+        # Prepare skip markers for the next step.
         skip_markers = (
             violation_dir / 'SKIPPED_NO_RETRY.txt',
             violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt',
@@ -3480,6 +4162,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
         if any(marker.exists() for marker in skip_markers):
             continue
 
+        # Prepare original path for the next step.
         original_path = violation_dir / 'original.jpg'
         if not original_path.exists():
             summary['skipped_missing_original'] += 1
@@ -3490,8 +4173,10 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
         event = None
         if db_manager is not None:
             try:
+                # Prepare event for the next step.
                 event = db_manager.get_detection_event(report_id)
                 if isinstance(event, dict):
+                    # Prepare status for the next step.
                     status = str(event.get('status') or '').strip().lower()
                     if status in {
                         'completed', 'synced',
@@ -3503,7 +4188,9 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             except Exception as e:
                 logger.debug(f"Could not check DB status for recovery candidate {report_id}: {e}")
 
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare age seconds for the next step.
             age_seconds = max(0.0, now_epoch - float(violation_dir.stat().st_mtime))
         except Exception:
             age_seconds = float(LOCAL_PENDING_RECOVERY_STALE_SECONDS)
@@ -3512,6 +4199,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             summary['skipped_recent'] += 1
             continue
 
+        # Choose the correct branch before the workflow continues.
         if _is_report_queued_or_processing(report_id):
             summary['skipped_already_queued'] += 1
             continue
@@ -3522,22 +4210,28 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
         violation = None
         if db_manager is not None:
             try:
+                # Prepare violation for the next step.
                 violation = db_manager.get_violation(report_id)
             except Exception:
                 violation = None
 
+        # Prepare detection payload for the next step.
         detection_payload = violation.get('detection_data') if isinstance(violation, dict) else None
         if isinstance(detection_payload, str):
             try:
                 detection_payload = json.loads(detection_payload)
             except Exception:
+                # Prepare detection payload for the next step.
                 detection_payload = None
 
         local_metadata: Dict[str, Any] = {}
         metadata_path = violation_dir / 'metadata.json'
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Choose the correct branch before the workflow continues.
             if metadata_path.exists():
                 with open(metadata_path, 'r', encoding='utf-8') as metadata_file:
+                    # Prepare parsed metadata for the next step.
                     parsed_metadata = json.load(metadata_file) or {}
                 if isinstance(parsed_metadata, dict):
                     local_metadata = parsed_metadata
@@ -3545,26 +4239,34 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             logger.debug(f"Could not read local recovery metadata for {report_id}: {metadata_error}")
 
         detections: List[Dict[str, Any]] = []
+        # Choose the correct branch before the workflow continues.
         if isinstance(detection_payload, dict):
+            # Prepare raw detections for the next step.
             raw_detections = detection_payload.get('detections')
             if isinstance(raw_detections, list):
+                # Prepare detections for the next step.
                 detections = [item for item in raw_detections if isinstance(item, dict)]
         if not detections:
             metadata_detection_payload = local_metadata.get('detection_data')
             if isinstance(metadata_detection_payload, str):
                 try:
+                    # Prepare metadata detection payload for the next step.
                     metadata_detection_payload = json.loads(metadata_detection_payload)
                 except Exception:
                     metadata_detection_payload = None
+            # Choose the correct branch before the workflow continues.
             if isinstance(metadata_detection_payload, dict):
+                # Prepare raw detections for the next step.
                 raw_detections = metadata_detection_payload.get('detections')
                 if isinstance(raw_detections, list):
                     detections = [item for item in raw_detections if isinstance(item, dict)]
             if not detections and isinstance(local_metadata.get('detections'), list):
                 detections = [item for item in local_metadata.get('detections') if isinstance(item, dict)]
 
+        # Prepare fallback count for the next step.
         fallback_count = None
         if isinstance(event, dict):
+            # Prepare fallback count for the next step.
             fallback_count = event.get('violation_count')
         local_fallback_count = local_metadata.get('violation_count')
         try:
@@ -3573,13 +4275,16 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             fallback_count_value = 0
         for count_candidate in (local_fallback_count, local_metadata.get('detection_count')):
             try:
+                # Prepare count value for the next step.
                 count_value = int(count_candidate or 0)
             except Exception:
                 count_value = 0
+            # Choose the correct branch before the workflow continues.
             if count_value > fallback_count_value:
                 fallback_count = count_value
                 fallback_count_value = count_value
 
+        # Prepare violation summary candidates for the next step.
         violation_summary_candidates = [
             violation.get('violation_summary') if isinstance(violation, dict) else None,
             event.get('violation_summary') if isinstance(event, dict) else None,
@@ -3589,8 +4294,10 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             (str(candidate).strip() for candidate in violation_summary_candidates if str(candidate or '').strip()),
             None,
         )
+        # Prepare metadata missing ppe for the next step.
         metadata_missing_ppe = local_metadata.get('missing_ppe')
         if isinstance(metadata_missing_ppe, str):
+            # Prepare metadata missing ppe for the next step.
             metadata_missing_ppe = [metadata_missing_ppe]
         if not isinstance(metadata_missing_ppe, list):
             metadata_missing_ppe = []
@@ -3603,15 +4310,18 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
                 _is_violation_label(raw_missing_item)
                 or raw_missing_item.lower().startswith(('missing ', 'without ', 'no ', 'no-'))
             ):
+                # Trigger the side effect required for this stage.
                 metadata_missing_ppe_labels.append(raw_missing_item)
             else:
                 metadata_missing_ppe_labels.append(f"Missing {raw_missing_item}")
+        # Prepare metadata violation types for the next step.
         metadata_violation_types = _normalize_violation_type_list(
             local_metadata.get('violation_types'),
             local_metadata.get('ppe_tags'),
             metadata_missing_ppe_labels,
         )
         if metadata_violation_types:
+            # Prepare violation types for the next step.
             violation_types = metadata_violation_types
             resolved_violation_count = max(len(metadata_violation_types), fallback_count_value, 1)
         else:
@@ -3622,16 +4332,21 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
                 fallback_count=fallback_count,
             )
 
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare timestamp iso for the next step.
             timestamp_iso = _parse_report_id_timestamp(report_id).isoformat()
         except Exception:
             try:
+                # Prepare timestamp iso for the next step.
                 timestamp_iso = datetime.fromtimestamp(violation_dir.stat().st_mtime, tz=tz_info).isoformat()
             except Exception:
                 timestamp_iso = datetime.now(tz_info).isoformat()
 
         annotated_path = violation_dir / 'annotated.jpg'
+        # Choose the correct branch before the workflow continues.
         if not annotated_path.exists():
+            # Prepare annotated path for the next step.
             annotated_path = original_path
 
         if not ensure_queue_worker_running():
@@ -3656,20 +4371,25 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
                 'report_id': report_id,
                 **local_metadata,
             }
+            # Choose the correct branch before the workflow continues.
             if isinstance(event, dict):
                 _guard_record.setdefault('device_id', event.get('device_id'))
             if isinstance(violation, dict):
                 _guard_record.setdefault('device_id', violation.get('device_id'))
                 _guard_dd = violation.get('detection_data') or {}
                 if isinstance(_guard_dd, str):
+                    # Protect this step so expected failures can fall back cleanly.
                     try:
+                        # Prepare guard dd for the next step.
                         _guard_dd = json.loads(_guard_dd)
                     except Exception:
                         _guard_dd = {}
+                # Choose the correct branch before the workflow continues.
                 if isinstance(_guard_dd, dict):
                     _guard_record.setdefault('source_scope', _guard_dd.get('source_scope'))
                     _guard_record.setdefault('origin', _guard_dd.get('origin'))
                     _guard_record.setdefault('sync_source', _guard_dd.get('sync_source'))
+            # Prepare local recovery markers for the next step.
             _local_recovery_markers = {
                 'local', 'local_pipeline', 'local_pending_recovery',
                 'offline_local', 'offline_local_cache', 'browser_local_draft',
@@ -3679,6 +4399,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             }
             _guard_scope = str(_guard_record.get('source_scope') or '').strip().lower()
             _guard_device = str(_guard_record.get('device_id') or '').strip().lower()
+            # Prepare guard origin for the next step.
             _guard_origin = str(_guard_record.get('origin') or _guard_record.get('sync_source') or '').strip().lower()
             _has_local_report_id_prefix_guard = bool(
                 re.match(r'^(local|offline|browser_local|local-cache|offline-cache)[_-]', report_id.lower())
@@ -3701,8 +4422,10 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
                     and _guard_origin not in {'cloud', 'cloud_live', 'live_capture', 'cloud_pending_recovery'}
                 )
             )
+            # Choose the correct branch before the workflow continues.
             if not _is_local_origin_for_recovery:
                 summary['eligible'] -= 1
+                # Trigger the side effect required for this stage.
                 logger.debug(
                     f"Local pending recovery: skipping {report_id} — not a local-origin report "
                     f"(scope={_guard_scope!r}, device={_guard_device!r}, origin={_guard_origin!r}). "
@@ -3710,6 +4433,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
                 )
                 continue
             recovery_device_id = f"local_recovery_{report_id}_{time.time_ns()}"
+            # Prepare recovery source scope for the next step.
             recovery_source_scope = 'local'
             recovery_sync_source = 'local_pending_recovery'
         else:
@@ -3717,6 +4441,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             recovery_source_scope = 'cloud'
             recovery_sync_source = 'cloud_pending_recovery'
 
+        # Prepare queue payload for the next step.
         queue_payload = {
             'report_id': report_id,
             'timestamp': timestamp_iso,
@@ -3731,6 +4456,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             'source': recovery_sync_source,
             'allow_placeholder_report': True,
         }
+        # Prepare resolved severity for the next step.
         resolved_severity = _classify_violation_severity(
             violation_types=violation_types,
             detections=detections,
@@ -3746,6 +4472,7 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             expedite=False,
         )
 
+        # Choose the correct branch before the workflow continues.
         if not enqueued:
             summary['skipped_enqueue_failed'] += 1
             continue
@@ -3756,8 +4483,11 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
             f"(report_id={report_id}, age_seconds={int(age_seconds)}, reason={reason})"
         )
 
+        # Choose the correct branch before the workflow continues.
         if db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Trigger the side effect required for this stage.
                 db_manager.update_detection_status(
                     report_id,
                     'pending',
@@ -3768,9 +4498,11 @@ def _run_local_pending_recovery_sweep(reason: str = 'watchdog') -> Dict[str, Any
                     f"Could not update detection status during local recovery for {report_id}: {status_error}"
                 )
 
+    # Return the prepared result to the caller.
     return summary
 
 
+# Section: run the validate recovery image workflow with clear inputs and outputs.
 def _validate_recovery_image(image_path: Path) -> Tuple[bool, str]:
     """Validate an image downloaded for cloud-pending recovery.
 
@@ -3783,8 +4515,11 @@ def _validate_recovery_image(image_path: Path) -> Tuple[bool, str]:
     scenes (night-time CCTV, low-light warehouse) are NOT rejected. Only
     images that are essentially uniform-zero get filtered.
     """
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Choose the correct branch before the workflow continues.
         if not image_path or not image_path.exists():
+            # Return the prepared result to the caller.
             return False, 'image_missing'
         size_bytes = image_path.stat().st_size
         if size_bytes < 512:
@@ -3793,7 +4528,9 @@ def _validate_recovery_image(image_path: Path) -> Tuple[bool, str]:
         if img is None or img.size == 0:
             return False, 'image_decode_failed'
         # mean intensity over all channels; std dev as spatial variance proxy.
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare mean intensity for the next step.
             mean_intensity = float(img.mean())
             std_intensity = float(img.std())
         except Exception:
@@ -3804,6 +4541,7 @@ def _validate_recovery_image(image_path: Path) -> Tuple[bool, str]:
             return False, (
                 f'image_appears_black (mean={mean_intensity:.2f}, std={std_intensity:.2f})'
             )
+        # Return the prepared result to the caller.
         return True, 'ok'
     except Exception as validate_err:
         # On unexpected validator failures, accept the image rather than
@@ -3812,6 +4550,7 @@ def _validate_recovery_image(image_path: Path) -> Tuple[bool, str]:
         return True, 'validator_error'
 
 
+# Section: run the run cloud pending recovery sweep workflow with clear inputs and outputs.
 def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str, Any]:
     """
     Cloud-mode counterpart to _run_local_pending_recovery_sweep.
@@ -3834,7 +4573,9 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
         'skipped_queue_unavailable': 0,
     }
 
+    # Choose the correct branch before the workflow continues.
     if not CLOUD_PENDING_RECOVERY_ENABLED:
+        # Return the prepared result to the caller.
         return summary
 
     if db_manager is None or not hasattr(db_manager, 'get_cloud_pending_recovery_candidates'):
@@ -3843,7 +4584,9 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
     if storage_manager is None:
         return summary
 
+    # Choose the correct branch before the workflow continues.
     if not _ensure_violation_queue_runtime_ready(reason=f'cloud_pending_recovery:{reason}'):
+        # Prepare values needed by the next step.
         summary['skipped_queue_unavailable'] = 1
         return summary
 
@@ -3854,8 +4597,10 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
     try:
         queue_size_now = int(violation_queue.get_queue_size() or 0)
     except Exception:
+        # Prepare queue size now for the next step.
         queue_size_now = 0
 
+    # Choose the correct branch before the workflow continues.
     if queue_size_now >= CLOUD_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD:
         summary['skipped_queue_busy'] = 1
         return summary
@@ -3866,9 +4611,11 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
             limit=CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP,
         )
     except Exception as query_err:
+        # Trigger the side effect required for this stage.
         logger.debug(f"Cloud pending recovery candidate query failed ({reason}): {query_err}")
         return summary
 
+    # Prepare tz info for the next step.
     tz_info = get_timezone_info()
     now_epoch = time.time()
 
@@ -3876,6 +4623,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
         if summary['enqueued'] >= CLOUD_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP:
             break
 
+        # Prepare report id for the next step.
         report_id = str(candidate.get('report_id') or '').strip()
         if not report_id:
             continue
@@ -3889,14 +4637,17 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
         raw_dd = candidate.get('detection_data') or {}
         if isinstance(raw_dd, str):
             try:
+                # Prepare raw dd for the next step.
                 raw_dd = json.loads(raw_dd)
             except Exception:
                 raw_dd = {}
         adoptable_local_handoff = False
         handoff_source_scope = 'cloud'
         handoff_sync_source = 'cloud_pending_recovery'
+        # Choose the correct branch before the workflow continues.
         if isinstance(raw_dd, dict):
             _cand_scope = str(raw_dd.get('source_scope') or '').strip().lower()
+            # Prepare cand sync for the next step.
             _cand_sync = str(raw_dd.get('sync_source') or '').strip().lower()
             _cloud_adoptable_local_sources = {
                 'sync_local_cache_partial',
@@ -3905,9 +4656,11 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
             }
             adoptable_local_handoff = _cand_sync in _cloud_adoptable_local_sources
             if adoptable_local_handoff:
+                # Prepare handoff meta for the next step.
                 handoff_meta = raw_dd.get('cloud_handoff') if isinstance(raw_dd.get('cloud_handoff'), dict) else {}
                 adopt_after = raw_dd.get('cloud_adopt_after_epoch')
                 if adopt_after is None:
+                    # Prepare adopt after for the next step.
                     adopt_after = handoff_meta.get('adopt_after_epoch')
                 try:
                     adopt_after_epoch = float(adopt_after or 0)
@@ -3920,8 +4673,10 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
                         f"until adopt_after_epoch={adopt_after_epoch}"
                     )
                     continue
+                # Prepare handoff source scope for the next step.
                 handoff_source_scope = 'cloud'
                 handoff_sync_source = 'cloud_pending_local_handoff'
+            # Prepare local sync sources for the next step.
             _local_sync_sources = {
                 'sync_local_cache', 'local_cache', 'local_cache_sync',
                 'local_pending_recovery', 'local', 'auto_reconnect',
@@ -3934,6 +4689,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
                 )
                 continue
 
+        # Choose the correct branch before the workflow continues.
         if _is_report_queued_or_processing(report_id):
             summary['skipped_already_queued'] += 1
             continue
@@ -3952,6 +4708,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
             try:
                 blob = storage_manager.download_file_content(original_image_key)
                 if not blob:
+                    # Surface the failure with enough context for the caller.
                     raise ValueError('Empty download')
                 if isinstance(blob, str):
                     blob = blob.encode('utf-8')
@@ -3964,11 +4721,14 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
                 continue
 
         # Optionally download annotated image too.
+        # Choose the correct branch before the workflow continues.
         if annotated_image_key and not annotated_path.exists():
             try:
                 blob = storage_manager.download_file_content(annotated_image_key)
                 if blob:
+                    # Choose the correct branch before the workflow continues.
                     if isinstance(blob, str):
+                        # Prepare blob for the next step.
                         blob = blob.encode('utf-8')
                     annotated_path.write_bytes(blob)
             except Exception:
@@ -3993,6 +4753,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
                     original_path.unlink()
             except Exception:
                 pass
+            # Protect this step so expected failures can fall back cleanly.
             try:
                 if db_manager and hasattr(db_manager, 'update_detection_status'):
                     db_manager.update_detection_status(
@@ -4001,22 +4762,26 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
                         f'Cloud pending recovery aborted: {image_reject_reason}',
                     )
             except Exception as status_err:
+                # Trigger the side effect required for this stage.
                 logger.debug(
                     f"Cloud pending recovery: could not mark {report_id} failed: {status_err}"
                 )
             summary['skipped_download_failed'] += 1
             continue
 
+        # Prepare effective annotated for the next step.
         effective_annotated = annotated_path if annotated_path.exists() else original_path
 
         # Reconstruct detection payload from stored data.
         raw_detection_data = candidate.get('detection_data') or {}
         if isinstance(raw_detection_data, str):
             try:
+                # Prepare raw detection data for the next step.
                 raw_detection_data = json.loads(raw_detection_data)
             except Exception:
                 raw_detection_data = {}
         detections: List[Dict[str, Any]] = []
+        # Choose the correct branch before the workflow continues.
         if isinstance(raw_detection_data, dict):
             raw_det = raw_detection_data.get('detections')
             if isinstance(raw_det, list):
@@ -4029,15 +4794,19 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
             fallback_count=None,
         )
 
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare report ts for the next step.
             report_ts = candidate.get('timestamp')
             if report_ts:
+                # Prepare timestamp iso for the next step.
                 timestamp_iso = report_ts.isoformat() if hasattr(report_ts, 'isoformat') else str(report_ts)
             else:
                 timestamp_iso = datetime.fromtimestamp(now_epoch, tz=tz_info).isoformat()
         except Exception:
             timestamp_iso = datetime.now(tz_info).isoformat()
 
+        # Prepare queue payload for the next step.
         queue_payload = {
             'report_id': report_id,
             'timestamp': timestamp_iso,
@@ -4052,6 +4821,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
             'source': handoff_sync_source,
             'allow_placeholder_report': True,
         }
+        # Prepare resolved severity for the next step.
         resolved_severity = _classify_violation_severity(
             violation_types=violation_types,
             detections=detections,
@@ -4061,6 +4831,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
 
         recovery_device_id = f"cloud_recovery_{report_id}_{time.time_ns()}"
 
+        # Choose the correct branch before the workflow continues.
         if not ensure_queue_worker_running():
             summary['skipped_queue_unavailable'] += 1
             break
@@ -4073,6 +4844,7 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
             expedite=False,
         )
 
+        # Choose the correct branch before the workflow continues.
         if not enqueued:
             summary['skipped_enqueue_failed'] += 1
             continue
@@ -4083,8 +4855,11 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
             f"(original_image_key={original_image_key})"
         )
 
+        # Choose the correct branch before the workflow continues.
         if db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Trigger the side effect required for this stage.
                 db_manager.update_detection_status(
                     report_id,
                     'pending',
@@ -4095,18 +4870,23 @@ def _run_cloud_pending_recovery_sweep(reason: str = 'queue_worker') -> Dict[str,
                     f"Could not update detection status during cloud recovery for {report_id}: {status_err}"
                 )
 
+    # Return the prepared result to the caller.
     return summary
 
 
+# Section: run the start queue worker watchdog workflow with clear inputs and outputs.
 def start_queue_worker_watchdog() -> bool:
     """Start watchdog thread that keeps queue worker healthy without manual intervention."""
     global queue_worker_watchdog_thread, queue_worker_watchdog_running
 
     if not QUEUE_WORKER_WATCHDOG_ENABLED:
+        # Return the prepared result to the caller.
         return False
 
+    # Open the managed resource only for the block that needs it.
     with queue_worker_watchdog_lock:
         if queue_worker_watchdog_thread is not None and queue_worker_watchdog_thread.is_alive():
+            # Prepare queue worker watchdog running for the next step.
             queue_worker_watchdog_running = True
             return True
 
@@ -4116,9 +4896,11 @@ def start_queue_worker_watchdog() -> bool:
             name='ViolationQueueWatchdog',
             daemon=True
         )
+        # Trigger the side effect required for this stage.
         queue_worker_watchdog_thread.start()
 
         if not queue_worker_watchdog_thread.is_alive():
+            # Prepare queue worker watchdog running for the next step.
             queue_worker_watchdog_running = False
             logger.error("Queue worker watchdog thread failed to become alive after start request")
             return False
@@ -4126,15 +4908,19 @@ def start_queue_worker_watchdog() -> bool:
         logger.info(
             f" Queue worker watchdog started (Thread ID: {queue_worker_watchdog_thread.ident})"
         )
+        # Return the prepared result to the caller.
         return True
 
 
+# Section: run the stop queue worker watchdog workflow with clear inputs and outputs.
 def stop_queue_worker_watchdog():
     """Stop queue worker watchdog thread."""
     global queue_worker_watchdog_running
 
+    # Prepare thread to join for the next step.
     thread_to_join = None
     with queue_worker_watchdog_lock:
+        # Prepare queue worker watchdog running for the next step.
         queue_worker_watchdog_running = False
         thread_to_join = queue_worker_watchdog_thread
 
@@ -4144,21 +4930,27 @@ def stop_queue_worker_watchdog():
     logger.info("Queue worker watchdog stop requested")
 
 
+# Section: run the queue worker watchdog loop workflow with clear inputs and outputs.
 def queue_worker_watchdog_loop():
     """Monitor queue worker health and auto-recover stale worker/report states."""
     global queue_worker_watchdog_running, last_queue_worker_forced_restart_epoch
 
+    # Prepare last stuck report sweep epoch for the next step.
     last_stuck_report_sweep_epoch = 0.0
     sleep_seconds = max(3, int(QUEUE_WORKER_WATCHDOG_INTERVAL_SECONDS))
     logger.info("Queue worker watchdog loop started")
 
     while queue_worker_watchdog_running:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Choose the correct branch before the workflow continues.
             if violation_queue is not None:
+                # Prepare now epoch for the next step.
                 now_epoch = time.time()
                 queue_size = max(0, int(violation_queue.get_queue_size() or 0))
 
                 if not _is_queue_worker_alive():
+                    # Trigger the side effect required for this stage.
                     logger.warning(
                         "Queue worker watchdog detected inactive worker thread; attempting restart"
                     )
@@ -4169,6 +4961,7 @@ def queue_worker_watchdog_loop():
                         heartbeat_age is not None
                         and heartbeat_age >= QUEUE_WORKER_HEARTBEAT_STALE_SECONDS
                     ):
+                        # Prepare elapsed since forced restart for the next step.
                         elapsed_since_forced_restart = (
                             now_epoch - float(last_queue_worker_forced_restart_epoch or 0.0)
                         )
@@ -4176,6 +4969,7 @@ def queue_worker_watchdog_loop():
                             elapsed_since_forced_restart
                             >= QUEUE_WORKER_FORCED_RESTART_MIN_INTERVAL_SECONDS
                         ):
+                            # Prepare last queue worker forced restart epoch for the next step.
                             last_queue_worker_forced_restart_epoch = now_epoch
                             logger.warning(
                                 "Queue worker heartbeat is stale "
@@ -4184,34 +4978,44 @@ def queue_worker_watchdog_loop():
                             )
                             start_queue_worker(force_restart=True)
 
+                # Choose the correct branch before the workflow continues.
                 if (
                     QUEUE_STUCK_REPORT_SWEEP_ENABLED
                     and now_epoch - last_stuck_report_sweep_epoch
                     >= QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS
                 ):
+                    # Prepare last stuck report sweep epoch for the next step.
                     last_stuck_report_sweep_epoch = now_epoch
                     _run_queue_stuck_report_sweep(reason='watchdog')
         except Exception as watchdog_error:
+            # Trigger the side effect required for this stage.
             logger.debug(f"Queue worker watchdog iteration error: {watchdog_error}")
 
+        # Trigger the side effect required for this stage.
         time.sleep(sleep_seconds)
 
+    # Open the managed resource only for the block that needs it.
     with queue_worker_watchdog_lock:
         queue_worker_watchdog_running = False
     logger.info("Queue worker watchdog loop stopped")
 
 
+# Section: run the start queue worker workflow with clear inputs and outputs.
 def start_queue_worker(force_restart: bool = False) -> bool:
     """Start the background worker thread for processing queued violations."""
     global queue_worker_thread, queue_worker_running, queue_worker_last_heartbeat_epoch
 
+    # Prepare already running for the next step.
     already_running = False
     running_thread_id = None
 
     with queue_worker_state_lock:
+        # Choose the correct branch before the workflow continues.
         if queue_worker_thread is not None and queue_worker_thread.is_alive() and not force_restart:
+            # Prepare queue worker running for the next step.
             queue_worker_running = True
             if queue_worker_last_heartbeat_epoch <= 0:
+                # Prepare queue worker last heartbeat epoch for the next step.
                 queue_worker_last_heartbeat_epoch = time.time()
             already_running = True
             running_thread_id = queue_worker_thread.ident
@@ -4222,6 +5026,7 @@ def start_queue_worker(force_restart: bool = False) -> bool:
                     "spawning replacement worker"
                 )
 
+            # Prepare queue worker running for the next step.
             queue_worker_running = True
             queue_worker_thread = Thread(
                 target=queue_worker_loop,
@@ -4231,14 +5036,18 @@ def start_queue_worker(force_restart: bool = False) -> bool:
             queue_worker_thread.start()
 
             if not queue_worker_thread.is_alive():
+                # Prepare queue worker running for the next step.
                 queue_worker_running = False
                 logger.error("Queue worker thread failed to become alive after start request")
                 return False
 
+            # Prepare queue worker last heartbeat epoch for the next step.
             queue_worker_last_heartbeat_epoch = time.time()
             running_thread_id = queue_worker_thread.ident
 
+    # Choose the correct branch before the workflow continues.
     if already_running:
+        # Trigger the side effect required for this stage.
         logger.info(f"Queue worker already running (Thread ID: {running_thread_id})")
     else:
         logger.info(f" Queue worker thread started (Thread ID: {running_thread_id})")
@@ -4249,12 +5058,15 @@ def start_queue_worker(force_restart: bool = False) -> bool:
     return True
 
 
+# Section: run the stop queue worker workflow with clear inputs and outputs.
 def stop_queue_worker():
     """Stop the background queue worker thread."""
     global queue_worker_running, queue_worker_thread
 
+    # Prepare thread to join for the next step.
     thread_to_join = None
     with queue_worker_state_lock:
+        # Prepare queue worker running for the next step.
         queue_worker_running = False
         thread_to_join = queue_worker_thread
 
@@ -4263,19 +5075,24 @@ def stop_queue_worker():
     if thread_to_join is not None and thread_to_join.is_alive():
         thread_to_join.join(timeout=2.0)
 
+    # Open the managed resource only for the block that needs it.
     with queue_worker_state_lock:
+        # Choose the correct branch before the workflow continues.
         if queue_worker_thread is not None and not queue_worker_thread.is_alive():
+            # Prepare queue worker thread for the next step.
             queue_worker_thread = None
 
     logger.info("Queue worker stop requested")
 
 
+# Section: run the queue worker loop workflow with clear inputs and outputs.
 def queue_worker_loop():
     """
     Main loop for the queue worker thread.
     Processes violations from the queue one at a time.
     """
     global queue_worker_running
+    # Prepare last supabase recovery check epoch for the next step.
     last_supabase_recovery_check_epoch = 0.0
     last_stuck_report_sweep_epoch = 0.0
     last_local_pending_recovery_sweep_epoch = 0.0
@@ -4285,10 +5102,13 @@ def queue_worker_loop():
 
     _mark_queue_worker_heartbeat(last_supabase_auto_sync_epoch)
 
+    # Trigger the side effect required for this stage.
     logger.info("Queue worker loop started - waiting for violations...")
 
     while queue_worker_running:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare now epoch for the next step.
             now_epoch = time.time()
             _mark_queue_worker_heartbeat(now_epoch)
             queue_has_pending_work = bool(
@@ -4300,6 +5120,7 @@ def queue_worker_loop():
                 not queue_has_pending_work
                 and now_epoch - last_supabase_recovery_check_epoch >= SUPABASE_RUNTIME_RECOVERY_CHECK_INTERVAL_SECONDS
             ):
+                # Prepare last supabase recovery check epoch for the next step.
                 last_supabase_recovery_check_epoch = now_epoch
                 # Auto-reconnect local-cache sync is meant for reports captured
                 # while the runtime was forced offline that now need cloud
@@ -4313,15 +5134,21 @@ def queue_worker_loop():
                     and now_epoch - last_supabase_auto_sync_epoch >= SUPABASE_AUTO_SYNC_INTERVAL_SECONDS
                     and not worker_skip_local_cache_sync
                 )
+                # Choose the correct branch before the workflow continues.
                 if sync_due:
+                    # Prepare last supabase auto sync epoch for the next step.
                     last_supabase_auto_sync_epoch = now_epoch
 
+                # Section: run the runtime recovery and sync task workflow with clear inputs and outputs.
                 def _runtime_recovery_and_sync_task():
                     recovery = _attempt_supabase_runtime_recovery(reason='queue_worker')
                     if recovery.get('success') and sync_due:
+                        # Prepare queue size now for the next step.
                         queue_size_now = int(violation_queue.get_queue_size() if violation_queue is not None else 0)
                         if queue_size_now <= 0:
+                            # Protect this step so expected failures can fall back cleanly.
                             try:
+                                # Prepare sync summary for the next step.
                                 sync_summary = _sync_local_cache_candidates(
                                     max_items=SUPABASE_AUTO_SYNC_BATCH_SIZE,
                                     dry_run=False,
@@ -4331,45 +5158,54 @@ def queue_worker_loop():
                                 )
                                 enqueued_count = int(sync_summary.get('enqueued', 0) or 0)
                                 if enqueued_count > 0:
+                                    # Trigger the side effect required for this stage.
                                     logger.info(
                                         f"Auto reconnect sync queued {enqueued_count} local report(s) for Supabase reconciliation"
                                     )
+                                # Choose the correct branch before the workflow continues.
                                 elif not sync_summary.get('success'):
                                     logger.warning(
                                         "Auto reconnect local-cache sync did not complete: "
                                         f"{sync_summary.get('error') or 'unknown error'}"
                                     )
                                 elif sync_summary.get('errors') and int(sync_summary.get('candidates', 0) or 0) > 0:
+                                    # Trigger the side effect required for this stage.
                                     logger.warning(
                                         "Auto reconnect local-cache sync found candidate errors: "
                                         f"{sync_summary.get('errors')}"
                                     )
                             except Exception as sync_err:
+                                # Trigger the side effect required for this stage.
                                 logger.warning(f"Auto reconnect local-cache sync failed: {sync_err}")
 
+                # Trigger the side effect required for this stage.
                 _start_queue_worker_maintenance_task(
                     'supabase_runtime_recovery',
                     _runtime_recovery_and_sync_task
                 )
 
+            # Choose the correct branch before the workflow continues.
             if (
                 not queue_has_pending_work
                 and
                 QUEUE_STUCK_REPORT_SWEEP_ENABLED
                 and now_epoch - last_stuck_report_sweep_epoch >= QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS
             ):
+                # Prepare last stuck report sweep epoch for the next step.
                 last_stuck_report_sweep_epoch = now_epoch
                 _start_queue_worker_maintenance_task(
                     'stuck_report_sweep',
                     lambda: _run_queue_stuck_report_sweep(reason='queue_worker')
                 )
 
+            # Choose the correct branch before the workflow continues.
             if (
                 not queue_has_pending_work
                 and
                 LOCAL_PENDING_RECOVERY_ENABLED
                 and now_epoch - last_local_pending_recovery_sweep_epoch >= LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS
             ):
+                # Prepare last local pending recovery sweep epoch for the next step.
                 last_local_pending_recovery_sweep_epoch = now_epoch
                 # Only run local pending recovery in local routing mode.
                 # In cloud mode the live cloud worker handles all new reports;
@@ -4379,9 +5215,11 @@ def queue_worker_loop():
                 _queue_worker_routing = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
                 if _queue_worker_routing == 'local':
                     def _local_pending_recovery_task():
+                        # Prepare recovery summary for the next step.
                         recovery_summary = _run_local_pending_recovery_sweep(reason='queue_worker')
                         enqueued_count = int(recovery_summary.get('enqueued', 0) or 0)
                         if enqueued_count > 0:
+                            # Trigger the side effect required for this stage.
                             logger.info(
                                 f"Queue auto-recovery queued {enqueued_count} stale local pending report(s)"
                             )
@@ -4391,12 +5229,14 @@ def queue_worker_loop():
                         _local_pending_recovery_task
                     )
 
+            # Choose the correct branch before the workflow continues.
             if (
                 not queue_has_pending_work
                 and
                 CLOUD_PENDING_RECOVERY_ENABLED
                 and now_epoch - last_cloud_pending_recovery_sweep_epoch >= CLOUD_PENDING_RECOVERY_INTERVAL_SECONDS
             ):
+                # Prepare last cloud pending recovery sweep epoch for the next step.
                 last_cloud_pending_recovery_sweep_epoch = now_epoch
                 # Cloud pending recovery: in cloud mode, find reports whose
                 # original image is in Supabase storage but whose report.html
@@ -4406,9 +5246,11 @@ def queue_worker_loop():
                 _cloud_routing = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
                 if _cloud_routing != 'local':
                     def _cloud_pending_recovery_task():
+                        # Prepare cloud recovery summary for the next step.
                         cloud_recovery_summary = _run_cloud_pending_recovery_sweep(reason='queue_worker')
                         cloud_enqueued = int(cloud_recovery_summary.get('enqueued', 0) or 0)
                         if cloud_enqueued > 0:
+                            # Trigger the side effect required for this stage.
                             logger.info(
                                 f"Cloud pending recovery queued {cloud_enqueued} stale cloud report(s) for re-generation"
                             )
@@ -4418,7 +5260,9 @@ def queue_worker_loop():
                         _cloud_pending_recovery_task
                     )
 
+            # Choose the correct branch before the workflow continues.
             if violation_queue is None:
+                # Trigger the side effect required for this stage.
                 time.sleep(1)
                 continue
 
@@ -4431,9 +5275,11 @@ def queue_worker_loop():
                     current_step=f'{queue_size} report(s) in queue'
                 )
             else:
+                # Trigger the side effect required for this stage.
                 reset_report_progress()
 
             # Try to get next violation from queue (with timeout)
+            # Prepare queued violation for the next step.
             queued_violation = violation_queue.dequeue(timeout=2.0)
 
             if queued_violation is None:
@@ -4443,6 +5289,7 @@ def queue_worker_loop():
             logger.info(f" Dequeued violation {queued_violation.report_id} for processing")
 
             try:
+                # Trigger the side effect required for this stage.
                 _mark_queue_worker_heartbeat()
 
                 # Update progress: starting processing
@@ -4456,6 +5303,7 @@ def queue_worker_loop():
                 )
 
                 # Process the violation
+                # Trigger the side effect required for this stage.
                 process_queued_violation(queued_violation)
                 violation_queue.mark_processed(queued_violation)
                 logger.info(f" Completed processing {queued_violation.report_id}")
@@ -4467,6 +5315,7 @@ def queue_worker_loop():
                     status='completed',
                     current_step='Report generated successfully'
                 )
+                # Trigger the side effect required for this stage.
                 time.sleep(0.5)  # Brief pause to show completed status
 
             except Exception as e:
@@ -4476,6 +5325,7 @@ def queue_worker_loop():
                 logger.error(f" Error processing {queued_violation.report_id}: {e}")
                 logger.error(f"Full traceback:\n{error_details}")
 
+                # Trigger the side effect required for this stage.
                 update_report_progress(
                     status='error',
                     error_message=str(e)
@@ -4486,6 +5336,7 @@ def queue_worker_loop():
                     logger.error(f"Max retries exceeded for {queued_violation.report_id}")
                     # Update status to failed with detailed error
                     if db_manager:
+                        # Protect this step so expected failures can fall back cleanly.
                         try:
                             db_manager.update_detection_status(
                                 queued_violation.report_id,
@@ -4494,19 +5345,24 @@ def queue_worker_loop():
                             )
                         except Exception as e2:
                             logger.warning(f"Could not update status: {e2}")
+                # Trigger the side effect required for this stage.
                 _mark_queue_worker_heartbeat()
 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.error(f"Queue worker error: {e}")
             _mark_queue_worker_heartbeat()
             time.sleep(1)
 
+    # Open the managed resource only for the block that needs it.
     with queue_worker_state_lock:
+        # Prepare queue worker running for the next step.
         queue_worker_running = False
     _mark_queue_worker_heartbeat()
     logger.info("Queue worker loop stopped")
 
 
+# Section: run the enqueue violation workflow with clear inputs and outputs.
 def enqueue_violation(
     frame: np.ndarray,
     detections: List[Dict],
@@ -4526,11 +5382,13 @@ def enqueue_violation(
     """
     global last_violation_time
 
+    # Trigger the side effect required for this stage.
     logger.info("=" * 80)
     logger.info("ENQUEUE_VIOLATION CALLED (Fast capture + queue)")
     logger.info("=" * 80)
 
     try:
+        # Prepare trigger source for the next step.
         trigger_source = (trigger_source or 'live').strip().lower()
         local_runtime_active = _is_local_pipeline_runtime_active()
         force_local_scope = bool(
@@ -4541,15 +5399,18 @@ def enqueue_violation(
             )
         )
 
+        # Prepare current time for the next step.
         current_time = time.time()
 
         # Check for violations using unified matcher (same logic as upload/live paths)
         violation_detections = _extract_violation_detections(detections)
 
         if not violation_detections:
+            # Trigger the side effect required for this stage.
             logger.warning("No violations found in detections")
             return None
 
+        # Prepare runtime device id for the next step.
         runtime_device_id = 'local_cache' if local_runtime_active else 'webcam_0'
         capture_sync_source = (
             'local_pipeline'
@@ -4558,29 +5419,37 @@ def enqueue_violation(
         )
 
         if trigger_source == 'live' and violation_queue is not None:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare queue stats preflight for the next step.
                 queue_stats_preflight = violation_queue.get_stats()
                 queue_size_preflight = int(queue_stats_preflight.get('current_size', 0) or 0)
                 queue_capacity_preflight = int(queue_stats_preflight.get('capacity', 0) or 0)
                 if queue_capacity_preflight > 0 and queue_size_preflight >= queue_capacity_preflight:
+                    # Trigger the side effect required for this stage.
                     logger.warning(
                         "Live capture skipped before artifact write because the report queue is full "
                         f"({queue_size_preflight}/{queue_capacity_preflight})"
                     )
                     return None
+                # Prepare is rate limited for the next step.
                 is_rate_limited = getattr(violation_queue, 'is_device_rate_limited', None)
                 if callable(is_rate_limited) and is_rate_limited(runtime_device_id, record=True):
                     logger.warning(
                         f"Live capture skipped before artifact write because {runtime_device_id} "
                         "is rate-limited"
                     )
+                    # Return the prepared result to the caller.
                     return None
             except Exception as preflight_err:
                 logger.debug(f"Live queue preflight skipped due to error: {preflight_err}")
 
+        # Choose the correct branch before the workflow continues.
         if trigger_source == 'live':
+            # Prepare live has spatial signature for the next step.
             live_has_spatial_signature = bool(_build_violation_spatial_signature(violation_detections))
             if _is_redundant_live_violation(violation_detections, current_time):
+                # Trigger the side effect required for this stage.
                 logger.info(
                     "Live dedup active - skipping redundant stationary violation capture "
                     f"(window={LIVE_VIOLATION_DEDUP_WINDOW_SECONDS}s)"
@@ -4590,10 +5459,13 @@ def enqueue_violation(
                 not live_has_spatial_signature
                 and current_time - last_violation_time < VIOLATION_COOLDOWN
             ):
+                # Prepare remaining for the next step.
                 remaining = int(VIOLATION_COOLDOWN - (current_time - last_violation_time))
                 logger.info(f"Live capture cooldown active ({remaining}s remaining) - skipping")
                 return None
+        # Choose the correct branch before the workflow continues.
         elif current_time - last_violation_time < VIOLATION_COOLDOWN:
+            # Prepare remaining for the next step.
             remaining = int(VIOLATION_COOLDOWN - (current_time - last_violation_time))
             logger.info(f"Capture cooldown active ({remaining}s remaining) - skipping")
             return None
@@ -4602,6 +5474,7 @@ def enqueue_violation(
 
         violation_types_raw = [d['class_name'] for d in violation_detections]
         violation_types = [format_violation_type(vt) for vt in violation_types_raw]
+        # Prepare resolved severity for the next step.
         resolved_severity = _classify_violation_severity(
             violation_types=violation_types_raw,
             detections=detections,
@@ -4625,9 +5498,12 @@ def enqueue_violation(
         annotated_path = violation_dir / 'annotated.jpg'
         annotated_saved = False
         if isinstance(annotated_frame, np.ndarray) and annotated_frame.size > 0:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare annotated saved for the next step.
                 annotated_saved = bool(cv2.imwrite(str(annotated_path), annotated_frame))
                 if annotated_saved:
+                    # Trigger the side effect required for this stage.
                     logger.info(f" Saved annotated image at capture time: {annotated_path}")
             except Exception as annotated_write_error:
                 logger.warning(
@@ -4636,18 +5512,23 @@ def enqueue_violation(
 
         missing_ppe_metadata: List[str] = []
         ppe_tags_metadata: List[str] = []
+        # Process each item in this collection using the same rule set.
         for violation_label in violation_types:
+            # Prepare clean label for the next step.
             clean_label = str(violation_label or '').strip()
             if not clean_label:
                 continue
             for prefix in ('NO-', 'No-', 'no-', 'Missing ', 'missing '):
+                # Choose the correct branch before the workflow continues.
                 if clean_label.startswith(prefix):
+                    # Prepare clean label for the next step.
                     clean_label = clean_label[len(prefix):].strip()
                     break
             if clean_label:
                 missing_ppe_metadata.append(clean_label)
                 ppe_tags_metadata.append(clean_label.replace(' ', '-').upper())
 
+        # Prepare person count metadata for the next step.
         person_count_metadata = sum(
             1 for d in (detections or [])
             if isinstance(d, dict)
@@ -4682,36 +5563,47 @@ def enqueue_violation(
             'has_caption': False,
             'has_report': False,
         }
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Open the managed resource only for the block that needs it.
             with open(metadata_path, 'w', encoding='utf-8') as f:
+                # Trigger the side effect required for this stage.
                 json.dump(preliminary_metadata, f, indent=2)
             logger.info(f"Preliminary metadata saved: {metadata_path}")
         except Exception as meta_err:
             logger.warning(f"Could not save preliminary metadata for {report_id}: {meta_err}")
 
+        # Section: run the mark local capture failed workflow with clear inputs and outputs.
         def _mark_local_capture_failed(reason: str):
             try:
                 failure_path = violation_dir / 'generation_failure.txt'
                 with open(failure_path, 'w', encoding='utf-8') as f:
+                    # Trigger the side effect required for this stage.
                     f.write(f"Report ID: {report_id}\n")
                     f.write(f"Timestamp: {timestamp.isoformat()}\n")
                     f.write(f"Reason: {reason}\n")
             except Exception as failure_write_err:
+                # Trigger the side effect required for this stage.
                 logger.debug(f"Could not persist local enqueue failure marker: {failure_write_err}")
 
+            # Protect this step so expected failures can fall back cleanly.
             try:
                 metadata_update = {}
                 if metadata_path.exists():
+                    # Open the managed resource only for the block that needs it.
                     with open(metadata_path, 'r', encoding='utf-8') as f:
+                        # Prepare loaded metadata for the next step.
                         loaded_metadata = json.load(f) or {}
                     if isinstance(loaded_metadata, dict):
                         metadata_update.update(loaded_metadata)
+                # Trigger the side effect required for this stage.
                 metadata_update.update({
                     'status': 'failed',
                     'failure_reason': reason,
                     'has_report': False,
                 })
                 with open(metadata_path, 'w', encoding='utf-8') as f:
+                    # Trigger the side effect required for this stage.
                     json.dump(metadata_update, f, indent=2)
             except Exception as metadata_update_err:
                 logger.debug(f"Could not update local enqueue failure metadata: {metadata_update_err}")
@@ -4729,6 +5621,7 @@ def enqueue_violation(
                     device_id=runtime_device_id,
                     status='pending'
                 )
+                # Trigger the side effect required for this stage.
                 logger.info(f" Inserted PENDING detection event: {report_id}")
             except Exception as e:
                 _activate_local_offline_runtime('enqueue_violation.insert_pending_event', e)
@@ -4736,6 +5629,7 @@ def enqueue_violation(
                     _is_supabase_connectivity_failure(e)
                     and _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', '')) == 'local'
                 ):
+                    # Prepare local runtime active for the next step.
                     local_runtime_active = True
                     force_local_scope = bool(
                         _should_force_local_artifact_pipeline(
@@ -4750,16 +5644,22 @@ def enqueue_violation(
                         'source_label': 'Local',
                         'sync_source': 'local_pipeline',
                     })
+                    # Protect this step so expected failures can fall back cleanly.
                     try:
+                        # Open the managed resource only for the block that needs it.
                         with open(metadata_path, 'w', encoding='utf-8') as f:
+                            # Trigger the side effect required for this stage.
                             json.dump(preliminary_metadata, f, indent=2)
                     except Exception as meta_update_err:
                         logger.debug(f"Could not restamp local capture metadata for {report_id}: {meta_update_err}")
+                # Trigger the side effect required for this stage.
                 logger.warning(
                     "Could not insert pending event into Supabase; "
                     f"continuing local queue processing ({e})"
                 )
+        # Choose the correct branch before the workflow continues.
         elif local_runtime_active:
+            # Trigger the side effect required for this stage.
             logger.info(
                 f"Local scope active for {report_id}; deferring Supabase detection insert until sync"
             )
@@ -4772,9 +5672,11 @@ def enqueue_violation(
                 "Violation queue worker is unavailable after recovery attempt; "
                 "captured frame cannot be queued"
             )
+            # Trigger the side effect required for this stage.
             _mark_local_capture_failed('Violation queue worker unavailable; report was not queued.')
             return None
 
+        # Choose the correct branch before the workflow continues.
         if violation_queue is None:
             logger.error("Violation queue manager unavailable after runtime recovery attempt")
             _mark_local_capture_failed('Violation queue manager unavailable; report was not queued.')
@@ -4792,7 +5694,9 @@ def enqueue_violation(
             'severity': resolved_severity,
         }
 
+        # Choose the correct branch before the workflow continues.
         if local_runtime_active:
+            # Prepare values needed by the next step.
             violation_data['source_scope'] = 'local'
             violation_data['sync_source'] = 'local_pipeline'
             violation_data['source'] = 'local_pipeline'
@@ -4801,6 +5705,7 @@ def enqueue_violation(
             violation_data['sync_source'] = capture_sync_source
             violation_data['source'] = capture_sync_source
 
+        # Prepare queue severity for the next step.
         queue_severity = 'URGENT' if trigger_source == 'upload' else resolved_severity
         queue_expedite = trigger_source == 'upload'
 
@@ -4812,6 +5717,7 @@ def enqueue_violation(
             expedite=queue_expedite,
         )
 
+        # Choose the correct branch before the workflow continues.
         if not success:
             # Most likely cause: per-device rate limit hit during a burst of live
             # captures. Uploads/reprocess actions are explicit user work, so retry
@@ -4823,6 +5729,7 @@ def enqueue_violation(
             queue_capacity_check = int(queue_stats_check.get('capacity', 0) or 0)
             queue_full_check = queue_capacity_check > 0 and queue_size_check >= queue_capacity_check
             if not queue_full_check and trigger_source != 'live':
+                # Prepare fallback device id for the next step.
                 fallback_device_id = (
                     f'local_capture_{report_id}_{time.time_ns()}'
                     if local_runtime_active
@@ -4835,20 +5742,25 @@ def enqueue_violation(
                     severity=queue_severity,
                     expedite=queue_expedite,
                 )
+                # Choose the correct branch before the workflow continues.
                 if success:
+                    # Trigger the side effect required for this stage.
                     logger.warning(
                         f"Enqueue rate-limit fallback succeeded for {report_id} "
                         f"(original device_id={runtime_device_id}, fallback device_id={fallback_device_id})"
                     )
+            # Choose the correct branch before the workflow continues.
             elif not queue_full_check:
                 logger.warning(
                     f"Live enqueue rate-limit active for {report_id}; leaving capture unqueued "
                     "to protect the report/model pipeline from continuous camera floods"
                 )
 
+        # Choose the correct branch before the workflow continues.
         if success:
             logger.info(f" Violation {report_id} added to processing queue")
             queue_stats = violation_queue.get_stats()
+            # Trigger the side effect required for this stage.
             logger.info(f"   Queue size: {queue_stats['current_size']}/{queue_stats['capacity']}")
             return report_id
 
@@ -4862,9 +5774,11 @@ def enqueue_violation(
                 "marking report as failed for retry/reprocess visibility"
             )
         else:
+            # Trigger the side effect required for this stage.
             logger.error("Failed to add violation to queue (capacity or sustained rate limit); marking report as failed")
         if db_manager and not force_local_scope:
             try:
+                # Trigger the side effect required for this stage.
                 db_manager.update_detection_status(
                     report_id,
                     'failed',
@@ -4872,6 +5786,7 @@ def enqueue_violation(
                 )
             except Exception as status_err:
                 logger.warning(f"Could not mark un-enqueued report {report_id} as failed: {status_err}")
+        # Trigger the side effect required for this stage.
         _mark_local_capture_failed(
             'Could not enqueue violation (queue full or device rate-limited). Use Reprocess Now to retry.'
         )
@@ -4881,10 +5796,13 @@ def enqueue_violation(
 
     except Exception as e:
         logger.error(f"Error enqueuing violation: {e}", exc_info=True)
+        # Return the prepared result to the caller.
         return None
 
 
+# Section: run the is local cache sync job marker workflow with clear inputs and outputs.
 def _is_local_cache_sync_job_marker(sync_source: str = '', device_id: str = '') -> bool:
+    # Prepare sync markers for the next step.
     sync_markers = {
         'sync_local_cache',
         'local_cache_sync',
@@ -4895,7 +5813,9 @@ def _is_local_cache_sync_job_marker(sync_source: str = '', device_id: str = '') 
     return normalized_source in sync_markers or normalized_device in sync_markers
 
 
+# Section: run the is local artifact origin device workflow with clear inputs and outputs.
 def _is_local_artifact_origin_device(device_id: str = '') -> bool:
+    # Prepare normalized device for the next step.
     normalized_device = str(device_id or '').strip().lower()
     return (
         normalized_device in {
@@ -4911,6 +5831,7 @@ def _is_local_artifact_origin_device(device_id: str = '') -> bool:
     )
 
 
+# Section: run the has confirmed synced local evidence workflow with clear inputs and outputs.
 def _has_confirmed_synced_local_evidence(
     *,
     sync_source: str = '',
@@ -4921,6 +5842,7 @@ def _has_confirmed_synced_local_evidence(
     report_id: str = '',
 ) -> bool:
     """Return True only when Local Synced is backed by a real local->cloud sync signal."""
+    # Prepare normalized source for the next step.
     normalized_source = str(sync_source or '').strip().lower()
     normalized_state = str(sync_state or '').strip().lower()
     normalized_report_id = str(report_id or '').strip().lower()
@@ -4930,7 +5852,9 @@ def _has_confirmed_synced_local_evidence(
     )
     cloud_report_synced = bool(has_cloud_artifacts and has_cloud_report_artifact)
 
+    # Choose the correct branch before the workflow continues.
     if _is_local_cache_sync_job_marker(sync_source=normalized_source, device_id=device_id):
+        # Return the prepared result to the caller.
         return cloud_report_synced
     if normalized_source == 'local_synced':
         return local_artifact_origin and cloud_report_synced
@@ -4942,18 +5866,23 @@ def _has_confirmed_synced_local_evidence(
         or normalized_state.startswith('cloud_sync_')
         or normalized_state.startswith('sync_')
     )
+    # Return the prepared result to the caller.
     return bool(sync_state_confirmed and local_artifact_origin and cloud_report_synced)
 
 
+# Section: run the should force local artifact pipeline workflow with clear inputs and outputs.
 def _should_force_local_artifact_pipeline(sync_source: str = '', device_id: str = '') -> bool:
     """Return True when local runtime should generate reports locally and defer cloud upload."""
     if not LOCAL_PIPELINE_FORCE_LOCAL_ARTIFACTS:
+        # Return the prepared result to the caller.
         return False
     if not ALLOW_OFFLINE_LOCAL_MODE or _is_hosted_runtime_environment():
         return False
+    # Return the prepared result to the caller.
     return not _is_local_cache_sync_job_marker(sync_source=sync_source, device_id=device_id)
 
 
+# Section: run the is local pipeline origin marker workflow with clear inputs and outputs.
 def _is_local_pipeline_origin_marker(
     *,
     source_scope: str = '',
@@ -4961,7 +5890,9 @@ def _is_local_pipeline_origin_marker(
     device_id: str = '',
 ) -> bool:
     """Return True for reports that were born in local/offline capture paths."""
+    # Choose the correct branch before the workflow continues.
     if _is_local_cache_sync_job_marker(sync_source=sync_source, device_id=device_id):
+        # Return the prepared result to the caller.
         return False
 
     normalized_scope = str(source_scope or '').strip().lower()
@@ -4977,15 +5908,18 @@ def _is_local_pipeline_origin_marker(
         'offline_local_cache',
         'browser_local_draft',
     }
+    # Choose the correct branch before the workflow continues.
     if (
         normalized_source in local_sources
         or normalized_source.startswith('local_')
         or normalized_source.startswith('offline_')
         or normalized_source.startswith('browser_local')
     ):
+        # Return the prepared result to the caller.
         return True
 
     normalized_device = str(device_id or '').strip().lower()
+    # Return the prepared result to the caller.
     return (
         normalized_device in {'local_cache', 'offline_local_cache', 'browser_local_draft'}
         or normalized_device.startswith('local_')
@@ -4994,11 +5928,15 @@ def _is_local_pipeline_origin_marker(
     )
 
 
+# Section: run the parse detection payload for origin workflow with clear inputs and outputs.
 def _parse_detection_payload_for_origin(value: Any) -> Dict[str, Any]:
+    # Choose the correct branch before the workflow continues.
     if isinstance(value, dict):
+        # Return the prepared result to the caller.
         return value
     if isinstance(value, str) and value.strip():
         try:
+            # Prepare parsed for the next step.
             parsed = json.loads(value)
             return parsed if isinstance(parsed, dict) else {}
         except Exception:
@@ -5006,7 +5944,9 @@ def _parse_detection_payload_for_origin(value: Any) -> Dict[str, Any]:
     return {}
 
 
+# Section: run the has local report id prefix workflow with clear inputs and outputs.
 def _has_local_report_id_prefix(report_id: Any) -> bool:
+    # Return the prepared result to the caller.
     return bool(
         re.match(
             r'^(local|offline|browser_local|local-cache|offline-cache)[_-]',
@@ -5015,9 +5955,12 @@ def _has_local_report_id_prefix(report_id: Any) -> bool:
     )
 
 
+# Section: run the is visible local cache sync candidate workflow with clear inputs and outputs.
 def _is_visible_local_cache_sync_candidate(record: Dict[str, Any]) -> bool:
     """Return True when a visible filesystem row is safe to reconcile upward."""
+    # Choose the correct branch before the workflow continues.
     if not isinstance(record, dict):
+        # Return the prepared result to the caller.
         return False
 
     report_id = str(record.get('report_id') or '').strip()
@@ -5027,10 +5970,13 @@ def _is_visible_local_cache_sync_candidate(record: Dict[str, Any]) -> bool:
     nested_payload = _parse_detection_payload_for_origin(record.get('detection_data'))
     if nested_payload:
         nested_payload.setdefault('report_id', report_id)
+        # Trigger the side effect required for this stage.
         nested_payload.setdefault('device_id', record.get('device_id'))
         if _is_visible_local_cache_sync_candidate(nested_payload):
+            # Return the prepared result to the caller.
             return True
 
+    # Prepare scope for the next step.
     scope = str(record.get('source_scope') or record.get('report_scope') or record.get('scope') or '').strip().lower()
     if scope in {'local', 'synced_local'}:
         return True
@@ -5042,6 +5988,7 @@ def _is_visible_local_cache_sync_candidate(record: Dict[str, Any]) -> bool:
         or record.get('source_reason')
         or ''
     ).strip().lower()
+    # Prepare local markers for the next step.
     local_markers = {
         'local',
         'local_pipeline',
@@ -5056,21 +6003,25 @@ def _is_visible_local_cache_sync_candidate(record: Dict[str, Any]) -> bool:
         'local_cache_sync',
         'local_synced',
     }
+    # Choose the correct branch before the workflow continues.
     if (
         source_marker in local_markers
         or source_marker.startswith('local_')
         or source_marker.startswith('offline_')
         or source_marker.startswith('browser_local')
     ):
+        # Return the prepared result to the caller.
         return True
 
     device_id = str(record.get('device_id') or '').strip().lower()
+    # Choose the correct branch before the workflow continues.
     if _is_local_artifact_origin_device(device_id):
         return True
 
     return str(record.get('source_label') or '').strip().lower() in {'local', 'local synced'}
 
 
+# Section: run the local artifact sync probe row workflow with clear inputs and outputs.
 def _local_artifact_sync_probe_row(report_id: str, violation_dir: Path) -> Dict[str, Any]:
     row: Dict[str, Any] = {
         'report_id': report_id,
@@ -5078,11 +6029,15 @@ def _local_artifact_sync_probe_row(report_id: str, violation_dir: Path) -> Dict[
         'has_annotated': bool((violation_dir / 'annotated.jpg').exists()),
         'has_report': bool((violation_dir / 'report.html').exists()),
     }
+    # Prepare metadata path for the next step.
     metadata_path = violation_dir / 'metadata.json'
     if metadata_path.exists():
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare parsed for the next step.
             parsed = json.loads(metadata_path.read_text(encoding='utf-8', errors='ignore') or '{}')
             if isinstance(parsed, dict):
+                # Process each item in this collection using the same rule set.
                 for key in (
                     'device_id',
                     'source_scope',
@@ -5096,13 +6051,18 @@ def _local_artifact_sync_probe_row(report_id: str, violation_dir: Path) -> Dict[
                     'source_reason',
                     'detection_data',
                 ):
+                    # Choose the correct branch before the workflow continues.
                     if key in parsed:
+                        # Prepare values needed by the next step.
                         row[key] = parsed.get(key)
         except Exception as metadata_err:
+            # Trigger the side effect required for this stage.
             logger.debug(f"Could not read local sync probe metadata for {report_id}: {metadata_err}")
+    # Return the prepared result to the caller.
     return row
 
 
+# Section: run the maybe attempt visible local cache sync workflow with clear inputs and outputs.
 def _maybe_attempt_visible_local_cache_sync(
     reason: str,
     *,
@@ -5114,7 +6074,9 @@ def _maybe_attempt_visible_local_cache_sync(
     """Best-effort, throttled sync trigger for filesystem rows shown by the app."""
     global last_visible_local_cache_sync_epoch
 
+    # Choose the correct branch before the workflow continues.
     if not VISIBLE_LOCAL_CACHE_SYNC_ENABLED:
+        # Return the prepared result to the caller.
         return {'started': False, 'reason': 'disabled'}
     batch_size = int(max_items or VISIBLE_LOCAL_CACHE_SYNC_BATCH_SIZE or SUPABASE_AUTO_SYNC_BATCH_SIZE or 0)
     if batch_size <= 0:
@@ -5123,20 +6085,26 @@ def _maybe_attempt_visible_local_cache_sync(
         return {'started': False, 'reason': 'supabase_offline_backoff'}
 
     rows = [row for row in (local_rows or []) if isinstance(row, dict)]
+    # Choose the correct branch before the workflow continues.
     if rows:
+        # Prepare has candidate for the next step.
         has_candidate = False
         for row in rows:
+            # Prepare has artifact for the next step.
             has_artifact = bool(row.get('has_original') or row.get('has_annotated') or row.get('has_report'))
             if not has_artifact:
                 continue
             if allow_unmarked_local or _is_visible_local_cache_sync_candidate(row):
+                # Prepare has candidate for the next step.
                 has_candidate = True
                 break
         if not has_candidate:
             return {'started': False, 'reason': 'no_visible_sync_candidates'}
 
+    # Prepare now epoch for the next step.
     now_epoch = time.time()
     if not force and (now_epoch - last_visible_local_cache_sync_epoch) < VISIBLE_LOCAL_CACHE_SYNC_INTERVAL_SECONDS:
+        # Return the prepared result to the caller.
         return {'started': False, 'reason': 'throttled'}
     if not visible_local_cache_sync_lock.acquire(blocking=False):
         return {'started': False, 'reason': 'already_running'}
@@ -5144,8 +6112,10 @@ def _maybe_attempt_visible_local_cache_sync(
     last_visible_local_cache_sync_epoch = now_epoch
     sync_reason = str(reason or 'visible_local_cache').strip() or 'visible_local_cache'
 
+    # Section: run the run visible sync workflow with clear inputs and outputs.
     def _run_visible_sync() -> None:
         try:
+            # Prepare summary for the next step.
             summary = _sync_local_cache_candidates(
                 max_items=batch_size,
                 dry_run=False,
@@ -5154,12 +6124,14 @@ def _maybe_attempt_visible_local_cache_sync(
                 allow_local_mode_sync=True,
             )
             if int(summary.get('enqueued', 0) or 0) > 0 or int(summary.get('partial_handoffs', 0) or 0) > 0:
+                # Trigger the side effect required for this stage.
                 logger.info(
                     "Visible local-cache sync started for %s: enqueued=%s partial_handoffs=%s",
                     sync_reason,
                     summary.get('enqueued', 0),
                     summary.get('partial_handoffs', 0),
                 )
+            # Choose the correct branch before the workflow continues.
             elif not summary.get('success'):
                 logger.debug(
                     "Visible local-cache sync skipped for %s: %s",
@@ -5169,16 +6141,21 @@ def _maybe_attempt_visible_local_cache_sync(
         except Exception as sync_err:
             logger.debug(f"Visible local-cache sync attempt failed for {sync_reason}: {sync_err}")
         finally:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Trigger the side effect required for this stage.
                 visible_local_cache_sync_lock.release()
             except RuntimeError:
                 pass
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Trigger the side effect required for this stage.
         Thread(target=_run_visible_sync, name=f"visible-local-sync-{sync_reason[:32]}", daemon=True).start()
         return {'started': True, 'reason': sync_reason}
     except Exception as thread_err:
         try:
+            # Trigger the side effect required for this stage.
             visible_local_cache_sync_lock.release()
         except RuntimeError:
             pass
@@ -5186,13 +6163,16 @@ def _maybe_attempt_visible_local_cache_sync(
         return {'started': False, 'reason': 'thread_start_failed', 'error': str(thread_err)}
 
 
+# Section: run the local sync has complete cloud artifacts workflow with clear inputs and outputs.
 def _local_sync_has_complete_cloud_artifacts(
     storage_keys: Dict[str, Any],
     *,
     local_has_annotated: bool,
     local_has_report: bool
 ) -> bool:
+    # Choose the correct branch before the workflow continues.
     if not isinstance(storage_keys, dict):
+        # Return the prepared result to the caller.
         return False
     if not storage_keys.get('original_image_key'):
         return False
@@ -5203,9 +6183,12 @@ def _local_sync_has_complete_cloud_artifacts(
     return True
 
 
+# Section: run the cleanup local artifacts after cloud sync workflow with clear inputs and outputs.
 def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Path) -> Dict[str, Any]:
     """Remove local artifacts after confirmed cloud sync to reduce disk usage."""
+    # Choose the correct branch before the workflow continues.
     if not LOCAL_CACHE_SYNC_CLEANUP_ENABLED:
+        # Return the prepared result to the caller.
         return {'cleaned': False, 'reason': 'cleanup_disabled'}
 
     if not violation_dir.exists() or not violation_dir.is_dir():
@@ -5219,8 +6202,10 @@ def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Pat
             encoding='utf-8'
         )
     except Exception as marker_err:
+        # Trigger the side effect required for this stage.
         logger.debug(f"Could not write SYNCED.txt marker for {report_id}: {marker_err}")
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
         age_seconds = max(0.0, time.time() - violation_dir.stat().st_mtime)
     except Exception:
@@ -5234,7 +6219,9 @@ def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Pat
             'min_age_seconds': int(LOCAL_CACHE_SYNC_CLEANUP_MIN_AGE_SECONDS),
         }
 
+    # Choose the correct branch before the workflow continues.
     if LOCAL_CACHE_SYNC_KEEP_OFFLINE_ARTIFACTS:
+        # Return the prepared result to the caller.
         return {
             'cleaned': False,
             'reason': 'offline_artifact_retention_enabled',
@@ -5242,6 +6229,7 @@ def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Pat
 
     if LOCAL_CACHE_SYNC_CLEANUP_DELETE_WHOLE_DIR:
         try:
+            # Trigger the side effect required for this stage.
             shutil.rmtree(violation_dir)
             return {
                 'cleaned': True,
@@ -5250,6 +6238,7 @@ def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Pat
         except Exception as dir_err:
             logger.warning(f"Could not remove local violation directory for {report_id}: {dir_err}")
 
+    # Prepare removable files for the next step.
     removable_files = (
         'original.jpg',
         'annotated.jpg',
@@ -5259,17 +6248,23 @@ def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Pat
         'generation_failure.txt',
         'environment_validation.json',
     )
+    # Prepare removed files for the next step.
     removed_files = []
     for filename in removable_files:
+        # Prepare candidate for the next step.
         candidate = violation_dir / filename
         try:
+            # Choose the correct branch before the workflow continues.
             if candidate.exists() and candidate.is_file():
+                # Trigger the side effect required for this stage.
                 candidate.unlink()
                 removed_files.append(filename)
         except Exception as file_err:
             logger.debug(f"Could not remove local file {candidate}: {file_err}")
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Choose the correct branch before the workflow continues.
         if violation_dir.exists() and not any(violation_dir.iterdir()):
             violation_dir.rmdir()
     except Exception:
@@ -5282,15 +6277,19 @@ def _cleanup_local_artifacts_after_cloud_sync(report_id: str, violation_dir: Pat
     }
 
 
+# Section: run the safe report id workflow with clear inputs and outputs.
 def _safe_report_id(raw_report_id: Any = None) -> str:
     """Normalize report ids accepted from browser/local handoff payloads."""
+    # Prepare value for the next step.
     value = str(raw_report_id or '').strip()
     value = re.sub(r'[^A-Za-z0-9_.:-]+', '', value)
     if not value:
+        # Prepare value for the next step.
         value = get_local_time().strftime('%Y%m%d_%H%M%S')
     return value[:96]
 
 
+# Section: run the handoff partial local report to cloud workflow with clear inputs and outputs.
 def _handoff_partial_local_report_to_cloud(
     *,
     report_id: str,
@@ -5318,7 +6317,9 @@ def _handoff_partial_local_report_to_cloud(
     """
     global db_manager, storage_manager
 
+    # Choose the correct branch before the workflow continues.
     if not LOCAL_CACHE_PARTIAL_HANDOFF_ENABLED:
+        # Return the prepared result to the caller.
         return {'success': False, 'error': 'partial_handoff_disabled'}
 
     report_id = _safe_report_id(report_id)
@@ -5328,7 +6329,9 @@ def _handoff_partial_local_report_to_cloud(
     if not original_path.exists():
         return {'success': False, 'error': 'original_image_missing'}
 
+    # Choose the correct branch before the workflow continues.
     if db_manager is None or storage_manager is None:
+        # Trigger the side effect required for this stage.
         _attempt_supabase_runtime_recovery(reason=f'partial_local_handoff:{reason}:{report_id}', force=True)
 
     if db_manager is None:
@@ -5337,19 +6340,25 @@ def _handoff_partial_local_report_to_cloud(
         return {'success': False, 'error': 'storage_manager_unavailable'}
 
     violation_dir.mkdir(parents=True, exist_ok=True)
+    # Choose the correct branch before the workflow continues.
     if not annotated_path.exists():
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare frame for the next step.
             frame = cv2.imread(str(original_path))
             if frame is not None:
+                # Prepare values needed by the next step.
                 _, annotated = predict_image(frame, conf=0.25)
                 cv2.imwrite(str(annotated_path), annotated)
         except Exception as annotate_err:
             logger.debug(f"Partial handoff annotation skipped for {report_id}: {annotate_err}")
 
+    # Prepare effective annotated for the next step.
     effective_annotated = annotated_path if annotated_path.exists() else original_path
 
     storage_keys: Dict[str, Any] = {}
     try:
+        # Prepare storage keys for the next step.
         storage_keys = storage_manager.upload_violation_artifacts(
             report_id=report_id,
             original_image_path=original_path,
@@ -5359,9 +6368,11 @@ def _handoff_partial_local_report_to_cloud(
             upsert=True,
         ) or {}
     except Exception as upload_err:
+        # Trigger the side effect required for this stage.
         logger.warning(f"Partial local handoff upload failed for {report_id}: {upload_err}")
         return {'success': False, 'error': f'upload_failed: {upload_err}'}
 
+    # Choose the correct branch before the workflow continues.
     if not storage_keys.get('original_image_key'):
         return {'success': False, 'error': 'original_upload_failed', 'storage_keys': storage_keys}
     _invalidate_dashboard_snapshot_cache('stats')
@@ -5369,8 +6380,10 @@ def _handoff_partial_local_report_to_cloud(
     try:
         ts_value = timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp)
     except Exception:
+        # Prepare ts value for the next step.
         ts_value = _parse_report_id_timestamp(report_id).isoformat()
 
+    # Prepare violation types raw for the next step.
     violation_types_raw = _normalize_violation_type_list(
         detections,
         queued_violation_types,
@@ -5383,8 +6396,10 @@ def _handoff_partial_local_report_to_cloud(
         if violation_types_formatted
         else 'PPE Violation Detected'
     )
+    # Prepare missing ppe values for the next step.
     missing_ppe_values = _missing_ppe_from_violation_types(violation_types_raw)
     try:
+        # Prepare queued count int for the next step.
         queued_count_int = int(queued_violation_count or 0)
     except Exception:
         queued_count_int = 0
@@ -5393,6 +6408,7 @@ def _handoff_partial_local_report_to_cloud(
         queued_count_int,
         1,
     )
+    # Prepare person count for the next step.
     person_count = max(
         0,
         len([
@@ -5402,6 +6418,7 @@ def _handoff_partial_local_report_to_cloud(
         ])
     )
 
+    # Prepare source scope marker for the next step.
     source_scope_marker = str(source_scope or 'cloud').strip().lower() or 'cloud'
     sync_source_marker = str(sync_source or 'sync_local_cache_partial').strip().lower() or 'sync_local_cache_partial'
     resolved_severity = _classify_violation_severity(
@@ -5436,9 +6453,12 @@ def _handoff_partial_local_report_to_cloud(
         },
     }
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare event for the next step.
         event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
         if not event and hasattr(db_manager, 'insert_detection_event'):
+            # Trigger the side effect required for this stage.
             db_manager.insert_detection_event(
                 report_id=report_id,
                 timestamp=ts_value,
@@ -5449,8 +6469,10 @@ def _handoff_partial_local_report_to_cloud(
                 status='pending',
             )
 
+        # Prepare existing violation for the next step.
         existing_violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
         if existing_violation and hasattr(db_manager, 'update_violation'):
+            # Trigger the side effect required for this stage.
             db_manager.update_violation(
                 report_id=report_id,
                 violation_summary=violation_summary_text,
@@ -5459,7 +6481,9 @@ def _handoff_partial_local_report_to_cloud(
                 original_image_key=storage_keys.get('original_image_key'),
                 annotated_image_key=storage_keys.get('annotated_image_key'),
             )
+        # Choose the correct branch before the workflow continues.
         elif hasattr(db_manager, 'insert_violation'):
+            # Trigger the side effect required for this stage.
             db_manager.insert_violation(
                 report_id=report_id,
                 violation_summary=violation_summary_text,
@@ -5473,7 +6497,9 @@ def _handoff_partial_local_report_to_cloud(
                 device_id=device_id,
             )
 
+        # Choose the correct branch before the workflow continues.
         if hasattr(db_manager, 'update_detection_status'):
+            # Trigger the side effect required for this stage.
             db_manager.update_detection_status(
                 report_id,
                 'pending',
@@ -5482,6 +6508,7 @@ def _handoff_partial_local_report_to_cloud(
 
         if hasattr(db_manager, 'log_event'):
             try:
+                # Trigger the side effect required for this stage.
                 db_manager.log_event(
                     event_type='local_partial_handoff',
                     message=f'Uploaded partial local report artifacts for cloud continuation ({reason})',
@@ -5499,11 +6526,14 @@ def _handoff_partial_local_report_to_cloud(
                     },
                 )
             except Exception as log_err:
+                # Trigger the side effect required for this stage.
                 logger.debug(f"Could not log partial handoff for {report_id}: {log_err}")
     except Exception as db_err:
+        # Trigger the side effect required for this stage.
         _activate_local_offline_runtime('partial_local_handoff.db', db_err)
         return {'success': False, 'error': f'db_reconcile_failed: {db_err}', 'storage_keys': storage_keys}
 
+    # Return the prepared result to the caller.
     return {
         'success': True,
         'report_id': report_id,
@@ -5514,6 +6544,7 @@ def _handoff_partial_local_report_to_cloud(
     }
 
 
+# Section: run the handle local cache sync job workflow with clear inputs and outputs.
 def _handle_local_cache_sync_job(
     *,
     report_id: str,
@@ -5533,6 +6564,7 @@ def _handle_local_cache_sync_job(
     """Fast-path sync: upload existing local artifacts without re-running NLP generation."""
     global db_manager, storage_manager
 
+    # Prepare local report path for the next step.
     local_report_path = violation_dir / 'report.html'
     local_pdf_path = violation_dir / 'report.pdf'
 
@@ -5545,6 +6577,7 @@ def _handle_local_cache_sync_job(
     )
 
     # Sync queue jobs should not trigger full regeneration; wait for local report completion.
+    # Choose the correct branch before the workflow continues.
     if not local_report_path.exists():
         logger.info(f"Skipping local-cache sync for {report_id}: local report.html not ready")
         return True
@@ -5557,9 +6590,11 @@ def _handle_local_cache_sync_job(
             f"Deferring local-cache sync for {report_id}: storage manager unavailable "
             f"(db_manager={'ready' if db_manager is not None else 'missing'})"
         )
+        # Return the prepared result to the caller.
         return True
 
     storage_keys: Dict[str, Any] = {}
+    # Protect this step so expected failures can fall back cleanly.
     try:
         storage_keys = storage_manager.upload_violation_artifacts(
             report_id=report_id,
@@ -5575,9 +6610,11 @@ def _handle_local_cache_sync_job(
             upsert=True,
         ) or {}
     except Exception as upload_err:
+        # Trigger the side effect required for this stage.
         logger.warning(f"Local-cache cloud upload failed for {report_id}: {upload_err}")
         storage_keys = {}
 
+    # Choose the correct branch before the workflow continues.
     if storage_keys:
         _invalidate_dashboard_snapshot_cache('stats')
         logger.info(
@@ -5588,26 +6625,34 @@ def _handle_local_cache_sync_job(
             f"report_pdf={bool(storage_keys.get('report_pdf_key'))}"
         )
     else:
+        # Trigger the side effect required for this stage.
         logger.info(f"Local-cache cloud upload produced no storage keys for {report_id}; DB reconciliation will continue")
 
+    # Prepare caption text for the next step.
     caption_text = ''
     caption_path = violation_dir / 'caption.txt'
     if caption_path.exists():
         try:
+            # Prepare caption text for the next step.
             caption_text = caption_path.read_text(encoding='utf-8', errors='ignore').strip()
         except Exception:
             caption_text = ''
 
     local_metadata = {}
+    # Prepare metadata path for the next step.
     metadata_path = violation_dir / 'metadata.json'
     if metadata_path.exists():
+        # Protect this step so expected failures can fall back cleanly.
         try:
             parsed_metadata = json.loads(metadata_path.read_text(encoding='utf-8', errors='ignore') or '{}')
+            # Choose the correct branch before the workflow continues.
             if isinstance(parsed_metadata, dict):
+                # Prepare local metadata for the next step.
                 local_metadata = parsed_metadata
         except Exception as metadata_err:
             logger.debug(f"Could not read local metadata for sync tags ({report_id}): {metadata_err}")
 
+    # Prepare violation types raw for the next step.
     violation_types_raw = _normalize_violation_type_list(
         detections,
         queued_violation_types,
@@ -5618,6 +6663,7 @@ def _handle_local_cache_sync_job(
         [f"NO-{item}" for item in (local_metadata.get('missing_ppe') or [])],
         _extract_violation_types_from_summary(local_metadata.get('violation_summary') or ''),
     )
+    # Prepare violation types formatted for the next step.
     violation_types_formatted = [format_violation_type(vt) for vt in violation_types_raw]
     violation_summary_text = (
         f"PPE Violation Detected: {', '.join(violation_types_formatted)}"
@@ -5626,9 +6672,11 @@ def _handle_local_cache_sync_job(
     )
     missing_ppe_values = _missing_ppe_from_violation_types(violation_types_raw)
     try:
+        # Prepare queued count int for sync for the next step.
         queued_count_int_for_sync = int(queued_violation_count or 0)
     except Exception:
         queued_count_int_for_sync = 0
+    # Prepare resolved violation count for sync for the next step.
     resolved_violation_count_for_sync = max(
         len(violation_types_raw),
         queued_count_int_for_sync,
@@ -5641,6 +6689,7 @@ def _handle_local_cache_sync_job(
         violation_summary=violation_summary_text,
     )
 
+    # Prepare local has annotated for the next step.
     local_has_annotated = annotated_path.exists()
     cloud_artifacts_complete = _local_sync_has_complete_cloud_artifacts(
         storage_keys,
@@ -5666,16 +6715,20 @@ def _handle_local_cache_sync_job(
         'sync_state': 'cloud_completed' if cloud_artifacts_complete else 'local_sync_pending_retry',
     }
 
+    # Prepare db reconciled for the next step.
     db_reconciled = False
 
     if db_manager is not None:
+        # Prepare db event inserted for the next step.
         db_event_inserted = False
         violation_action = 'none'
         try:
+            # Prepare ts value for the next step.
             ts_value = timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp)
             event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
 
             if not event and hasattr(db_manager, 'insert_detection_event'):
+                # Trigger the side effect required for this stage.
                 db_manager.insert_detection_event(
                     report_id=report_id,
                     timestamp=ts_value,
@@ -5685,8 +6738,10 @@ def _handle_local_cache_sync_job(
                     device_id=queue_device_id,
                     status='completed',
                 )
+                # Prepare db event inserted for the next step.
                 db_event_inserted = True
 
+            # Prepare existing violation for the next step.
             existing_violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
             if existing_violation and hasattr(db_manager, 'update_violation'):
                 db_manager.update_violation(
@@ -5699,7 +6754,9 @@ def _handle_local_cache_sync_job(
                     report_html_key=storage_keys.get('report_html_key'),
                     report_pdf_key=storage_keys.get('report_pdf_key'),
                 )
+                # Prepare violation action for the next step.
                 violation_action = 'update_violation'
+            # Choose the correct branch before the workflow continues.
             elif hasattr(db_manager, 'insert_violation'):
                 inserted_id = db_manager.insert_violation(
                     report_id=report_id,
@@ -5713,7 +6770,9 @@ def _handle_local_cache_sync_job(
                     report_pdf_key=storage_keys.get('report_pdf_key'),
                     device_id=queue_device_id,
                 )
+                # Choose the correct branch before the workflow continues.
                 if not inserted_id and hasattr(db_manager, 'update_violation_storage_keys'):
+                    # Trigger the side effect required for this stage.
                     db_manager.update_violation_storage_keys(
                         report_id=report_id,
                         original_image_key=storage_keys.get('original_image_key'),
@@ -5723,9 +6782,12 @@ def _handle_local_cache_sync_job(
                     )
                     violation_action = 'update_storage_keys'
                 else:
+                    # Prepare violation action for the next step.
                     violation_action = 'insert_violation'
 
+            # Choose the correct branch before the workflow continues.
             if hasattr(db_manager, 'update_detection_status'):
+                # Choose the correct branch before the workflow continues.
                 if cloud_artifacts_complete:
                     db_manager.update_detection_status(
                         report_id,
@@ -5733,12 +6795,14 @@ def _handle_local_cache_sync_job(
                         'Local cached report synced to Supabase storage'
                     )
                 else:
+                    # Trigger the side effect required for this stage.
                     db_manager.update_detection_status(
                         report_id,
                         'completed',
                         'Local report ready; cloud sync pending retry due incomplete cloud artifact upload'
                     )
 
+            # Prepare db reconciled for the next step.
             db_reconciled = True
             logger.info(
                 f"Local-cache sync DB reconciliation for {report_id}: "
@@ -5746,6 +6810,7 @@ def _handle_local_cache_sync_job(
                 f"cloud_artifacts_complete={cloud_artifacts_complete}"
             )
             try:
+                # Trigger the side effect required for this stage.
                 _push_realtime_report_event({
                     'report_id': report_id,
                     'status': 'completed',
@@ -5767,19 +6832,24 @@ def _handle_local_cache_sync_job(
                     'completed_report_ids': [report_id] if cloud_artifacts_complete else [],
                 }, event_type='local_cache_synced' if cloud_artifacts_complete else 'report_status')
             except Exception as realtime_err:
+                # Trigger the side effect required for this stage.
                 logger.debug(f"Could not push local-cache sync realtime row for {report_id}: {realtime_err}")
         except Exception as db_sync_err:
+            # Trigger the side effect required for this stage.
             _activate_local_offline_runtime('local_cache_sync_job.db', db_sync_err)
             logger.warning(f"Local-cache sync DB reconciliation warning for {report_id}: {db_sync_err}")
     else:
+        # Trigger the side effect required for this stage.
         logger.warning(
             f"Local-cache sync DB reconciliation deferred for {report_id}: db_manager unavailable; "
             "keeping local artifacts for retry"
         )
 
+    # Choose the correct branch before the workflow continues.
     if cloud_artifacts_complete and db_reconciled:
         cleanup_summary = _cleanup_local_artifacts_after_cloud_sync(report_id, violation_dir)
         if cleanup_summary.get('cleaned'):
+            # Trigger the side effect required for this stage.
             logger.info(
                 f"Cleaned local artifacts after sync-only cloud upload for {report_id} "
                 f"(reason={cleanup_summary.get('reason')})"
@@ -5789,7 +6859,9 @@ def _handle_local_cache_sync_job(
                 f"Skipped local artifact cleanup after sync-only upload for {report_id} "
                 f"(reason={cleanup_summary.get('reason')})"
             )
+    # Choose the correct branch before the workflow continues.
     elif cloud_artifacts_complete and not db_reconciled:
+        # Trigger the side effect required for this stage.
         logger.info(
             f"Cloud artifacts uploaded for {report_id} but DB reconciliation incomplete; "
             "keeping local artifacts for retry"
@@ -5800,9 +6872,11 @@ def _handle_local_cache_sync_job(
             "keeping local artifacts for retry"
         )
 
+    # Return the prepared result to the caller.
     return True
 
 
+# Section: run the process queued violation workflow with clear inputs and outputs.
 def process_queued_violation(queued_violation: 'QueuedViolation'):
     """
     Process a violation from the queue.
@@ -5811,6 +6885,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     Args:
         queued_violation: The queued violation object with data
     """
+    # Prepare data for the next step.
     data = queued_violation.data
     report_id = data['report_id']
     violation_dir = Path(data['violation_dir'])
@@ -5824,6 +6899,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         violation_count=queued_violation_count,
         violation_summary=data.get('violation_summary'),
     )
+    # Prepare data severity for the next step.
     data_severity = str(data.get('severity') or '').strip().upper()
     resolved_report_severity = (
         _normalize_report_severity(data_severity, default=calculated_report_severity)
@@ -5837,6 +6913,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         or str(data.get('device_id') or '').strip()
         or 'webcam_0'
     )
+    # Prepare queued source scope for the next step.
     queued_source_scope = str(data.get('source_scope') or '').strip().lower()
     queued_sync_source = str(data.get('sync_source') or data.get('source') or '').strip().lower()
     is_local_cache_sync_job = _is_local_cache_sync_job_marker(
@@ -5849,6 +6926,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         sync_source=queued_sync_source,
         device_id=queue_device_id,
     )
+    # Prepare force local artifact pipeline for the next step.
     force_local_artifact_pipeline = bool(
         (queue_local_runtime_active or queued_local_origin)
         and _should_force_local_artifact_pipeline(
@@ -5858,6 +6936,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     )
     force_reprocess_requested = bool(data.get('force_reprocess'))
     skip_environment_validation = bool(data.get('skip_environment_validation'))
+    # Prepare allow placeholder report for the next step.
     allow_placeholder_report = bool(data.get('allow_placeholder_report'))
     generation_started_at = time.perf_counter()
     generation_timings_seconds: Dict[str, float] = {}
@@ -5867,20 +6946,26 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     caption_failure_reason = ''
     cloud_upload_skipped = False
     result_storage_keys: Dict[str, Any] = {}
+    # Prepare report ready signal sent for the next step.
     report_ready_signal_sent = False
     report_ready_signal_lock = Lock()
 
+    # Section: run the push processing status workflow with clear inputs and outputs.
     def _push_processing_status(status: str, error_message: str = None, has_report: bool = False) -> None:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare formatted types for the next step.
             formatted_types = [format_violation_type(vt) for vt in violation_types] if isinstance(violation_types, list) else []
             missing_ppe = data.get('missing_ppe') if isinstance(data.get('missing_ppe'), list) else []
             if not missing_ppe:
+                # Prepare missing ppe for the next step.
                 missing_ppe = [
                     str(label or '').replace('Missing ', '').replace('NO-', '').replace('No-', '').strip()
                     for label in formatted_types
                     if str(label or '').strip()
                 ]
             ppe_tags = data.get('ppe_tags') if isinstance(data.get('ppe_tags'), list) else []
+            # Choose the correct branch before the workflow continues.
             if not ppe_tags:
                 ppe_tags = [str(label or '').replace(' ', '-').upper() for label in missing_ppe if str(label or '').strip()]
             source_scope = queued_source_scope or ('local' if force_local_artifact_pipeline else 'cloud')
@@ -5912,9 +6997,12 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'error_message': error_message,
             }, event_type='report_status')
         except Exception as realtime_err:
+            # Trigger the side effect required for this stage.
             logger.debug(f"Could not push processing realtime status for {report_id}: {realtime_err}")
 
+    # Section: run the record generation timing workflow with clear inputs and outputs.
     def _record_generation_timing(stage_name: str, started_at: float) -> None:
+        # Protect this step so expected failures can fall back cleanly.
         try:
             elapsed = round(max(0.0, time.perf_counter() - float(started_at)), 2)
             generation_timings_seconds[stage_name] = elapsed
@@ -5922,15 +7010,19 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         except Exception:
             pass
 
+    # Section: run the signal local report ready workflow with clear inputs and outputs.
     def _signal_local_report_ready(reason: str = 'local_report_html_ready') -> bool:
         """Publish ready as soon as report.html is locally openable, before slow cloud finalization."""
         nonlocal report_created, failure_reason, report_ready_signal_sent
+        # Prepare local report html for the next step.
         local_report_html = violation_dir / 'report.html'
         if not local_report_html.exists():
+            # Return the prepared result to the caller.
             return False
 
         with report_ready_signal_lock:
             if report_ready_signal_sent:
+                # Return the prepared result to the caller.
                 return True
             report_ready_signal_sent = True
             report_created = True
@@ -5940,7 +7032,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 round(max(0.0, time.perf_counter() - generation_started_at), 2),
             )
 
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Trigger the side effect required for this stage.
             update_report_progress(
                 current=report_id,
                 current_step='Report ready',
@@ -5949,7 +7043,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         except Exception:
             pass
 
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare html content for the next step.
             html_content = local_report_html.read_text(encoding='utf-8')
             _persist_local_report_html_cache(report_id, html_content)
         except Exception as cache_err:
@@ -5963,10 +7059,13 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 reason,
             )
         except Exception as realtime_err:
+            # Trigger the side effect required for this stage.
             logger.debug(f"Could not push early ready status for {report_id}: {realtime_err}")
 
+        # Choose the correct branch before the workflow continues.
         if should_update_cloud_status:
             try:
+                # Trigger the side effect required for this stage.
                 db_manager.update_detection_status(report_id, 'completed')
                 logger.info(f" Status updated to COMPLETED from local-ready signal: {report_id}")
             except Exception as e:
@@ -5975,10 +7074,12 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
 
         return True
 
+    # Trigger the side effect required for this stage.
     logger.info(f" Processing queued violation: {report_id}")
     _push_processing_status('generating')
 
     if is_local_cache_sync_job and not force_reprocess_requested:
+        # Prepare handled sync job for the next step.
         handled_sync_job = _handle_local_cache_sync_job(
             report_id=report_id,
             violation_dir=violation_dir,
@@ -5994,10 +7095,13 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             queued_source_scope=queued_source_scope,
             queued_sync_source=queued_sync_source,
         )
+        # Choose the correct branch before the workflow continues.
         if handled_sync_job:
+            # Trigger the side effect required for this stage.
             logger.info(f" Local-cache sync job completed without regeneration: {report_id}")
             return
 
+    # Choose the correct branch before the workflow continues.
     if not annotated_path.exists() and original_path.exists():
         annotation_started_at = time.perf_counter()
         try:
@@ -6005,8 +7109,10 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 current=report_id,
                 current_step='Preparing annotated frame'
             )
+            # Prepare frame for annotation for the next step.
             frame_for_annotation = cv2.imread(str(original_path))
             if frame_for_annotation is not None:
+                # Prepare values needed by the next step.
                 _, annotated_frame = predict_image(frame_for_annotation, conf=0.25)
                 cv2.imwrite(str(annotated_path), annotated_frame)
                 logger.info(f"Saved annotated image in queue worker: {annotated_path}")
@@ -6015,9 +7121,11 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         except Exception as annotate_err:
             logger.warning(f"Could not create annotated image for {report_id}: {annotate_err}")
         finally:
+            # Trigger the side effect required for this stage.
             _record_generation_timing('annotation', annotation_started_at)
 
     # Update progress
+    # Trigger the side effect required for this stage.
     update_report_progress(
         current=report_id,
         current_step='Validating work environment'
@@ -6030,8 +7138,10 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         try:
             from caption_image import validate_work_environment
 
+            # Trigger the side effect required for this stage.
             logger.info(" Validating work environment (acquiring Ollama lock)...")
             with ollama_semaphore:  # Only one Ollama call at a time
+                # Prepare env result for the next step.
                 env_result = validate_work_environment(str(original_path))
 
             logger.info(f"   Environment: {env_result['environment_type']} (confidence: {env_result['confidence']})")
@@ -6043,6 +7153,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 json.dump(env_result, f, indent=2)
 
             if not env_result['is_valid']:
+                # Trigger the side effect required for this stage.
                 logger.warning(f" SKIPPING violation {report_id} - not a valid work environment")
                 logger.warning(f"   Reason: {env_result['reason']}")
 
@@ -6059,6 +7170,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         logger.warning(f"Could not update status: {e}")
 
                 # Create a "skipped" marker file instead of full report
+                # Prepare skip report path for the next step.
                 skip_report_path = violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt'
                 with open(skip_report_path, 'w') as f:
                     f.write(f"Violation {report_id} was skipped.\n")
@@ -6070,9 +7182,11 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     'skipped',
                     f"Not a work environment: {env_result['environment_type']}"
                 )
+                # Return the prepared result to the caller.
                 return  # Skip processing this violation
 
         except ImportError:
+            # Trigger the side effect required for this stage.
             logger.warning("validate_work_environment not available - skipping environment check")
         except Exception as e:
             logger.warning(f"Environment validation failed: {e} - proceeding with processing")
@@ -6080,6 +7194,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             _record_generation_timing('environment_validation', environment_started_at)
 
     # Update status to generating
+    # Choose the correct branch before the workflow continues.
     if should_update_cloud_status:
         try:
             db_manager.update_detection_status(report_id, 'generating')
@@ -6089,6 +7204,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             logger.warning(f"Could not update status: {e}")
 
     # Update progress
+    # Trigger the side effect required for this stage.
     update_report_progress(
         current=report_id,
         current_step='Generating image caption',
@@ -6103,22 +7219,28 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     caption_quality_reason = ''
     caption_started_at = time.perf_counter()
     if caption_generator:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Trigger the side effect required for this stage.
             logger.info(" Generating image caption with LLaVA (acquiring Ollama lock)...")
 
             # Free up GPU memory before heavy captioning operation
             try:
                 import torch
                 if torch.cuda.is_available():
+                    # Trigger the side effect required for this stage.
                     torch.cuda.empty_cache()
                     logger.info("   Cleared CUDA cache before caption generation")
             except Exception as gpu_e:
                 logger.debug(f"   Could not clear CUDA cache: {gpu_e}")
 
+            # Open the managed resource only for the block that needs it.
             with ollama_semaphore:  # Only one Ollama call at a time
                 caption = caption_generator.generate_caption(str(original_path))
             if caption:
+                # Open the managed resource only for the block that needs it.
                 with open(caption_path, 'w', encoding='utf-8') as f:
+                    # Trigger the side effect required for this stage.
                     f.write(caption)
                 logger.info(f" Caption saved: {caption_path}")
 
@@ -6127,7 +7249,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 has_work_indicators = any(kw in caption_lower for kw in VALID_ENVIRONMENT_KEYWORDS)
                 has_invalid_indicators = any(kw in caption_lower for kw in INVALID_ENVIRONMENT_KEYWORDS)
 
+                # Choose the correct branch before the workflow continues.
                 if has_invalid_indicators and not has_work_indicators:
+                    # Trigger the side effect required for this stage.
                     logger.warning(f" Caption suggests non-work environment: {caption[:100]}...")
                     env_context = " [Warning: Scene may not be a typical work environment]"
 
@@ -6137,34 +7261,43 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         f" Local mode unavailable for {report_id}: {caption_failure_reason}. "
                         "Caption marked unavailable; strict local report generation will block fallback output."
                     )
+                    # Prepare caption for the next step.
                     caption = (
                         "Caption unavailable due to local-mode provider issue. "
                         f"{caption_failure_reason} "
                         "Report generated using detection-only fallback analysis."
                     )
                     with open(caption_path, 'w', encoding='utf-8') as f:
+                        # Trigger the side effect required for this stage.
                         f.write(caption)
 
             else:
+                # Prepare caption for the next step.
                 caption = "Caption generation returned empty"
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.error(f" Caption generation failed: {e}")
             caption = "Caption generation failed"
     else:
+        # Prepare caption for the next step.
         caption = "Image captioning not available"
         with open(caption_path, 'w', encoding='utf-8') as f:
             f.write(caption)
 
+    # Prepare values needed by the next step.
     caption, caption_quality_fallback_applied, caption_quality_reason = _enforce_caption_quality_floor(
         caption,
         detections,
         violation_types=violation_types,
     )
     try:
+        # Open the managed resource only for the block that needs it.
         with open(caption_path, 'w', encoding='utf-8') as f:
+            # Trigger the side effect required for this stage.
             f.write(caption)
         if caption_quality_fallback_applied:
             if _caption_quality_reason_is_augmented(caption_quality_reason):
+                # Trigger the side effect required for this stage.
                 logger.info(
                     f"Caption quality YOLO context augmentation applied for {report_id} "
                     f"(reason={caption_quality_reason})"
@@ -6174,7 +7307,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     f"Caption quality fallback applied for {report_id} (reason={caption_quality_reason})"
                 )
     except Exception as caption_write_error:
+        # Trigger the side effect required for this stage.
         logger.warning(f"Failed to persist caption for {report_id}: {caption_write_error}")
+    # Trigger the side effect required for this stage.
     _record_generation_timing('caption_generation', caption_started_at)
 
     context_adjusted_severity = _classify_violation_severity(
@@ -6185,7 +7320,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         context_text=caption,
         caption=caption,
     )
+    # Choose the correct branch before the workflow continues.
     if context_adjusted_severity != resolved_report_severity:
+        # Trigger the side effect required for this stage.
         logger.info(
             "Adjusted report severity from %s to %s based on caption/environment context for %s",
             resolved_report_severity,
@@ -6195,6 +7332,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     resolved_report_severity = context_adjusted_severity
 
     # Generate report
+    # Prepare caption provider for the next step.
     caption_provider = None
     caption_model = None
     report_generation_started_at = time.perf_counter()
@@ -6202,6 +7340,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     report_generation_model = None
     try:
         from caption_image import get_runtime_provider_diagnostics
+        # Prepare vision diag for the next step.
         vision_diag = get_runtime_provider_diagnostics() or {}
         caption_provider = vision_diag.get('last_provider_used')
         provider_key = str(caption_provider or '').strip().lower()
@@ -6214,6 +7353,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     except Exception:
         pass
 
+    # Prepare local requires model caption for the next step.
     local_requires_model_caption = bool(
         force_local_artifact_pipeline
         and str(os.getenv('LOCAL_REPORT_REQUIRE_MODEL_CAPTION', 'true')).strip().lower()
@@ -6226,7 +7366,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         local_requires_model_caption
         and (caption_failure_reason or caption_quality_blocks_model_report)
     )
+    # Choose the correct branch before the workflow continues.
     if caption_blocks_model_report:
+        # Prepare failure reason for the next step.
         failure_reason = (
             "Local model caption was not available; report generation stopped instead of "
             f"creating a detection-only fallback. {caption_failure_reason or caption_quality_reason}"
@@ -6236,6 +7378,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     if report_generator and not caption_blocks_model_report:
         try:
             # Update progress
+            # Trigger the side effect required for this stage.
             update_report_progress(
                 current=report_id,
                 current_step='Generating analysis report',
@@ -6245,7 +7388,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             logger.info(f" Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
 
             violation_types_raw = violation_types if isinstance(violation_types, list) else []
+            # Choose the correct branch before the workflow continues.
             if not violation_types_raw:
+                # Prepare violation types raw for the next step.
                 violation_types_raw = _extract_violation_types_from_detections(detections)
 
             resolved_violation_count = max(
@@ -6254,6 +7399,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 1,
             )
             violation_types_formatted = [format_violation_type(vt) for vt in violation_types_raw]
+            # Prepare violation summary text for the next step.
             violation_summary_text = ', '.join(violation_types_formatted) if violation_types_formatted else 'PPE Violation Detected'
 
             detections_list = detections if isinstance(detections, list) else []
@@ -6263,6 +7409,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 and str(d.get('class_name') or d.get('class') or '').strip().lower().replace('_', '-').replace(' ', '-')
                 in {'person', 'worker', 'man', 'woman', 'people'}
             )
+            # Prepare effective annotated path for the next step.
             effective_annotated_path = annotated_path if annotated_path.exists() else original_path
             local_nlp_fallback_allowed = bool(
                 force_local_artifact_pipeline
@@ -6294,7 +7441,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 'allow_local_nlp_fallback': local_nlp_fallback_allowed,
                 'report_ready_callback': _signal_local_report_ready,
             }
+            # Choose the correct branch before the workflow continues.
             if force_local_artifact_pipeline and queued_source_scope != 'synced_local':
+                # Prepare values needed by the next step.
                 report_data['source_scope'] = 'local'
             elif queued_source_scope:
                 report_data['source_scope'] = queued_source_scope
@@ -6305,7 +7454,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 report_data['sync_source'] = queued_sync_source
                 report_data['source'] = queued_sync_source
 
+            # Choose the correct branch before the workflow continues.
             if force_local_artifact_pipeline:
+                # Trigger the side effect required for this stage.
                 logger.info(
                     f"Local-first artifact pipeline active for {report_id}; deferring cloud upload until sync"
                 )
@@ -6320,7 +7471,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 int(os.getenv('REPORT_GENERATION_TIMEOUT_SECONDS', '300') or 300)
             )
             if force_local_artifact_pipeline:
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Prepare report gen timeout seconds for the next step.
                     _report_gen_timeout_seconds = max(
                         12,
                         min(
@@ -6330,6 +7483,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     )
                 except (TypeError, ValueError):
                     _report_gen_timeout_seconds = min(_report_gen_timeout_seconds, 25)
+            # Prepare active routing profile for the next step.
             active_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
             cloud_retry_allowed = bool(
                 active_routing_profile == 'cloud'
@@ -6339,10 +7493,12 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             max_report_attempts = 2 if cloud_retry_allowed else 1
 
             for report_attempt in range(1, max_report_attempts + 1):
+                # Prepare result for the next step.
                 result = None
                 attempt_failure_reason = None
 
                 if report_attempt > 1:
+                    # Trigger the side effect required for this stage.
                     logger.warning(
                         f"Retrying cloud report generation for {report_id} after initial failure"
                     )
@@ -6353,10 +7509,12 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     )
                     time.sleep(1.0)
 
+                # Prepare slot acquired for the next step.
                 slot_acquired = report_generation_semaphore.acquire(
                     timeout=REPORT_GENERATION_SLOT_WAIT_SECONDS
                 )
                 if not slot_acquired:
+                    # Prepare attempt failure reason for the next step.
                     attempt_failure_reason = (
                         "Report generator stayed busy for "
                         f"{REPORT_GENERATION_SLOT_WAIT_SECONDS:.1f}s; skipped this model call "
@@ -6368,6 +7526,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     result = None
                     break
 
+                # Prepare gen executor for the next step.
                 _gen_executor = _cf.ThreadPoolExecutor(
                     max_workers=1,
                     thread_name_prefix=f'report-gen-{report_id}-a{report_attempt}',
@@ -6375,8 +7534,11 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 _slot_release_event = Event()
                 _gen_future = None
 
+                # Section: run the release report generation slot workflow with clear inputs and outputs.
                 def _release_report_generation_slot(_future=None):
+                    # Choose the correct branch before the workflow continues.
                     if _slot_release_event.is_set():
+                        # Return the prepared result to the caller.
                         return
                     _slot_release_event.set()
                     try:
@@ -6386,9 +7548,12 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                             f"Could not release report generation slot for {report_id}: {release_err}"
                         )
 
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Prepare gen future for the next step.
                     _gen_future = _gen_executor.submit(report_generator.generate_report, report_data)
                     try:
+                        # Prepare result for the next step.
                         result = _gen_future.result(timeout=_report_gen_timeout_seconds)
                     except _cf.TimeoutError:
                         logger.error(
@@ -6398,6 +7563,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         attempt_failure_reason = (
                             f"Report generation exceeded {_report_gen_timeout_seconds}s wall-clock timeout"
                         )
+                        # Prepare result for the next step.
                         result = None
                     except Exception as report_attempt_error:
                         attempt_failure_reason = (
@@ -6407,10 +7573,13 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                             f" Report generation attempt {report_attempt} failed for {report_id}: "
                             f"{report_attempt_error}"
                         )
+                        # Prepare result for the next step.
                         result = None
                 finally:
+                    # Choose the correct branch before the workflow continues.
                     if _gen_future is not None:
                         if _gen_future.done():
+                            # Trigger the side effect required for this stage.
                             _release_report_generation_slot(_gen_future)
                         else:
                             # Keep the slot held until the abandoned provider call actually
@@ -6420,6 +7589,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     else:
                         _release_report_generation_slot()
                     # Don't block the queue worker waiting for the leaked thread to finish.
+                    # Trigger the side effect required for this stage.
                     _gen_executor.shutdown(wait=False)
 
                 if isinstance(result, dict):
@@ -6427,11 +7597,14 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     if isinstance(result.get('storage_keys'), dict):
                         result_storage_keys = result.get('storage_keys') or {}
                         if any(result_storage_keys.get(key) for key in ('original_image_key', 'annotated_image_key', 'report_html_key', 'report_pdf_key')):
+                            # Trigger the side effect required for this stage.
                             _invalidate_dashboard_snapshot_cache('stats')
 
                 if result and result.get('html'):
+                    # Prepare result nlp analysis for the next step.
                     result_nlp_analysis = result.get('nlp_analysis') if isinstance(result, dict) else {}
                     if isinstance(result_nlp_analysis, dict):
+                        # Prepare report generation provider for the next step.
                         report_generation_provider = result_nlp_analysis.get('provider') or report_generation_provider
                         report_generation_model = result_nlp_analysis.get('model') or report_generation_model
                     target_html = violation_dir / 'report.html'
@@ -6449,26 +7622,33 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                                 logger.warning(f"Could not update status: {e}")
                         break
 
+                    # Prepare attempt failure reason for the next step.
                     attempt_failure_reason = (
                         "report.html was not found in violation directory after generation"
                     )
                 else:
                     if not attempt_failure_reason:
+                        # Prepare attempt failure reason for the next step.
                         attempt_failure_reason = "Report generator returned empty or missing HTML output"
 
+                # Prepare failure reason for the next step.
                 failure_reason = attempt_failure_reason
                 if report_attempt < max_report_attempts:
+                    # Trigger the side effect required for this stage.
                     logger.warning(
                         f"Cloud report generation attempt {report_attempt} failed for {report_id}: "
                         f"{attempt_failure_reason}"
                     )
 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.error(f" Report generation failed: {e}")
             failure_reason = f"{type(e).__name__}: {e}"
+    # Trigger the side effect required for this stage.
     _record_generation_timing('report_generation', report_generation_started_at)
 
     if not report_created and (violation_dir / 'report.html').exists():
+        # Trigger the side effect required for this stage.
         logger.warning(
             f"Report artifact exists for {report_id} despite missing generator result; "
             "treating the report as completed to keep local status consistent"
@@ -6477,10 +7657,13 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         failure_reason = None
         failure_path = violation_dir / 'generation_failure.txt'
         try:
+            # Choose the correct branch before the workflow continues.
             if failure_path.exists():
+                # Trigger the side effect required for this stage.
                 failure_path.unlink()
         except Exception as cleanup_err:
             logger.debug(f"Could not remove stale generation failure file for {report_id}: {cleanup_err}")
+        # Choose the correct branch before the workflow continues.
         if should_update_cloud_status and not report_ready_signal_sent:
             try:
                 db_manager.update_detection_status(report_id, 'completed')
@@ -6488,22 +7671,27 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                 _activate_local_offline_runtime('process_queued_violation.artifact_completed', status_err)
                 logger.warning(f"Could not update completed status after report artifact detection: {status_err}")
 
+    # Choose the correct branch before the workflow continues.
     if not report_created and allow_placeholder_report and force_reprocess_requested:
         try:
+            # Trigger the side effect required for this stage.
             logger.warning(
                 f"Placeholder report fallback activated for {report_id} (forced reprocess); "
                 "creating placeholder HTML report."
             )
             create_placeholder_report(violation_dir, report_id, timestamp, detections, caption)
             if (violation_dir / 'report.html').exists():
+                # Prepare report created for the next step.
                 report_created = True
                 fallback_message = 'Forced reprocess used placeholder report fallback'
                 if not failure_reason:
+                    # Prepare failure reason for the next step.
                     failure_reason = fallback_message
                 else:
                     failure_reason = f"{failure_reason}; placeholder report fallback applied"
                 if should_update_cloud_status:
                     try:
+                        # Trigger the side effect required for this stage.
                         db_manager.update_detection_status(
                             report_id,
                             'completed',
@@ -6513,22 +7701,27 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                         _activate_local_offline_runtime('process_queued_violation.status_placeholder_completed', status_err)
                         logger.warning(f"Could not update completed status after placeholder fallback: {status_err}")
         except Exception as fallback_err:
+            # Trigger the side effect required for this stage.
             logger.warning(f"Forced reprocess placeholder fallback failed for {report_id}: {fallback_err}")
 
     # Do not auto-create fallback report for regular processing paths.
+    # Choose the correct branch before the workflow continues.
     if not report_created:
         if not failure_reason:
             failure_reason = "Unknown error: report generation did not complete"
 
         failure_path = violation_dir / 'generation_failure.txt'
         try:
+            # Open the managed resource only for the block that needs it.
             with open(failure_path, 'w', encoding='utf-8') as f:
+                # Trigger the side effect required for this stage.
                 f.write(f"Report ID: {report_id}\n")
                 f.write(f"Timestamp: {timestamp}\n")
                 f.write(f"Reason: {failure_reason}\n")
         except Exception as e:
             logger.warning(f"Could not persist generation failure details: {e}")
 
+        # Choose the correct branch before the workflow continues.
         if should_update_cloud_status:
             try:
                 db_manager.update_detection_status(
@@ -6537,10 +7730,12 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     failure_reason
                 )
             except Exception as e:
+                # Trigger the side effect required for this stage.
                 _activate_local_offline_runtime('process_queued_violation.status_failed', e)
                 logger.warning(f"Could not update failed status for report: {e}")
 
     # Save metadata
+    # Prepare values needed by the next step.
     generation_timings_seconds['total'] = round(max(0.0, time.perf_counter() - generation_started_at), 2)
     violation_types_formatted = [format_violation_type(vt) for vt in violation_types] if violation_types else []
     # Compute violation/person counts and missing-PPE labels so the reports
@@ -6557,7 +7752,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         _person_count_meta = 0
     _missing_ppe_meta: List[str] = []
     _ppe_tags_meta: List[str] = []
+    # Process each item in this collection using the same rule set.
     for _vt in violation_types_formatted:
+        # Prepare label for the next step.
         _label = str(_vt or '').strip()
         if not _label:
             continue
@@ -6565,11 +7762,14 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         _clean = _label
         for _prefix in ('NO-', 'No-', 'no-', 'Missing ', 'missing '):
             if _clean.startswith(_prefix):
+                # Prepare clean for the next step.
                 _clean = _clean[len(_prefix):].strip()
                 break
+        # Choose the correct branch before the workflow continues.
         if _clean:
             _missing_ppe_meta.append(_clean)
             _ppe_tags_meta.append(_clean.replace(' ', '-').upper())
+    # Prepare violation count meta for the next step.
     _violation_count_meta = max(len(violation_types_formatted), len(_missing_ppe_meta), 0)
     metadata = {
         'report_id': report_id,
@@ -6603,7 +7803,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         'failure_reason': None if report_created else failure_reason,
         'generation_timings_seconds': dict(generation_timings_seconds),
     }
+    # Choose the correct branch before the workflow continues.
     if force_local_artifact_pipeline and queued_source_scope != 'synced_local':
+        # Prepare values needed by the next step.
         metadata['source_scope'] = 'local'
         metadata['source_label'] = 'Local'
     elif queued_source_scope:
@@ -6613,7 +7815,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         )
     if force_local_artifact_pipeline and queued_source_scope != 'synced_local':
         metadata['sync_source'] = 'local_pipeline'
+        # Prepare values needed by the next step.
         metadata['source'] = 'local_pipeline'
+    # Choose the correct branch before the workflow continues.
     elif queued_sync_source:
         metadata['sync_source'] = queued_sync_source
         metadata['source'] = queued_sync_source
@@ -6623,6 +7827,7 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
         json.dump(metadata, f, indent=2)
 
     try:
+        # Prepare realtime metadata for the next step.
         realtime_metadata = dict(metadata)
         realtime_metadata.update({
             'status': 'completed' if report_created else 'failed',
@@ -6633,7 +7838,9 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
     except Exception as realtime_err:
         logger.debug(f"Could not push queued report status realtime row for {report_id}: {realtime_err}")
 
+    # Choose the correct branch before the workflow continues.
     if report_created and is_local_cache_sync_job and not cloud_upload_skipped:
+        # Prepare local has annotated for the next step.
         local_has_annotated = annotated_path.exists()
         local_has_report = (violation_dir / 'report.html').exists()
         if _local_sync_has_complete_cloud_artifacts(
@@ -6641,8 +7848,10 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
             local_has_annotated=local_has_annotated,
             local_has_report=local_has_report,
         ):
+            # Prepare cleanup summary for the next step.
             cleanup_summary = _cleanup_local_artifacts_after_cloud_sync(report_id, violation_dir)
             if cleanup_summary.get('cleaned'):
+                # Trigger the side effect required for this stage.
                 logger.info(
                     f"Cleaned local artifacts after cloud sync for {report_id} "
                     f"(reason={cleanup_summary.get('reason')})"
@@ -6653,23 +7862,28 @@ def process_queued_violation(queued_violation: 'QueuedViolation'):
                     f"(reason={cleanup_summary.get('reason')})"
                 )
         else:
+            # Trigger the side effect required for this stage.
             logger.info(
                 f"Skipped local cleanup for {report_id}: cloud artifact keys incomplete "
                 f"(keys={sorted(result_storage_keys.keys()) if isinstance(result_storage_keys, dict) else []})"
             )
 
+    # Trigger the side effect required for this stage.
     logger.info(f" Queued violation processing complete: {report_id}")
 
 
+# Section: run the create placeholder report workflow with clear inputs and outputs.
 def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, detections: List, caption: str):
     """Create a placeholder HTML report when generation fails."""
     report_html_path = violation_dir / 'report.html'
     placeholder_routing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
     local_diag = {}
     try:
+        # Prepare local diag for the next step.
         local_diag = _get_local_mode_diagnostics()
     except Exception:
         local_diag = {}
+    # Choose the correct branch before the workflow continues.
     if placeholder_routing_profile == 'local':
         placeholder_warning_message = (
             f"The local NLP report generator ({LOCAL_OLLAMA_UNIFIED_MODEL}) is not configured or not running."
@@ -6680,12 +7894,14 @@ def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, de
             "This placeholder was produced so the violation is still recorded; the report will be "
             "regenerated automatically once the cloud provider is reachable again."
         )
+    # Prepare placeholder severity for the next step.
     placeholder_severity = _classify_violation_severity(
         detections=detections if isinstance(detections, list) else [],
         violation_count=len(detections or []),
     )
     diagnostics_html = ""
     if placeholder_routing_profile == 'local':
+        # Prepare diagnostics html for the next step.
         diagnostics_html = f"""
         <div class="info">
             <h3>Local Model Diagnostics</h3>
@@ -6696,6 +7912,7 @@ def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, de
             <p><strong>Next action:</strong> Start Ollama and run <code>{html.escape(str(local_diag.get('pull_command') or ('ollama pull ' + LOCAL_OLLAMA_UNIFIED_MODEL)))}</code>.</p>
         </div>
         """
+    # Prepare placeholder html for the next step.
     placeholder_html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -6735,11 +7952,14 @@ def create_placeholder_report(violation_dir: Path, report_id: str, timestamp, de
     </div>
 </body>
 </html>"""
+    # Open the managed resource only for the block that needs it.
     with open(report_html_path, 'w', encoding='utf-8') as f:
+        # Trigger the side effect required for this stage.
         f.write(placeholder_html)
     logger.info(f"Placeholder report saved: {report_html_path}")
 
 
+# Section: run the process violation workflow with clear inputs and outputs.
 def process_violation(frame: np.ndarray, detections: List[Dict]):
     """
     Process a detected violation: save images, generate caption and report.
@@ -6747,12 +7967,14 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
     """
     global last_violation_time
 
+    # Trigger the side effect required for this stage.
     logger.info("=" * 80)
     logger.info("PROCESS_VIOLATION CALLED")
     logger.info("=" * 80)
 
     try:
         # Check cooldown
+        # Prepare current time for the next step.
         current_time = time.time()
         if current_time - last_violation_time < VIOLATION_COOLDOWN:
             logger.info(f"Violation cooldown active ({int(VIOLATION_COOLDOWN - (current_time - last_violation_time))}s remaining)")
@@ -6764,6 +7986,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         violation_detections = _extract_violation_detections(detections)
 
         if not violation_detections:
+            # Trigger the side effect required for this stage.
             logger.warning("No violations found in detections")
             return
 
@@ -6773,6 +7996,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             detections=detections,
             violation_count=len(violation_detections),
         )
+        # Trigger the side effect required for this stage.
         logger.info(f" PPE VIOLATION DETECTED: {violation_types}")
         logger.info("   Starting full processing...")
         logger.info(f"   Pipeline available: {FULL_PIPELINE_AVAILABLE}")
@@ -6793,6 +8017,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         logger.info(f" Saved original image: {original_path}")
 
         # Save preliminary metadata immediately to trigger real-time notification
+        # Prepare metadata for the next step.
         metadata = {
             'report_id': report_id,
             'timestamp': timestamp.isoformat(),
@@ -6805,8 +8030,10 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             'has_caption': False,
             'has_report': False
         }
+        # Prepare metadata path for the next step.
         metadata_path = violation_dir / 'metadata.json'
         with open(metadata_path, 'w') as f:
+            # Trigger the side effect required for this stage.
             json.dump(metadata, f, indent=2)
         logger.info(f" Preliminary metadata saved: {metadata_path}")
 
@@ -6822,6 +8049,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                     device_id=runtime_device_id,
                     status='pending'
                 )
+                # Trigger the side effect required for this stage.
                 logger.info(f" Inserted PENDING detection event: {report_id}")
             except Exception as e:
                 _activate_local_offline_runtime('process_violation.insert_pending_event', e)
@@ -6831,6 +8059,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                 )
 
         # Save annotated frame
+        # Prepare values needed by the next step.
         _, annotated = predict_image(frame, conf=0.25)
         annotated_path = violation_dir / 'annotated.jpg'
         cv2.imwrite(str(annotated_path), annotated)
@@ -6840,16 +8069,21 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         caption = ""
         caption_path = violation_dir / 'caption.txt'
         caption_quality_fallback_applied = False
+        # Prepare caption quality reason for the next step.
         caption_quality_reason = ''
         caption_failure_reason = ''
         logger.info(f"Caption generator status: {caption_generator is not None}")
 
         if caption_generator:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Trigger the side effect required for this stage.
                 logger.info(" Generating image caption with LLaVA...")
                 caption = caption_generator.generate_caption(str(original_path))
                 if caption:
+                    # Open the managed resource only for the block that needs it.
                     with open(caption_path, 'w', encoding='utf-8') as f:
+                        # Trigger the side effect required for this stage.
                         f.write(caption)
                     logger.info(f" Caption saved: {caption_path}")
                     logger.info(f"  Caption preview: {caption[:100]}...")
@@ -6860,37 +8094,46 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                             f" Local mode unavailable for {report_id}: {caption_failure_reason}. "
                             "Caption marked unavailable; strict local report generation will block fallback output."
                         )
+                        # Prepare caption for the next step.
                         caption = (
                             "Caption unavailable due to local-mode provider issue. "
                             f"{caption_failure_reason} "
                             "Report generated using detection-only fallback analysis."
                         )
                         with open(caption_path, 'w', encoding='utf-8') as f:
+                            # Trigger the side effect required for this stage.
                             f.write(caption)
                 else:
+                    # Trigger the side effect required for this stage.
                     logger.error("Caption generation returned None or empty string")
                     caption = "Caption generation returned empty"
             except Exception as e:
+                # Trigger the side effect required for this stage.
                 logger.error(f" Caption generation failed: {e}", exc_info=True)
                 caption = "Caption generation failed"
         else:
             # Save placeholder caption even if generator not available
+            # Trigger the side effect required for this stage.
             logger.warning("Caption generator not available - saving placeholder")
             caption = "Image captioning not available - LLaVA model not loaded. Install dependencies: pip install transformers accelerate bitsandbytes"
             with open(caption_path, 'w', encoding='utf-8') as f:
                 f.write(caption)
             logger.info(f" Placeholder caption saved: {caption_path}")
 
+        # Prepare values needed by the next step.
         caption, caption_quality_fallback_applied, caption_quality_reason = _enforce_caption_quality_floor(
             caption,
             detections,
             violation_types=violation_types,
         )
         try:
+            # Open the managed resource only for the block that needs it.
             with open(caption_path, 'w', encoding='utf-8') as f:
+                # Trigger the side effect required for this stage.
                 f.write(caption)
             if caption_quality_fallback_applied:
                 if _caption_quality_reason_is_augmented(caption_quality_reason):
+                    # Trigger the side effect required for this stage.
                     logger.info(
                         f"Caption quality YOLO context augmentation applied for {report_id} "
                         f"(reason={caption_quality_reason})"
@@ -6900,9 +8143,11 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                         f"Caption quality fallback applied for {report_id} (reason={caption_quality_reason})"
                     )
         except Exception as caption_write_error:
+            # Trigger the side effect required for this stage.
             logger.warning(f"Failed to persist caption for {report_id}: {caption_write_error}")
 
         # Generate report if available
+        # Prepare report created for the next step.
         report_created = False
         logger.info(f"Report generator status: {report_generator is not None}")
         caption_provider = None
@@ -6912,6 +8157,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         generation_failure_reason = ''
         try:
             from caption_image import get_runtime_provider_diagnostics
+            # Prepare vision diag for the next step.
             vision_diag = get_runtime_provider_diagnostics() or {}
             caption_provider = vision_diag.get('last_provider_used')
             provider_key = str(caption_provider or '').strip().lower()
@@ -6924,6 +8170,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         except Exception:
             pass
 
+        # Prepare local requires model caption for the next step.
         local_requires_model_caption = bool(
             _is_local_pipeline_runtime_active()
             and str(os.getenv('LOCAL_REPORT_REQUIRE_MODEL_CAPTION', 'true')).strip().lower()
@@ -6936,7 +8183,9 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             local_requires_model_caption
             and (caption_failure_reason or caption_quality_blocks_model_report)
         )
+        # Choose the correct branch before the workflow continues.
         if caption_blocks_model_report:
+            # Prepare generation failure reason for the next step.
             generation_failure_reason = (
                 "Local model caption was not available; report generation stopped instead of "
                 f"creating a detection-only fallback. {caption_failure_reason or caption_quality_reason}"
@@ -6946,7 +8195,9 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         if report_generator and not caption_blocks_model_report:
             try:
                 # Update status to "generating"
+                # Choose the correct branch before the workflow continues.
                 if db_manager:
+                    # Protect this step so expected failures can fall back cleanly.
                     try:
                         db_manager.update_detection_status(report_id, 'generating')
                         logger.info(f" Status updated to GENERATING: {report_id}")
@@ -6955,6 +8206,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
 
                 logger.info(f" Generating NLP report with local model ({LOCAL_OLLAMA_UNIFIED_MODEL})...")
 
+                # Prepare detections list for the next step.
                 detections_list = detections if isinstance(detections, list) else []
                 detected_person_count = sum(
                     1 for d in detections_list
@@ -6990,8 +8242,10 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                 logger.info(f"Report generation result: {result}")
 
                 if result and result.get('html'):
+                    # Prepare result nlp analysis for the next step.
                     result_nlp_analysis = result.get('nlp_analysis') if isinstance(result, dict) else {}
                     if isinstance(result_nlp_analysis, dict):
+                        # Prepare report generation provider for the next step.
                         report_generation_provider = result_nlp_analysis.get('provider') or report_generation_provider
                         report_generation_model = result_nlp_analysis.get('model') or report_generation_model
                     # Check if report was created in violations directory
@@ -7001,17 +8255,21 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                         report_created = True
                         # Update status to "completed"
                         if db_manager:
+                            # Protect this step so expected failures can fall back cleanly.
                             try:
                                 db_manager.update_detection_status(report_id, 'completed')
                                 logger.info(f" Status updated to COMPLETED: {report_id}")
                             except Exception as e:
                                 logger.warning(f"Could not update status: {e}")
                     else:
+                        # Trigger the side effect required for this stage.
                         logger.warning(f" Report not found in violations directory: {target_html}")
                 else:
+                    # Trigger the side effect required for this stage.
                     logger.warning(f" Report generation returned None or no HTML path. Result: {result}")
 
             except Exception as e:
+                # Trigger the side effect required for this stage.
                 logger.error(f" Report generation failed: {e}", exc_info=True)
                 # Update status to "failed"
                 if db_manager:
@@ -7022,15 +8280,18 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
                         logger.warning(f"Could not update status: {e2}")
 
         # Do not auto-create fallback report templates. Keep explicit failed status.
+        # Choose the correct branch before the workflow continues.
         if not report_created and db_manager:
             failure_reason = generation_failure_reason or "Report generation did not produce model-generated HTML output"
             try:
+                # Trigger the side effect required for this stage.
                 db_manager.update_detection_status(report_id, 'failed', failure_reason)
                 logger.info(f" Status updated to FAILED: {report_id}")
             except Exception as e:
                 logger.warning(f"Could not update failed status: {e}")
 
         # Save metadata
+        # Prepare metadata for the next step.
         metadata = {
             'report_id': report_id,
             'timestamp': timestamp.isoformat(),
@@ -7052,8 +8313,10 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
             'failure_reason': None if report_created else (generation_failure_reason or None),
         }
 
+        # Prepare metadata path for the next step.
         metadata_path = violation_dir / 'metadata.json'
         with open(metadata_path, 'w') as f:
+            # Trigger the side effect required for this stage.
             json.dump(metadata, f, indent=2)
         logger.info(f" Metadata saved: {metadata_path}")
 
@@ -7062,6 +8325,7 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
         logger.info(f"   - Files: original.jpg, annotated.jpg, caption.txt, report.html, metadata.json")
 
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error processing violation: {e}", exc_info=True)
 
 
@@ -7071,15 +8335,19 @@ def process_violation(frame: np.ndarray, detections: List[Dict]):
 
 def _request_prefers_html(req) -> bool:
     """Best-effort check to distinguish browser navigation from API clients."""
+    # Prepare accept for the next step.
     accept = str(req.headers.get('Accept', '') or '').lower()
     if 'text/html' in accept:
+        # Return the prepared result to the caller.
         return True
     user_agent = str(req.headers.get('User-Agent', '') or '').lower()
     browser_signals = ('mozilla', 'chrome', 'safari', 'edg', 'firefox')
     return any(signal in user_agent for signal in browser_signals)
 
 
+# Section: run the build api only redirect page workflow with clear inputs and outputs.
 def _build_api_only_redirect_page(frontend_url: str) -> str:
+    # Prepare safe url for the next step.
     safe_url = html.escape(frontend_url, quote=True)
     return f"""<!doctype html>
 <html lang=\"en\">
@@ -7097,12 +8365,16 @@ def _build_api_only_redirect_page(frontend_url: str) -> str:
 </body>
 </html>"""
 
+# Section: run the index workflow with clear inputs and outputs.
 @app.route('/')
 def index():
     """Serve frontend (unified mode) or a backend status payload (API-only mode)."""
+    # Trigger the side effect required for this stage.
     ensure_startup_thread()
     if not SERVE_FRONTEND:
+        # Choose the correct branch before the workflow continues.
         if API_ONLY_ROOT_REDIRECT_ENABLED and FRONTEND_APP_URL and _request_prefers_html(request):
+            # Prepare response for the next step.
             response = Response(_build_api_only_redirect_page(FRONTEND_APP_URL), mimetype='text/html')
             response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
             response.headers['Pragma'] = 'no-cache'
@@ -7115,18 +8387,23 @@ def index():
             'frontend_url': FRONTEND_APP_URL or None,
             'message': 'Frontend is deployed separately. Use this host for API requests only.'
         })
+    # Return the prepared result to the caller.
     return send_from_directory('frontend', 'index.html')
 
 
+# Section: run the api startup status workflow with clear inputs and outputs.
 @app.route('/api/system/startup-status', methods=['GET'])
 def api_startup_status():
     """Expose startup progress so frontend can block UI until system is fully ready."""
     ensure_startup_thread()
 
     now = time.time()
+    # Open the managed resource only for the block that needs it.
     with _startup_status_response_cache_lock:
+        # Prepare cached for the next step.
         cached = _startup_status_response_cache
         if cached['data'] is not None and (now - cached['ts']) < _STARTUP_STATUS_CACHE_TTL_SECONDS:
+            # Prepare response for the next step.
             response = jsonify(cached['data'])
             response.status_code = cached['code']
             response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -7134,8 +8411,10 @@ def api_startup_status():
             response.headers['Expires'] = '0'
             return response
 
+    # Prepare snapshot for the next step.
     snapshot = get_startup_state_snapshot()
     if isinstance(snapshot, dict):
+        # Prepare values needed by the next step.
         snapshot['runtime'] = {
             'pid': os.getpid(),
             'ppid': os.getppid() if hasattr(os, 'getppid') else None,
@@ -7143,8 +8422,10 @@ def api_startup_status():
             'python_version': sys.version.split(' ', 1)[0],
             'argv0': sys.argv[0] if sys.argv else None,
         }
+    # Prepare status code for the next step.
     status_code = 200
     if snapshot.get('status') == 'error':
+        # Prepare status code for the next step.
         status_code = 500
     elif not snapshot.get('ready'):
         status_code = 202
@@ -7154,6 +8435,7 @@ def api_startup_status():
         _startup_status_response_cache['data'] = snapshot
         _startup_status_response_cache['code'] = status_code
 
+    # Prepare response for the next step.
     response = jsonify(snapshot)
     response.status_code = status_code
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -7162,28 +8444,36 @@ def api_startup_status():
     return response
 
 
+# Section: run the favicon workflow with clear inputs and outputs.
 @app.route('/favicon.ico')
 def favicon():
     """Serve favicon."""
+    # Choose the correct branch before the workflow continues.
     if not SERVE_FRONTEND:
+        # Trigger the side effect required for this stage.
         abort(404)
     return send_from_directory('frontend', 'favicon.ico', mimetype='image/x-icon')
 
 
+# Section: run the web manifest workflow with clear inputs and outputs.
 @app.route('/manifest.json')
 def web_manifest():
     """Serve web app manifest for PWA installation."""
     if not SERVE_FRONTEND:
         abort(404)
+    # Return the prepared result to the caller.
     return send_from_directory('frontend', 'manifest.json', mimetype='application/manifest+json')
 
 
+# Section: run the service worker workflow with clear inputs and outputs.
 @app.route('/service-worker.js')
 def service_worker():
     """Serve service worker at root scope for full-app offline support."""
     if not SERVE_FRONTEND:
+        # Trigger the side effect required for this stage.
         abort(404)
     response = send_from_directory('frontend', 'service-worker.js', mimetype='application/javascript')
+    # Prepare values needed by the next step.
     response.headers['Cache-Control'] = 'no-cache'
     response.headers['Service-Worker-Allowed'] = '/'
     return response
@@ -7196,6 +8486,7 @@ def service_worker():
 @app.route('/api/violations')
 def api_violations():
     """Get all violations with details from Supabase."""
+    # Prepare requested limit for the next step.
     requested_limit = request.args.get('limit', 200, type=int)
     limit = max(1, min(requested_limit or 200, 5000))
     cache_key = (
@@ -7207,16 +8498,22 @@ def api_violations():
         cache_key,
         VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS,
     )
+    # Choose the correct branch before the workflow continues.
     if cached_payload is not None:
+        # Return the prepared result to the caller.
         return jsonify(cached_payload)
 
+    # Section: run the normalize source scope workflow with clear inputs and outputs.
     def _normalize_source_scope(scope: Any) -> str:
         normalized = str(scope or '').strip().lower()
         if normalized in ('local', 'cloud', 'shared', 'synced_local'):
+            # Return the prepared result to the caller.
             return normalized
         return ''
 
+    # Section: run the build source payload workflow with clear inputs and outputs.
     def _build_source_payload(scope: str, reason: str) -> Dict[str, str]:
+        # Prepare normalized scope for the next step.
         normalized_scope = _normalize_source_scope(scope) or 'cloud'
         label_map = {
             'local': 'Local',
@@ -7230,9 +8527,12 @@ def api_violations():
             'source_reason': str(reason or '').strip() or 'inferred',
         }
 
+    # Section: run the attach violation image urls workflow with clear inputs and outputs.
     def _attach_violation_image_urls(row: Dict[str, Any]) -> Dict[str, Any]:
+        # Prepare report id for the next step.
         report_id = str((row or {}).get('report_id') or '').strip()
         if not report_id:
+            # Return the prepared result to the caller.
             return row
 
         original_url = f"/image/{report_id}/original.jpg" if row.get('has_original') else None
@@ -7241,7 +8541,9 @@ def api_violations():
         if not primary_url:
             return row
 
+        # Choose the correct branch before the workflow continues.
         if original_url and not row.get('original_image_url'):
+            # Prepare values needed by the next step.
             row['original_image_url'] = original_url
         if annotated_url and not row.get('annotated_image_url'):
             row['annotated_image_url'] = annotated_url
@@ -7250,11 +8552,14 @@ def api_violations():
         if not row.get('thumbnail_url'):
             row['thumbnail_url'] = primary_url
 
+        # Prepare source scope for the next step.
         source_scope = _normalize_source_scope(row.get('source_scope'))
         if source_scope in ('local', 'synced_local') and row.get('has_local_artifacts') and not row.get('local_image_url'):
+            # Prepare values needed by the next step.
             row['local_image_url'] = primary_url
         return row
 
+    # Section: run the infer report source scope workflow with clear inputs and outputs.
     def _infer_report_source_scope(
         *,
         device_id: Any,
@@ -7264,7 +8569,9 @@ def api_violations():
         detection_data: Optional[Dict[str, Any]],
         local_only: bool = False,
     ) -> Tuple[str, str]:
+        # Choose the correct branch before the workflow continues.
         if local_only:
+            # Return the prepared result to the caller.
             return 'local', 'local_only_cache_row'
 
         detection_data = detection_data if isinstance(detection_data, dict) else {}
@@ -7285,6 +8592,7 @@ def api_violations():
             sync_source=source_marker,
             device_id=device_key,
         )
+        # Prepare local origin marker for the next step.
         local_origin_marker = _is_local_pipeline_origin_marker(
             source_scope='',
             sync_source=source_marker,
@@ -7295,6 +8603,7 @@ def api_violations():
             or detection_data.get('cloud_sync_state')
             or ''
         ).strip().lower()
+        # Prepare sync state confirmed for the next step.
         sync_state_confirmed = (
             sync_state in {'synced', 'cloud_completed', 'completed_synced'}
             or sync_state.startswith('cloud_sync_')
@@ -7310,14 +8619,18 @@ def api_violations():
             report_id='',
         )
 
+        # Prepare explicit scope for the next step.
         explicit_scope = _normalize_source_scope(
             detection_data.get('source_scope')
             or detection_data.get('report_scope')
             or detection_data.get('scope')
         )
         if explicit_scope:
+            # Choose the correct branch before the workflow continues.
             if explicit_scope == 'synced_local':
+                # Choose the correct branch before the workflow continues.
                 if confirmed_synced_local:
+                    # Return the prepared result to the caller.
                     return 'synced_local', 'confirmed_synced_local'
                 if active_profile != 'local' and has_cloud_artifacts and not local_origin:
                     return 'cloud', 'repaired_synced_local_in_cloud_mode'
@@ -7325,8 +8638,10 @@ def api_violations():
                     return 'cloud', 'repaired_stale_synced_local_handoff'
                 if local_origin or has_local_artifacts:
                     return 'local', 'repaired_unsynced_local_scope'
+            # Return the prepared result to the caller.
             return explicit_scope, 'detection_data.scope'
 
+        # Choose the correct branch before the workflow continues.
         if confirmed_synced_local:
             return 'synced_local', source_marker or 'confirmed_synced_local'
 
@@ -7349,8 +8664,10 @@ def api_violations():
             if active_profile == 'cloud' and not local_origin:
                 return 'cloud', 'cloud_profile_inflight'
             return 'local', 'local_artifacts'
+        # Return the prepared result to the caller.
         return 'cloud', 'default_cloud'
 
+    # Section: run the collect local violation rows workflow with clear inputs and outputs.
     def _collect_local_violation_rows(source_reason: str = 'filesystem_fallback') -> List[Dict[str, Any]]:
         """Collect violation rows from local filesystem for local/offline fallback."""
         local_violations: List[Dict[str, Any]] = []
@@ -7358,20 +8675,25 @@ def api_violations():
             return local_violations
 
         for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
+            # Choose the correct branch before the workflow continues.
             if not violation_dir.is_dir():
                 continue
 
             report_id = violation_dir.name
             try:
+                # Prepare timestamp for the next step.
                 timestamp = _parse_report_id_timestamp(report_id)
 
                 metadata_file = violation_dir / 'metadata.json'
                 metadata = {}
                 if metadata_file.exists():
+                    # Open the managed resource only for the block that needs it.
                     with open(metadata_file, 'r') as f:
+                        # Prepare metadata for the next step.
                         metadata = json.load(f)
 
                 has_report = (violation_dir / 'report.html').exists()
+                # Prepare has original for the next step.
                 has_original = (violation_dir / 'original.jpg').exists()
                 has_annotated = (violation_dir / 'annotated.jpg').exists()
                 metadata_missing_ppe = [
@@ -7384,7 +8706,9 @@ def api_violations():
                     for item in (metadata.get('ppe_tags') if isinstance(metadata.get('ppe_tags'), list) else [])
                     if str(item).strip()
                 ]
+                # Choose the correct branch before the workflow continues.
                 if not metadata_ppe_tags and isinstance(metadata.get('violation_types'), list):
+                    # Prepare metadata ppe tags for the next step.
                     metadata_ppe_tags = [
                         str(item).strip()
                         for item in metadata.get('violation_types')
@@ -7396,7 +8720,9 @@ def api_violations():
                         for item in metadata.get('violations')
                         if str(item).strip()
                     ]
+                # Choose the correct branch before the workflow continues.
                 if not metadata_ppe_tags and isinstance(metadata.get('detections'), list):
+                    # Prepare metadata ppe tags for the next step.
                     metadata_ppe_tags = _extract_violation_types_from_detections(metadata.get('detections') or [])
                 if not metadata_missing_ppe and metadata_ppe_tags:
                     metadata_missing_ppe = [
@@ -7405,7 +8731,9 @@ def api_violations():
                         if str(tag).strip()
                     ]
                 metadata_violation_count = metadata.get('violation_count')
+                # Choose the correct branch before the workflow continues.
                 if not isinstance(metadata_violation_count, (int, float)):
+                    # Prepare metadata violation count for the next step.
                     metadata_violation_count = metadata.get('detection_count')
                 if not isinstance(metadata_violation_count, (int, float)):
                     metadata_violation_count = len(metadata_ppe_tags or metadata_missing_ppe)
@@ -7414,6 +8742,7 @@ def api_violations():
                     or metadata.get('report_scope')
                     or metadata.get('scope')
                 )
+                # Prepare metadata source reason for the next step.
                 metadata_source_reason = str(metadata.get('source_reason') or source_reason).strip() or source_reason
                 classified_metadata_severity = _classify_violation_severity(
                     violation_types=metadata_ppe_tags,
@@ -7427,7 +8756,9 @@ def api_violations():
                     else _normalize_report_severity(metadata.get('severity'), default=classified_metadata_severity)
                 )
 
+                # Choose the correct branch before the workflow continues.
                 if has_report:
+                    # Prepare status for the next step.
                     status = 'completed'
                 elif has_annotated:
                     status = 'generating'
@@ -7436,6 +8767,7 @@ def api_violations():
                 else:
                     status = 'pending'
 
+                # Prepare local row for the next step.
                 local_row = {
                     'report_id': report_id,
                     'timestamp': timestamp.isoformat(),
@@ -7460,17 +8792,20 @@ def api_violations():
                     'sync_source': metadata.get('sync_source') or metadata.get('source'),
                     **_build_source_payload(metadata_source_scope or 'local', metadata_source_reason)
                 }
+                # Trigger the side effect required for this stage.
                 local_violations.append(_attach_violation_image_urls(local_row))
             except ValueError:
                 logger.warning(f"Skipping invalid report directory: {report_id}")
                 continue
 
+        # Trigger the side effect required for this stage.
         local_violations.sort(
             key=lambda item: str(item.get('timestamp') or ''),
             reverse=True,
         )
         return local_violations[:max(1, int(limit or 1))]
 
+    # Choose the correct branch before the workflow continues.
     if db_manager is None:
         payload = _collect_local_violation_rows('filesystem_fallback')
         _set_cached_dashboard_snapshot(
@@ -7479,7 +8814,9 @@ def api_violations():
             payload,
             VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS,
         )
+        # Return the prepared result to the caller.
         return jsonify(payload)
+    # Choose the correct branch before the workflow continues.
     if _is_supabase_offline_backoff_active():
         payload = _collect_local_violation_rows('filesystem_fallback_offline_backoff')
         _set_cached_dashboard_snapshot(
@@ -7488,21 +8825,26 @@ def api_violations():
             payload,
             VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS,
         )
+        # Return the prepared result to the caller.
         return jsonify(payload)
 
     # Use Supabase - get ALL violations including pending
+    # Protect this step so expected failures can fall back cleanly.
     try:
         # Use the new method that includes pending detection events
         if hasattr(db_manager, 'get_all_violations_with_status'):
+            # Prepare violations for the next step.
             violations = db_manager.get_all_violations_with_status(limit=limit)
         else:
             violations = db_manager.get_recent_violations(limit=limit)
 
         # Format violations for API response
+        # Prepare formatted violations for the next step.
         formatted_violations = []
         for v in violations:
             report_id = v['report_id']
             local_violation_dir = VIOLATIONS_DIR / str(report_id)
+            # Prepare local has original for the next step.
             local_has_original = (local_violation_dir / 'original.jpg').exists()
             local_has_annotated = (local_violation_dir / 'annotated.jpg').exists()
             local_has_report = (local_violation_dir / 'report.html').exists()
@@ -7512,10 +8854,13 @@ def api_violations():
 
             detection_data_parsed = v.get('detection_data')
             if isinstance(detection_data_parsed, str):
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Prepare detection data parsed for the next step.
                     detection_data_parsed = json.loads(detection_data_parsed)
                 except Exception:
                     detection_data_parsed = None
+            # Choose the correct branch before the workflow continues.
             if not isinstance(detection_data_parsed, dict):
                 detection_data_parsed = {}
 
@@ -7526,11 +8871,13 @@ def api_violations():
             status = v.get('status', 'unknown')
             if status == 'unknown':
                 if v.get('report_html_key') or local_has_report or v.get('violation_id'):
+                    # Prepare status for the next step.
                     status = 'completed'
                 else:
                     status = 'pending'
 
             # Keep list view aligned with status endpoint: local report artifact means ready.
+            # Choose the correct branch before the workflow continues.
             if status in ('pending', 'queued', 'generating', 'processing', 'unknown') and local_has_report:
                 status = 'completed'
 
@@ -7540,6 +8887,7 @@ def api_violations():
             resolved_person_count = None
 
             if detection_data_parsed:
+                # Prepare detections for the next step.
                 detections = detection_data_parsed.get('detections', []) if isinstance(detection_data_parsed.get('detections', []), list) else []
                 detected_people = [
                     d for d in detections
@@ -7549,8 +8897,10 @@ def api_violations():
                     and not d['class_name'].lower().startswith('no-')
                 ]
                 if detected_people:
+                    # Prepare resolved person count for the next step.
                     resolved_person_count = len(detected_people)
 
+                # Prepare raw detection tags for the next step.
                 raw_detection_tags = (
                     detection_data_parsed.get('ppe_tags')
                     or detection_data_parsed.get('violation_types')
@@ -7558,25 +8908,31 @@ def api_violations():
                     or []
                 )
                 if isinstance(raw_detection_tags, str):
+                    # Prepare raw detection tags for the next step.
                     raw_detection_tags = [raw_detection_tags]
                 if not isinstance(raw_detection_tags, list):
                     raw_detection_tags = []
+                # Process each item in this collection using the same rule set.
                 for raw_tag in raw_detection_tags:
                     if not str(raw_tag or '').strip():
                         continue
                     tag_text = str(raw_tag).strip()
                     ppe_tags.append(tag_text)
                     clean_item = re.sub(r'^(NO[-\s]+|Missing\s+)', '', tag_text, flags=re.IGNORECASE)
+                    # Prepare clean item for the next step.
                     clean_item = clean_item.replace('-', ' ').strip()
                     if clean_item:
+                        # Trigger the side effect required for this stage.
                         missing_ppe.append(clean_item)
 
+                # Prepare raw missing items for the next step.
                 raw_missing_items = detection_data_parsed.get('missing_ppe') or []
                 if isinstance(raw_missing_items, str):
                     raw_missing_items = [raw_missing_items]
                 if not isinstance(raw_missing_items, list):
                     raw_missing_items = []
                 for raw_missing in raw_missing_items:
+                    # Choose the correct branch before the workflow continues.
                     if not str(raw_missing or '').strip():
                         continue
                     clean_item = str(raw_missing).strip()
@@ -7584,17 +8940,21 @@ def api_violations():
                     ppe_tags.append(clean_item if _is_violation_label(clean_item) else f"NO-{clean_item}")
 
                 # Extract from violation_summary field in detection data
+                # Choose the correct branch before the workflow continues.
                 if not missing_ppe and 'violation_summary' in detection_data_parsed:
                     summary_items = detection_data_parsed['violation_summary']
                     if isinstance(summary_items, str):
+                        # Prepare summary items for the next step.
                         summary_items = _extract_violation_types_from_summary(summary_items)
                     for item in summary_items if isinstance(summary_items, list) else []:
                         if 'Missing' in item:
+                            # Prepare ppe item for the next step.
                             ppe_item = item.replace('Missing ', '').strip()
                             missing_ppe.append(ppe_item)
                             ppe_tags.append(ppe_item.replace(' ', '-').upper())
 
             # Fallback: parse from violation_summary string
+            # Choose the correct branch before the workflow continues.
             if not missing_ppe and v.get('violation_summary'):
                 summary = v.get('violation_summary', '')
 
@@ -7606,7 +8966,9 @@ def api_violations():
                     violation_items = [item.strip() for item in violations_part.split(',')]
                     for item in violation_items:
                         # Convert "NO-Hardhat" to "Hardhat"
+                        # Choose the correct branch before the workflow continues.
                         if item.startswith('NO-') or item.startswith('No-'):
+                            # Prepare ppe item for the next step.
                             ppe_item = item[3:]  # Remove "NO-" prefix
                             missing_ppe.append(ppe_item)
                             ppe_tags.append(item.upper())  # Keep NO-HARDHAT format for tags
@@ -7616,11 +8978,13 @@ def api_violations():
                             ppe_tags.append(ppe_item.replace(' ', '-').upper())
 
                 # Also try parsing "Missing Hardhat" format
+                # Choose the correct branch before the workflow continues.
                 elif 'Missing' in summary:
                     matches = re.findall(r'Missing ([\w\s]+?)(?:,|\.|$)', summary)
                     missing_ppe.extend(matches)
                     ppe_tags.extend([m.replace(' ', '-').upper() for m in matches])
 
+            # Choose the correct branch before the workflow continues.
             if resolved_person_count is None:
                 resolved_person_count = v.get('person_count', 0)
 
@@ -7629,8 +8993,10 @@ def api_violations():
                 [f"NO-{item}" for item in missing_ppe],
             )
             if normalized_ppe_tags:
+                # Prepare ppe tags for the next step.
                 ppe_tags = normalized_ppe_tags
                 missing_ppe = _missing_ppe_from_violation_types(normalized_ppe_tags)
+            # Prepare row detections for the next step.
             row_detections = (
                 detection_data_parsed.get('detections')
                 if isinstance(detection_data_parsed, dict) and isinstance(detection_data_parsed.get('detections'), list)
@@ -7642,6 +9008,7 @@ def api_violations():
                 violation_count=v.get('violation_count') if v.get('violation_count') else len(missing_ppe),
                 violation_summary=v.get('violation_summary'),
             )
+            # Prepare row severity for the next step.
             row_severity = (
                 classified_row_severity
                 if (ppe_tags or missing_ppe or row_detections)
@@ -7674,6 +9041,7 @@ def api_violations():
             except Exception:
                 pass
 
+            # Prepare row has original for the next step.
             row_has_original = bool(v.get('original_image_key')) or local_has_original
             row_has_annotated = bool(v.get('annotated_image_key')) or local_has_annotated
             row_has_report = bool(v.get('report_html_key')) or local_has_report
@@ -7707,16 +9075,21 @@ def api_violations():
             })
 
         by_id: Dict[str, Dict[str, Any]] = {}
+        # Process each item in this collection using the same rule set.
         for item in formatted_violations:
+            # Prepare item report id for the next step.
             item_report_id = str(item.get('report_id') or '').strip()
             if item_report_id:
+                # Prepare values needed by the next step.
                 by_id[item_report_id] = item
 
         active_listing_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
         allow_standalone_local_rows = active_listing_profile == 'local'
         local_rows = _collect_local_report_state_rows(limit=max(limit, 250))
         visible_sync_probe_rows: List[Dict[str, Any]] = []
+        # Process each item in this collection using the same rule set.
         for local_row in local_rows:
+            # Prepare local report id for the next step.
             local_report_id = str(local_row.get('report_id') or '').strip()
             if not local_report_id:
                 continue
@@ -7724,8 +9097,10 @@ def api_violations():
             local_status = str(local_row.get('status') or '').strip().lower() or 'pending'
             local_visible_sync_candidate = _is_visible_local_cache_sync_candidate(local_row)
             if local_visible_sync_candidate:
+                # Trigger the side effect required for this stage.
                 visible_sync_probe_rows.append(local_row)
             existing = by_id.get(local_report_id)
+            # Choose the correct branch before the workflow continues.
             if existing:
                 existing['has_original'] = bool(existing.get('has_original')) or bool(local_row.get('has_original'))
                 existing['has_annotated'] = bool(existing.get('has_annotated')) or bool(local_row.get('has_annotated'))
@@ -7735,6 +9110,7 @@ def api_violations():
                     local_row.get('has_original') or local_row.get('has_annotated') or local_row.get('has_report')
                 )
 
+                # Prepare existing status for the next step.
                 existing_status = str(existing.get('status') or '').strip().lower()
                 existing_device_key = str(existing.get('device_id') or '').strip().lower()
                 existing_local_device = (
@@ -7748,7 +9124,9 @@ def api_violations():
                     and local_status in ('failed', 'skipped')
                     and not local_row.get('has_report')
                 )
+                # Choose the correct branch before the workflow continues.
                 if local_status in ('completed', 'failed', 'skipped'):
+                    # Prepare values needed by the next step.
                     existing['status'] = local_status
                 elif local_status in ('pending', 'queued', 'processing', 'generating') and existing_status in ('unknown', ''):
                     existing['status'] = local_status
@@ -7761,7 +9139,9 @@ def api_violations():
                         or local_profile_terminal_override
                     )
                 )
+                # Choose the correct branch before the workflow continues.
                 if local_terminal_without_report:
+                    # Prepare values needed by the next step.
                     existing['has_report'] = False
                     existing['has_local_report'] = False
                     existing['has_cloud_report_artifact'] = False
@@ -7770,9 +9150,12 @@ def api_violations():
                     existing['error_message'] = local_row.get('error_message')
                 if not existing.get('timestamp') and local_row.get('timestamp'):
                     existing['timestamp'] = local_row.get('timestamp')
+                # Process each item in this collection using the same rule set.
                 for detail_key in ('missing_ppe', 'ppe_tags'):
+                    # Prepare local values for the next step.
                     local_values = local_row.get(detail_key)
                     if isinstance(local_values, list) and local_values and not existing.get(detail_key):
+                        # Prepare values needed by the next step.
                         existing[detail_key] = list(local_values)
                 local_summary = local_row.get('violation_summary')
                 existing_summary = str(existing.get('violation_summary') or '').strip().lower()
@@ -7780,10 +9163,12 @@ def api_violations():
                     existing['violation_summary'] = local_summary
                 try:
                     existing_count_int = int(existing.get('violation_count') or 0)
+                    # Prepare local count int for the next step.
                     local_count_int = int(local_row.get('violation_count') or 0)
                 except Exception:
                     existing_count_int = 0
                     local_count_int = 0
+                # Choose the correct branch before the workflow continues.
                 if local_count_int > 1 and existing_count_int <= 1:
                     existing['violation_count'] = local_count_int
 
@@ -7791,9 +9176,12 @@ def api_violations():
 
                 local_row_scope = _normalize_source_scope(local_row.get('source_scope'))
                 if local_terminal_without_report and active_listing_profile == 'local':
+                    # Trigger the side effect required for this stage.
                     existing.update(_build_source_payload(local_row_scope or 'local', 'local_terminal_artifact_state'))
                     if (local_row_scope or 'local') == 'local':
+                        # Prepare values needed by the next step.
                         existing['origin'] = existing.get('origin') or 'local'
+                # Choose the correct branch before the workflow continues.
                 elif existing_scope == 'cloud':
                     existing.update(_build_source_payload('cloud', 'cloud_record_with_local_cache_artifacts'))
                 elif str(existing.get('source_scope') or '').strip().lower() in ('', 'unknown'):
@@ -7858,8 +9246,10 @@ def api_violations():
                     'local_cache_row' if allow_standalone_local_rows else 'visible_local_cache_sync_pending'
                 )
             }
+            # Trigger the side effect required for this stage.
             formatted_violations.append(_attach_violation_image_urls(local_formatted_row))
 
+        # Choose the correct branch before the workflow continues.
         if visible_sync_probe_rows and active_listing_profile != 'local':
             _maybe_attempt_visible_local_cache_sync(
                 'api_violations_visible_local',
@@ -7870,6 +9260,7 @@ def api_violations():
             key=lambda item: str(item.get('timestamp') or ''),
             reverse=True
         )
+        # Prepare formatted violations for the next step.
         formatted_violations = formatted_violations[:max(1, int(limit or 1))]
         formatted_violations = [_attach_violation_image_urls(item) for item in formatted_violations]
 
@@ -7879,6 +9270,7 @@ def api_violations():
             formatted_violations,
             VIOLATIONS_SNAPSHOT_CACHE_TTL_SECONDS,
         )
+        # Return the prepared result to the caller.
         return jsonify(formatted_violations)
 
     except Exception as e:
@@ -7886,11 +9278,13 @@ def api_violations():
         logger.error(f"Error fetching violations from Supabase: {e}")
         fallback_rows = _collect_local_violation_rows('filesystem_fallback_after_supabase_error')
         if fallback_rows:
+            # Trigger the side effect required for this stage.
             logger.warning(
                 f"Returning {len(fallback_rows)} local violation rows after Supabase fetch error"
             )
         else:
             logger.warning("Supabase fetch error with no local violation rows; returning empty local fallback")
+        # Trigger the side effect required for this stage.
         _set_cached_dashboard_snapshot(
             'violations',
             cache_key,
@@ -7900,9 +9294,11 @@ def api_violations():
         return jsonify(fallback_rows)
 
 
+# Section: run the api stats workflow with clear inputs and outputs.
 @app.route('/api/stats')
 def api_stats():
     """Get unified violation statistics across cloud and local/synced-local caches."""
+    # Prepare cache key for the next step.
     cache_key = (
         f"db={'present' if db_manager is not None else 'absent'}|"
         f"offline={int(_is_supabase_offline_backoff_active())}"
@@ -7912,7 +9308,9 @@ def api_stats():
         cache_key,
         STATS_SNAPSHOT_CACHE_TTL_SECONDS,
     )
+    # Choose the correct branch before the workflow continues.
     if cached_payload is not None:
+        # Return the prepared result to the caller.
         return jsonify(cached_payload)
 
     now = get_local_time()
@@ -7921,6 +9319,7 @@ def api_stats():
     days_since_monday = now.weekday()
     week_start = today_start - timedelta(days=days_since_monday)
 
+    # Section: run the safe parse timestamp workflow with clear inputs and outputs.
     def _safe_parse_timestamp(
         value: Any,
         *,
@@ -7929,21 +9328,28 @@ def api_stats():
     ) -> Optional[datetime]:
         dt_value: Optional[datetime] = None
 
+        # Choose the correct branch before the workflow continues.
         if isinstance(value, datetime):
+            # Prepare dt value for the next step.
             dt_value = value
         elif value is not None:
             text = str(value).strip()
             if text:
+                # Prepare normalized for the next step.
                 normalized = text.replace('Z', '+00:00') if text.endswith('Z') else text
                 try:
+                    # Prepare dt value for the next step.
                     dt_value = datetime.fromisoformat(normalized)
                 except Exception:
                     dt_value = None
 
+        # Choose the correct branch before the workflow continues.
         if dt_value is None and report_id:
+            # Protect this step so expected failures can fall back cleanly.
             try:
                 dt_value = _parse_report_id_timestamp(report_id)
             except Exception:
+                # Prepare dt value for the next step.
                 dt_value = None
 
         if dt_value is None and fallback_dir is not None:
@@ -7952,35 +9358,46 @@ def api_stats():
             except Exception:
                 dt_value = None
 
+        # Choose the correct branch before the workflow continues.
         if dt_value is None:
+            # Return the prepared result to the caller.
             return None
 
         if dt_value.tzinfo is None:
             dt_value = dt_value.replace(tzinfo=tz_info)
         elif tz_info is not None:
             try:
+                # Prepare dt value for the next step.
                 dt_value = dt_value.astimezone(tz_info)
             except Exception:
                 pass
 
+        # Return the prepared result to the caller.
         return dt_value
 
+    # Section: run the normalize source scope workflow with clear inputs and outputs.
     def _normalize_source_scope(scope: Any) -> str:
         normalized = str(scope or '').strip().lower()
         if normalized in ('local', 'cloud', 'shared', 'synced_local'):
+            # Return the prepared result to the caller.
             return normalized
         return ''
 
+    # Section: run the infer source scope workflow with clear inputs and outputs.
     def _infer_source_scope(row: Dict[str, Any], has_local_artifacts: bool) -> str:
+        # Prepare detection payload for the next step.
         detection_payload = row.get('detection_data')
         if isinstance(detection_payload, str):
             try:
+                # Prepare detection payload for the next step.
                 detection_payload = json.loads(detection_payload)
             except Exception:
                 detection_payload = None
         if not isinstance(detection_payload, dict):
+            # Prepare detection payload for the next step.
             detection_payload = {}
 
+        # Prepare active profile for the next step.
         active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
         device_key = str(row.get('device_id') or '').strip().lower()
         is_local_device = _is_local_artifact_origin_device(device_key)
@@ -7990,6 +9407,7 @@ def api_stats():
             or row.get('report_html_key')
             or row.get('report_pdf_key')
         )
+        # Prepare has cloud report artifact for the next step.
         has_cloud_report_artifact = bool(row.get('report_html_key') or row.get('report_pdf_key'))
         source_marker_for_repair = str(
             detection_payload.get('origin')
@@ -8003,6 +9421,7 @@ def api_stats():
             or detection_payload.get('cloud_sync_state')
             or ''
         ).strip().lower()
+        # Prepare confirmed synced local for the next step.
         confirmed_synced_local = _has_confirmed_synced_local_evidence(
             sync_source=source_marker_for_repair,
             device_id=device_key,
@@ -8012,14 +9431,18 @@ def api_stats():
             report_id=str(row.get('report_id') or ''),
         )
 
+        # Prepare explicit scope for the next step.
         explicit_scope = _normalize_source_scope(
             detection_payload.get('source_scope')
             or detection_payload.get('report_scope')
             or detection_payload.get('scope')
         )
         if explicit_scope:
+            # Choose the correct branch before the workflow continues.
             if explicit_scope == 'synced_local':
+                # Choose the correct branch before the workflow continues.
                 if confirmed_synced_local:
+                    # Return the prepared result to the caller.
                     return 'synced_local'
                 if active_profile != 'local' and has_cloud_artifacts:
                     return 'cloud'
@@ -8027,6 +9450,7 @@ def api_stats():
                     return 'local'
             return explicit_scope
 
+        # Prepare source marker for the next step.
         source_marker = str(
             detection_payload.get('source')
             or detection_payload.get('sync_source')
@@ -8040,7 +9464,9 @@ def api_stats():
             'local_pipeline',
         }
 
+        # Choose the correct branch before the workflow continues.
         if source_marker in local_markers:
+            # Return the prepared result to the caller.
             return 'synced_local' if confirmed_synced_local else 'local'
 
         if has_cloud_artifacts and is_local_device and confirmed_synced_local:
@@ -8050,8 +9476,10 @@ def api_stats():
         if active_profile == 'cloud' and has_local_artifacts and not is_local_device:
             return 'cloud'
 
+        # Return the prepared result to the caller.
         return 'local' if has_local_artifacts else 'cloud'
 
+    # Section: run the build stats payload workflow with clear inputs and outputs.
     def _build_stats_payload(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         severity = {'high': 0, 'medium': 0, 'low': 0}
         source_counts = {'local': 0, 'cloud': 0, 'shared': 0, 'synced_local': 0}
@@ -8059,6 +9487,7 @@ def api_stats():
         completed_statuses = {'completed', 'ready'}
         failed_statuses = {'failed', 'error', 'skipped'}
 
+        # Prepare today count for the next step.
         today_count = 0
         week_count = 0
         pending_count = 0
@@ -8066,8 +9495,10 @@ def api_stats():
         failed_count = 0
 
         for row in rows:
+            # Prepare dt value for the next step.
             dt_value = row.get('timestamp')
             if isinstance(dt_value, datetime):
+                # Choose the correct branch before the workflow continues.
                 if dt_value >= today_start:
                     today_count += 1
                 if dt_value >= week_start:
@@ -8079,6 +9510,7 @@ def api_stats():
             else:
                 severity['medium'] += 1
 
+            # Prepare scope key for the next step.
             scope_key = _normalize_source_scope(row.get('source_scope')) or 'cloud'
             source_counts[scope_key] = source_counts.get(scope_key, 0) + 1
 
@@ -8090,6 +9522,7 @@ def api_stats():
             elif status_key in pending_statuses:
                 pending_count += 1
 
+        # Return the prepared result to the caller.
         return {
             'total': len(rows),
             'today': today_count,
@@ -8107,8 +9540,10 @@ def api_stats():
             'reportsTotal': completed_count,
         }
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
         by_report: Dict[str, Dict[str, Any]] = {}
+        # Prepare active stats profile for the next step.
         active_stats_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
         storage_index = _get_cloud_storage_stats_index()
         storage_report_ids = set(storage_index.get('report_ids') or []) if isinstance(storage_index, dict) else set()
@@ -8118,8 +9553,11 @@ def api_stats():
 
         db_rows: List[Dict[str, Any]] = []
         if db_manager is not None:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Choose the correct branch before the workflow continues.
                 if hasattr(db_manager, 'get_all_violations_with_status'):
+                    # Prepare db rows for the next step.
                     db_rows = db_manager.get_all_violations_with_status(limit=2000) or []
                 else:
                     db_rows = db_manager.get_recent_violations(limit=2000) or []
@@ -8128,7 +9566,9 @@ def api_stats():
                 logger.warning(f"Stats query fell back to local cache: {db_error}")
                 db_rows = []
 
+        # Process each item in this collection using the same rule set.
         for row in db_rows:
+            # Prepare report id for the next step.
             report_id = str(row.get('report_id') or '').strip()
             if not report_id:
                 continue
@@ -8140,9 +9580,12 @@ def api_stats():
             if cloud_storage_authoritative and not storage_has_artifact:
                 continue
 
+            # Prepare scoped row for the next step.
             scoped_row = dict(row)
             if cloud_storage_authoritative:
+                # Choose the correct branch before the workflow continues.
                 if report_id not in storage_image_ids:
+                    # Prepare values needed by the next step.
                     scoped_row['original_image_key'] = None
                     scoped_row['annotated_image_key'] = None
                 if not storage_has_report:
@@ -8150,7 +9593,9 @@ def api_stats():
                     scoped_row['report_pdf_key'] = None
             if report_id in storage_image_ids and not scoped_row.get('original_image_key'):
                 scoped_row['original_image_key'] = f"{getattr(storage_manager, 'images_bucket', 'violation-images')}/{report_id}/original.jpg"
+            # Choose the correct branch before the workflow continues.
             if storage_has_report and not scoped_row.get('report_html_key'):
+                # Prepare values needed by the next step.
                 scoped_row['report_html_key'] = f"{getattr(storage_manager, 'reports_bucket', 'reports')}/{report_id}/report.html"
 
             timestamp_value = _safe_parse_timestamp(
@@ -8159,8 +9604,10 @@ def api_stats():
                 fallback_dir=local_dir if has_local_artifacts else None,
             )
 
+            # Prepare status value for the next step.
             status_value = str(row.get('status') or '').strip().lower()
             if not status_value:
+                # Prepare status value for the next step.
                 status_value = 'completed' if (row.get('report_html_key') or storage_has_report) else 'pending'
             if storage_has_report:
                 status_value = 'completed'
@@ -8168,6 +9615,7 @@ def api_stats():
                 status_value = 'pending'
 
             severity_value = str(row.get('severity') or '').strip().upper()
+            # Choose the correct branch before the workflow continues.
             if severity_value not in ('HIGH', 'MEDIUM', 'LOW'):
                 severity_value = 'MEDIUM'
 
@@ -8179,8 +9627,11 @@ def api_stats():
                 'source_scope': _infer_source_scope(scoped_row, has_local_artifacts),
             }
 
+        # Choose the correct branch before the workflow continues.
         if cloud_storage_authoritative:
+            # Process each item in this collection using the same rule set.
             for report_id in sorted(storage_artifact_ids - set(by_report.keys()), reverse=True):
+                # Prepare timestamp value for the next step.
                 timestamp_value = _safe_parse_timestamp(None, report_id=report_id)
                 by_report[report_id] = {
                     'report_id': report_id,
@@ -8190,21 +9641,25 @@ def api_stats():
                     'source_scope': 'cloud',
                 }
 
+        # Prepare local rows for the next step.
         local_rows = _collect_local_report_state_rows(
             limit=max(500, len(by_report) + 600)
         )
         visible_sync_probe_rows: List[Dict[str, Any]] = []
         for local_row in local_rows:
+            # Prepare report id for the next step.
             report_id = str(local_row.get('report_id') or '').strip()
             if not report_id:
                 continue
             local_visible_sync_candidate = _is_visible_local_cache_sync_candidate(local_row)
             if local_visible_sync_candidate:
+                # Trigger the side effect required for this stage.
                 visible_sync_probe_rows.append(local_row)
             if cloud_storage_authoritative and active_stats_profile != 'local' and report_id not in storage_artifact_ids:
                 if not local_visible_sync_candidate:
                     continue
 
+            # Prepare local dir for the next step.
             local_dir = VIOLATIONS_DIR / report_id
             local_status = str(local_row.get('status') or 'pending').strip().lower()
             timestamp_value = _safe_parse_timestamp(
@@ -8214,7 +9669,9 @@ def api_stats():
             )
 
             existing = by_report.get(report_id)
+            # Choose the correct branch before the workflow continues.
             if existing is None:
+                # Choose the correct branch before the workflow continues.
                 if active_stats_profile != 'local' and not (
                     cloud_storage_authoritative and report_id in storage_artifact_ids
                 ) and not (
@@ -8224,6 +9681,7 @@ def api_stats():
                 local_row_scope = _normalize_source_scope(local_row.get('source_scope')) or (
                     'cloud' if (cloud_storage_authoritative and report_id in storage_artifact_ids) else 'local'
                 )
+                # Prepare values needed by the next step.
                 by_report[report_id] = {
                     'report_id': report_id,
                     'timestamp': timestamp_value,
@@ -8233,22 +9691,28 @@ def api_stats():
                 }
                 continue
 
+            # Choose the correct branch before the workflow continues.
             if cloud_storage_authoritative and report_id in storage_report_ids:
+                # Prepare values needed by the next step.
                 existing['status'] = 'completed'
             elif local_status == 'completed' and not cloud_storage_authoritative:
                 existing['status'] = 'completed'
             elif existing.get('status') in ('pending', 'generating', 'queued', 'processing'):
                 if local_status in ('failed', 'skipped'):
+                    # Prepare values needed by the next step.
                     existing['status'] = local_status
 
             if existing.get('timestamp') is None and timestamp_value is not None:
                 existing['timestamp'] = timestamp_value
 
+            # Choose the correct branch before the workflow continues.
             if existing.get('source_scope') == 'cloud':
+                # Prepare values needed by the next step.
                 existing['source_scope'] = 'cloud'
             elif not existing.get('source_scope'):
                 existing['source_scope'] = _normalize_source_scope(local_row.get('source_scope')) or 'local'
 
+        # Choose the correct branch before the workflow continues.
         if visible_sync_probe_rows and active_stats_profile != 'local':
             _maybe_attempt_visible_local_cache_sync(
                 'api_stats_visible_local',
@@ -8257,6 +9721,7 @@ def api_stats():
 
         stats = _build_stats_payload(list(by_report.values()))
         if isinstance(storage_index, dict):
+            # Trigger the side effect required for this stage.
             stats.update({
                 'stats_source': 'cloud_storage_metadata',
                 'cloudStorageIndexed': True,
@@ -8269,6 +9734,7 @@ def api_stats():
                 'stats_source': 'database_and_local_cache',
                 'cloudStorageIndexed': False,
             })
+        # Trigger the side effect required for this stage.
         _set_cached_dashboard_snapshot(
             'stats',
             cache_key,
@@ -8278,10 +9744,12 @@ def api_stats():
         return jsonify(stats)
 
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error building unified stats payload: {e}", exc_info=True)
         local_rows = _collect_local_report_state_rows(limit=1500)
         fallback_rows: List[Dict[str, Any]] = []
         for row in local_rows:
+            # Trigger the side effect required for this stage.
             fallback_rows.append({
                 'report_id': row.get('report_id'),
                 'timestamp': _safe_parse_timestamp(
@@ -8293,6 +9761,7 @@ def api_stats():
                 'status': str(row.get('status') or 'pending').strip().lower() or 'pending',
                 'source_scope': 'local',
             })
+        # Prepare stats payload for the next step.
         stats_payload = _build_stats_payload(fallback_rows)
         _set_cached_dashboard_snapshot(
             'stats',
@@ -8303,33 +9772,45 @@ def api_stats():
         return jsonify(stats_payload)
 
 
+# Section: run the api stats merge cache workflow with clear inputs and outputs.
 @app.route('/api/stats/merge-cache', methods=['POST'])
 def api_stats_merge_cache():
     """Merge client cached cloud rows with local backend rows for Local Mode dashboards."""
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare payload for the next step.
         payload = request.get_json(silent=True) or {}
         cached_rows = payload.get('cached_cloud_rows') or payload.get('cached_rows') or []
         if not isinstance(cached_rows, list):
+            # Prepare cached rows for the next step.
             cached_rows = []
 
         local_rows = _collect_local_report_state_rows(limit=2000)
         now = get_local_time()
         tz_info = now.tzinfo or get_timezone_info()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Prepare week start for the next step.
         week_start = today_start - timedelta(days=now.weekday())
 
+        # Section: run the parse dt workflow with clear inputs and outputs.
         def _parse_dt(value: Any, report_id: str = '') -> Optional[datetime]:
+            # Prepare dt value for the next step.
             dt_value = None
             if isinstance(value, datetime):
+                # Prepare dt value for the next step.
                 dt_value = value
             elif value is not None:
                 text = str(value).strip()
                 if text:
+                    # Protect this step so expected failures can fall back cleanly.
                     try:
+                        # Prepare dt value for the next step.
                         dt_value = datetime.fromisoformat(text.replace('Z', '+00:00') if text.endswith('Z') else text)
                     except Exception:
                         dt_value = None
+            # Choose the correct branch before the workflow continues.
             if dt_value is None and report_id:
+                # Protect this step so expected failures can fall back cleanly.
                 try:
                     dt_value = _parse_report_id_timestamp(report_id)
                 except Exception:
@@ -8339,19 +9820,25 @@ def api_stats_merge_cache():
             if dt_value.tzinfo is None:
                 dt_value = dt_value.replace(tzinfo=tz_info)
             else:
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Prepare dt value for the next step.
                     dt_value = dt_value.astimezone(tz_info)
                 except Exception:
                     pass
+            # Return the prepared result to the caller.
             return dt_value
 
+        # Section: run the scope workflow with clear inputs and outputs.
         def _scope(row: Dict[str, Any], fallback: str) -> str:
             raw = str(row.get('source_scope') or row.get('report_scope') or row.get('scope') or '').strip().lower()
             if raw in ('local', 'cloud', 'shared', 'synced_local'):
+                # Return the prepared result to the caller.
                 return raw
             label = str(row.get('source_label') or '').strip().lower()
             if 'local synced' in label:
                 return 'synced_local'
+            # Choose the correct branch before the workflow continues.
             if 'local' in label:
                 return 'local'
             if 'cloud' in label:
@@ -8359,9 +9846,11 @@ def api_stats_merge_cache():
             return fallback
 
         by_report: Dict[str, Dict[str, Any]] = {}
+        # Process each item in this collection using the same rule set.
         for row in cached_rows:
             if not isinstance(row, dict):
                 continue
+            # Prepare report id for the next step.
             report_id = str(row.get('report_id') or row.get('id') or '').strip()
             if not report_id:
                 continue
@@ -8373,7 +9862,9 @@ def api_stats_merge_cache():
                 'source_scope': _scope(row, 'cloud'),
             }
 
+        # Process each item in this collection using the same rule set.
         for row in local_rows:
+            # Choose the correct branch before the workflow continues.
             if not isinstance(row, dict):
                 continue
             report_id = str(row.get('report_id') or row.get('id') or '').strip()
@@ -8389,6 +9880,7 @@ def api_stats_merge_cache():
                 'source_scope': 'cloud' if current.get('source_scope') == 'cloud' else _scope(row, current.get('source_scope') or 'local'),
             }
 
+        # Prepare rows for the next step.
         rows = list(by_report.values())
         severity = {'high': 0, 'medium': 0, 'low': 0}
         source_counts = {'local': 0, 'cloud': 0, 'shared': 0, 'synced_local': 0}
@@ -8398,8 +9890,10 @@ def api_stats_merge_cache():
         today_count = week_count = pending_count = completed_count = failed_count = 0
 
         for row in rows:
+            # Prepare dt value for the next step.
             dt_value = row.get('timestamp')
             if isinstance(dt_value, datetime):
+                # Choose the correct branch before the workflow continues.
                 if dt_value >= today_start:
                     today_count += 1
                 if dt_value >= week_start:
@@ -8409,6 +9903,7 @@ def api_stats_merge_cache():
                 severity[sev] += 1
             else:
                 severity['medium'] += 1
+            # Prepare scope for the next step.
             scope = str(row.get('source_scope') or 'cloud').lower()
             source_counts[scope] = source_counts.get(scope, 0) + 1
             status = str(row.get('status') or '').lower()
@@ -8419,6 +9914,7 @@ def api_stats_merge_cache():
             elif status in pending_statuses:
                 pending_count += 1
 
+        # Prepare stats for the next step.
         stats = {
             'total': len(rows),
             'today': today_count,
@@ -8438,15 +9934,18 @@ def api_stats_merge_cache():
             'cachedCloudRows': len(cached_rows),
             'localRows': len(local_rows),
         }
+        # Return the prepared result to the caller.
         return jsonify(stats)
     except Exception as e:
         logger.warning(f"Cached stats merge failed: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Section: run the api system timezone workflow with clear inputs and outputs.
 @app.route('/api/system/timezone', methods=['GET'])
 def api_system_timezone():
     """Expose backend timezone context for frontend timestamp normalization."""
+    # Prepare tz info for the next step.
     tz_info = get_timezone_info()
     now_local = datetime.now(tz_info)
     offset_delta = now_local.utcoffset() or timedelta(0)
@@ -8456,6 +9955,7 @@ def api_system_timezone():
     minutes = abs_minutes % 60
     sign = '+' if offset_minutes >= 0 else '-'
 
+    # Return the prepared result to the caller.
     return jsonify({
         'success': True,
         'database_timezone': getattr(tz_info, 'key', str(tz_info)),
@@ -8473,8 +9973,10 @@ def api_system_timezone():
 @app.route('/api/violation/<report_id>')
 def api_get_violation(report_id):
     """Get a specific violation with full details and status."""
+    # Choose the correct branch before the workflow continues.
     if db_manager is None:
         # Fallback to local filesystem
+        # Prepare violation dir for the next step.
         violation_dir = VIOLATIONS_DIR / report_id
         if not violation_dir.exists():
             return jsonify({'error': 'Violation not found'}), 404
@@ -8483,8 +9985,10 @@ def api_get_violation(report_id):
         metadata = {}
         if metadata_file.exists():
             with open(metadata_file, 'r') as f:
+                # Prepare metadata for the next step.
                 metadata = json.load(f)
 
+        # Prepare timestamp for the next step.
         timestamp = _parse_report_id_timestamp(report_id)
 
         return jsonify({
@@ -8498,9 +10002,11 @@ def api_get_violation(report_id):
         })
 
     # Use Supabase
+    # Protect this step so expected failures can fall back cleanly.
     try:
         violation = db_manager.get_violation(report_id)
         if not violation:
+            # Return the prepared result to the caller.
             return jsonify({'error': 'Violation not found'}), 404
 
         return jsonify({
@@ -8520,23 +10026,28 @@ def api_get_violation(report_id):
         })
 
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error fetching violation: {e}")
         return jsonify({'error': 'Failed to fetch violation'}), 500
 
 
+# Section: run the get report event and violation workflow with clear inputs and outputs.
 def _get_report_event_and_violation(report_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     """Fetch report event + violation with one DB round-trip when available."""
+    # Choose the correct branch before the workflow continues.
     if db_manager is None:
         return None, None
 
     report_id = str(report_id or '').strip()
     if not report_id:
+        # Return the prepared result to the caller.
         return None, None
 
     bundle_method = getattr(db_manager, 'get_report_status_bundle', None)
     if callable(bundle_method):
         bundle = bundle_method(report_id)
         if not bundle:
+            # Return the prepared result to the caller.
             return None, None
 
         event = {
@@ -8551,6 +10062,7 @@ def _get_report_event_and_violation(report_id: str) -> Tuple[Optional[Dict[str, 
             'device_id': bundle.get('event_device_id'),
         }
 
+        # Prepare violation for the next step.
         violation = None
         if (
             bundle.get('violation_id')
@@ -8561,6 +10073,7 @@ def _get_report_event_and_violation(report_id: str) -> Tuple[Optional[Dict[str, 
             or bundle.get('caption')
             or bundle.get('violation_summary')
         ):
+            # Prepare violation for the next step.
             violation = {
                 'id': bundle.get('violation_id'),
                 'report_id': bundle.get('report_id'),
@@ -8579,13 +10092,16 @@ def _get_report_event_and_violation(report_id: str) -> Tuple[Optional[Dict[str, 
                 'severity': bundle.get('severity'),
             }
 
+        # Return the prepared result to the caller.
         return event, violation
 
+    # Prepare event for the next step.
     event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
     violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
     return event, violation
 
 
+# Section: run the build manual reprocess detection data workflow with clear inputs and outputs.
 def _build_manual_reprocess_detection_data(
     existing_detection_data: Any,
     *,
@@ -8594,10 +10110,13 @@ def _build_manual_reprocess_detection_data(
     force_reprocess: bool = False,
 ) -> Dict[str, Any]:
     """Merge source-scope repair metadata without discarding detection details."""
+    # Choose the correct branch before the workflow continues.
     if isinstance(existing_detection_data, dict):
+        # Prepare metadata for the next step.
         metadata = dict(existing_detection_data)
     elif isinstance(existing_detection_data, str):
         try:
+            # Prepare parsed for the next step.
             parsed = json.loads(existing_detection_data)
             metadata = dict(parsed) if isinstance(parsed, dict) else {}
         except Exception:
@@ -8605,9 +10124,11 @@ def _build_manual_reprocess_detection_data(
     else:
         metadata = {}
 
+    # Prepare normalized scope for the next step.
     normalized_scope = str(source_scope or '').strip().lower()
     normalized_sync = str(sync_source or '').strip().lower()
     if normalized_scope in {'local', 'cloud', 'shared', 'synced_local'}:
+        # Prepare values needed by the next step.
         metadata['source_scope'] = normalized_scope
 
     metadata['reprocessed'] = bool(force_reprocess)
@@ -8621,15 +10142,18 @@ def _build_manual_reprocess_detection_data(
         metadata.pop('sync_source', None)
         metadata['source'] = 'manual_cloud_reprocess'
         metadata['source_label'] = 'Cloud'
+    # Choose the correct branch before the workflow continues.
     elif normalized_scope == 'synced_local':
         metadata['sync_source'] = normalized_sync or metadata.get('sync_source') or 'sync_local_cache'
         metadata['source'] = metadata.get('source') or metadata['sync_source']
         metadata['source_label'] = 'Local Synced'
     elif normalized_scope == 'local':
+        # Prepare values needed by the next step.
         metadata['source_label'] = 'Local'
         metadata['source'] = metadata.get('source') or 'manual_local_reprocess'
     elif normalized_scope == 'shared':
         metadata['source_label'] = 'Shared'
+    # Choose the correct branch before the workflow continues.
     elif normalized_sync:
         metadata['sync_source'] = normalized_sync
         metadata['source'] = normalized_sync
@@ -8637,6 +10161,7 @@ def _build_manual_reprocess_detection_data(
     return metadata
 
 
+# Section: run the persist manual reprocess source scope workflow with clear inputs and outputs.
 def _persist_manual_reprocess_source_scope(
     report_id: str,
     *,
@@ -8646,8 +10171,10 @@ def _persist_manual_reprocess_source_scope(
     violation: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Best-effort DB repair so refreshes do not rehydrate stale source tags."""
+    # Prepare normalized scope for the next step.
     normalized_scope = str(source_scope or '').strip().lower()
     if normalized_scope not in {'local', 'cloud', 'shared', 'synced_local'}:
+        # Return the prepared result to the caller.
         return
     if db_manager is None or not hasattr(db_manager, 'update_violation'):
         return
@@ -8659,17 +10186,22 @@ def _persist_manual_reprocess_source_scope(
         sync_source=sync_source,
         force_reprocess=force_reprocess,
     )
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Trigger the side effect required for this stage.
         db_manager.update_violation(report_id, detection_data=repaired_payload)
     except Exception as repair_err:
         _activate_local_offline_runtime('api_generate_report_now.persist_source_scope', repair_err)
         logger.warning(f"Could not persist manual source-scope repair for {report_id}: {repair_err}")
 
 
+# Section: run the build local report status payload workflow with clear inputs and outputs.
 def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any]]:
     """Build report status from local artifacts for offline/backoff runtimes."""
+    # Prepare report id for the next step.
     report_id = str(report_id or '').strip()
     if not report_id:
+        # Return the prepared result to the caller.
         return None
 
     violation_dir = VIOLATIONS_DIR / report_id
@@ -8677,6 +10209,7 @@ def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any
         return None
 
     has_report = (violation_dir / 'report.html').exists()
+    # Prepare has original for the next step.
     has_original = (violation_dir / 'original.jpg').exists()
     has_annotated = (violation_dir / 'annotated.jpg').exists()
     has_caption = (violation_dir / 'caption.txt').exists()
@@ -8686,20 +10219,25 @@ def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any
         violation_dir / 'SKIPPED_NO_RETRY.txt',
         violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt',
     ):
+        # Choose the correct branch before the workflow continues.
         if candidate.exists():
+            # Prepare skipped marker path for the next step.
             skipped_marker_path = candidate
             break
 
+    # Prepare status for the next step.
     status = 'pending'
     error_message = None
     if has_report:
         status = 'completed'
     elif failure_path.exists():
+        # Prepare status for the next step.
         status = 'failed'
         error_message = _read_generation_failure_reason(failure_path)
     elif skipped_marker_path is not None:
         status = 'skipped'
         error_message = _read_generation_failure_reason(skipped_marker_path)
+    # Choose the correct branch before the workflow continues.
     elif has_annotated or has_caption:
         status = 'generating'
     elif has_original:
@@ -8707,11 +10245,14 @@ def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any
 
     queue_context = _get_queue_context_for_report(report_id)
     if status in ('pending', 'generating'):
+        # Choose the correct branch before the workflow continues.
         if str(queue_context.get('active_report_id') or '') == report_id:
+            # Prepare status for the next step.
             status = 'generating'
         elif queue_context.get('queued'):
             status = 'pending'
 
+    # Prepare message map for the next step.
     message_map = {
         'pending': 'Report is queued for processing',
         'queued': 'Report is queued for processing',
@@ -8721,19 +10262,24 @@ def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any
         'skipped': f"Skipped - not a work environment: {error_message or 'Invalid scene'}",
     }
 
+    # Choose the correct branch before the workflow continues.
     if status == 'pending' and queue_context.get('queued'):
+        # Prepare position for the next step.
         position = queue_context.get('queue_position')
         active_report_id = queue_context.get('active_report_id')
         if active_report_id and active_report_id != report_id:
+            # Prepare position text for the next step.
             position_text = f" at position {position}" if position else ""
             message_map['pending'] = (
                 f"Report is queued for generation"
                 f"{position_text}; "
                 f"the worker is currently processing {active_report_id}."
             )
+        # Choose the correct branch before the workflow continues.
         elif position:
             message_map['pending'] = f"Report is queued for generation at position {position}."
 
+    # Return the prepared result to the caller.
     return {
         'status': status,
         'has_report': has_report,
@@ -8747,12 +10293,16 @@ def _build_local_report_status_payload(report_id: str) -> Optional[Dict[str, Any
     }
 
 
+# Section: run the api report status workflow with clear inputs and outputs.
 @app.route('/api/report/<report_id>/status')
 def api_report_status(report_id):
     """Get the status of a specific report (for fallback modal)."""
+    # Prepare local payload for the next step.
     local_payload = _build_local_report_status_payload(report_id)
     if db_manager is None:
+        # Choose the correct branch before the workflow continues.
         if not local_payload:
+            # Return the prepared result to the caller.
             return jsonify({
                 'status': 'not_found',
                 'message': 'Report not found'
@@ -8760,32 +10310,42 @@ def api_report_status(report_id):
 
         return jsonify(local_payload)
 
+    # Section: run the normalize status source scope workflow with clear inputs and outputs.
     def _normalize_status_source_scope(scope: Any) -> str:
+        # Prepare normalized for the next step.
         normalized = str(scope or '').strip().lower()
         if normalized in ('local', 'cloud', 'shared', 'synced_local'):
+            # Return the prepared result to the caller.
             return normalized
         if normalized == 'local_synced':
             return 'synced_local'
         return ''
 
+    # Section: run the status source label workflow with clear inputs and outputs.
     def _status_source_label(scope: str) -> str:
         if scope == 'local':
             return 'Local'
+        # Choose the correct branch before the workflow continues.
         if scope == 'synced_local':
+            # Return the prepared result to the caller.
             return 'Local Synced'
         if scope == 'shared':
             return 'Shared'
         return 'Cloud'
 
+    # Section: run the parse status detection data workflow with clear inputs and outputs.
     def _parse_status_detection_data(violation_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         detection_payload = (violation_row or {}).get('detection_data')
         if isinstance(detection_payload, str):
             try:
+                # Prepare detection payload for the next step.
                 detection_payload = json.loads(detection_payload)
             except Exception:
                 detection_payload = None
+        # Return the prepared result to the caller.
         return detection_payload if isinstance(detection_payload, dict) else {}
 
+    # Section: run the infer status source scope workflow with clear inputs and outputs.
     def _infer_status_source_scope(
         *,
         event_row: Optional[Dict[str, Any]],
@@ -8793,6 +10353,7 @@ def api_report_status(report_id):
         local_status: Optional[Dict[str, Any]],
     ) -> str:
         detection_payload = _parse_status_detection_data(violation_row)
+        # Prepare device id for the next step.
         device_id = (
             (event_row or {}).get('device_id')
             or detection_payload.get('device_id')
@@ -8804,6 +10365,7 @@ def api_report_status(report_id):
             or detection_payload.get('origin')
             or ''
         ).strip().lower()
+        # Prepare explicit scope for the next step.
         explicit_scope = _normalize_status_source_scope(
             detection_payload.get('source_scope')
             or detection_payload.get('report_scope')
@@ -8814,6 +10376,7 @@ def api_report_status(report_id):
             or (violation_row or {}).get('annotated_image_key')
             or (violation_row or {}).get('report_html_key')
         )
+        # Prepare has cloud report artifact for the next step.
         has_cloud_report_artifact = bool(
             (violation_row or {}).get('report_html_key')
             or (violation_row or {}).get('report_pdf_key')
@@ -8826,6 +10389,7 @@ def api_report_status(report_id):
                 or local_status.get('has_report')
             )
         )
+        # Prepare active profile for the next step.
         active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
         device_key = str(device_id or '').strip().lower()
         local_device = _is_local_artifact_origin_device(device_key)
@@ -8838,6 +10402,7 @@ def api_report_status(report_id):
             sync_source=sync_source,
             device_id=device_key,
         )
+        # Prepare sync state for the next step.
         sync_state = str(
             (event_row or {}).get('sync_state')
             or detection_payload.get('sync_state')
@@ -8849,6 +10414,7 @@ def api_report_status(report_id):
             or sync_state.startswith('cloud_sync_')
             or sync_state.startswith('sync_')
         )
+        # Prepare local origin for the next step.
         local_origin = local_sync_marker or local_origin_marker or local_device
         confirmed_synced_local = _has_confirmed_synced_local_evidence(
             sync_source=sync_source,
@@ -8863,9 +10429,13 @@ def api_report_status(report_id):
             ),
         )
 
+        # Choose the correct branch before the workflow continues.
         if explicit_scope:
+            # Choose the correct branch before the workflow continues.
             if explicit_scope == 'synced_local':
+                # Choose the correct branch before the workflow continues.
                 if confirmed_synced_local:
+                    # Return the prepared result to the caller.
                     return 'synced_local'
                 if active_profile != 'local' and has_cloud_artifacts and not local_origin:
                     return 'cloud'
@@ -8873,8 +10443,10 @@ def api_report_status(report_id):
                     return 'cloud'
                 if local_origin or has_local_artifacts:
                     return 'local'
+            # Return the prepared result to the caller.
             return explicit_scope
 
+        # Choose the correct branch before the workflow continues.
         if confirmed_synced_local:
             return 'synced_local'
 
@@ -8883,37 +10455,48 @@ def api_report_status(report_id):
         if active_profile == 'cloud':
             return 'cloud'
         if has_local_artifacts or local_origin:
+            # Return the prepared result to the caller.
             return 'local'
+        # Return the prepared result to the caller.
         return 'cloud'
 
     # Use Supabase
+    # Protect this step so expected failures can fall back cleanly.
     try:
         event = None
         violation = None
         if hasattr(db_manager, 'get_status'):
             status_info = db_manager.get_status(report_id)
         else:
+            # Prepare values needed by the next step.
             event, violation = _get_report_event_and_violation(report_id)
             local_report_exists = bool((VIOLATIONS_DIR / report_id / 'report.html').exists())
 
             if not event and not violation:
+                # Prepare status info for the next step.
                 status_info = None
             else:
                 status = str((event or {}).get('status') or '').strip().lower()
                 if not status:
+                    # Prepare status for the next step.
                     status = 'completed' if ((violation and violation.get('report_html_key')) or local_report_exists) else 'pending'
 
                 has_report = bool((violation or {}).get('report_html_key')) or local_report_exists
 
                 # Guard against false-completed states with no report artifact.
+                # Choose the correct branch before the workflow continues.
                 if status == 'completed' and not has_report:
                     status = 'failed'
                     if not (event or {}).get('error_message'):
+                        # Choose the correct branch before the workflow continues.
                         if local_report_exists:
+                            # Prepare status for the next step.
                             status = 'completed'
                         else:
                             if hasattr(db_manager, 'update_detection_status'):
+                                # Protect this step so expected failures can fall back cleanly.
                                 try:
+                                    # Trigger the side effect required for this stage.
                                     db_manager.update_detection_status(
                                         report_id,
                                         'failed',
@@ -8922,6 +10505,7 @@ def api_report_status(report_id):
                                 except Exception:
                                     pass
 
+                # Prepare status info for the next step.
                 status_info = {
                     'status': status,
                     'has_report': has_report,
@@ -8944,6 +10528,7 @@ def api_report_status(report_id):
                     'long_running_notice': False,
                     'alert_message': None,
                 }
+                # Prepare source scope for the next step.
                 source_scope = _infer_status_source_scope(
                     event_row=event,
                     violation_row=violation,
@@ -8953,31 +10538,41 @@ def api_report_status(report_id):
                 status_info['source_label'] = _status_source_label(source_scope)
 
                 # If generation is stale with no report output, surface a real failure reason.
+                # Choose the correct branch before the workflow continues.
                 if status_info['status'] == 'generating' and not status_info['has_report']:
                     ref_time = status_info.get('updated_at') or status_info.get('timestamp')
                     dt_obj = None
                     if isinstance(ref_time, datetime):
+                        # Prepare dt obj for the next step.
                         dt_obj = ref_time
                     elif isinstance(ref_time, str):
                         try:
+                            # Prepare dt obj for the next step.
                             dt_obj = datetime.fromisoformat(ref_time.replace('Z', '+00:00'))
                         except Exception:
                             dt_obj = None
 
+                    # Choose the correct branch before the workflow continues.
                     if dt_obj is not None:
                         if dt_obj.tzinfo is None:
                             dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+                        # Prepare age seconds for the next step.
                         age_seconds = (datetime.now(timezone.utc) - dt_obj).total_seconds()
                         if age_seconds > 120:
+                            # Choose the correct branch before the workflow continues.
                             if STRICT_PROVIDER_MODE_SPLIT:
+                                # Prepare local preferred for the next step.
                                 local_preferred = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE')) == 'local'
                             else:
                                 provider_order = MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
                                 if not isinstance(provider_order, list):
+                                    # Prepare provider order for the next step.
                                     provider_order = ['model_api', 'gemini', 'ollama', 'local']
 
+                                # Section: run the provider rank workflow with clear inputs and outputs.
                                 def _provider_rank(name: str) -> int:
                                     try:
+                                        # Return the prepared result to the caller.
                                         return provider_order.index(name)
                                     except ValueError:
                                         return 999
@@ -8986,10 +10581,12 @@ def api_report_status(report_id):
                                 cloud_rank = min(_provider_rank('model_api'), _provider_rank('gemini'))
                                 local_preferred = local_rank < cloud_rank
 
+                            # Prepare local diag for the next step.
                             local_diag = _get_local_mode_diagnostics()
                             local_ready = bool(local_diag.get('ollama_running') and local_diag.get('model_available'))
 
                             if local_preferred and local_ready:
+                                # Prepare values needed by the next step.
                                 status_info['status'] = 'generating'
                                 status_info['long_running_notice'] = True
                                 status_info['alert_message'] = (
@@ -8999,18 +10596,24 @@ def api_report_status(report_id):
                             else:
                                 timeout_reason = 'Report generation timed out without producing report output.'
                                 status_info['status'] = 'failed'
+                                # Prepare values needed by the next step.
                                 status_info['error_message'] = timeout_reason
                                 if hasattr(db_manager, 'update_detection_status'):
+                                    # Protect this step so expected failures can fall back cleanly.
                                     try:
+                                        # Trigger the side effect required for this stage.
                                         db_manager.update_detection_status(report_id, 'failed', timeout_reason)
                                     except Exception:
                                         pass
 
                 # Do not surface stale old error text once report artifact exists.
+                # Choose the correct branch before the workflow continues.
                 if status_info.get('has_report') and status_info.get('status') == 'completed':
                     status_info['error_message'] = None
 
+        # Choose the correct branch before the workflow continues.
         if not status_info and local_payload:
+            # Return the prepared result to the caller.
             return jsonify(local_payload)
 
         if not status_info:
@@ -9019,7 +10622,9 @@ def api_report_status(report_id):
                 'message': 'Report not found'
             })
 
+        # Choose the correct branch before the workflow continues.
         if not status_info.get('source_scope'):
+            # Prepare source scope for the next step.
             source_scope = _infer_status_source_scope(
                 event_row=event,
                 violation_row=violation,
@@ -9028,7 +10633,9 @@ def api_report_status(report_id):
             status_info['source_scope'] = source_scope
             status_info['source_label'] = _status_source_label(source_scope)
 
+        # Choose the correct branch before the workflow continues.
         if local_payload:
+            # Prepare local status for the next step.
             local_status = str(local_payload.get('status') or '').strip().lower()
             status_info['has_report'] = bool(status_info.get('has_report')) or bool(local_payload.get('has_report'))
             status_info['has_original'] = bool(status_info.get('has_original')) or bool(local_payload.get('has_original'))
@@ -9041,6 +10648,7 @@ def api_report_status(report_id):
                 and local_status in ('failed', 'skipped')
                 and not local_payload.get('has_report')
             )
+            # Choose the correct branch before the workflow continues.
             if (
                 local_status in ('failed', 'skipped')
                 and not local_payload.get('has_report')
@@ -9049,15 +10657,19 @@ def api_report_status(report_id):
                     or local_profile_terminal_override
                 )
             ):
+                # Prepare values needed by the next step.
                 status_info['status'] = local_status
                 status_info['has_report'] = False
                 status_info['has_cloud_report_artifact'] = False
                 status_info['error_message'] = local_payload.get('error_message') or status_info.get('error_message')
                 status_info['message'] = local_payload.get('message')
                 if _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE')) == 'local':
+                    # Prepare values needed by the next step.
                     status_info['source_scope'] = 'local'
                     status_info['source_label'] = 'Local'
+            # Choose the correct branch before the workflow continues.
             elif local_status == 'completed' and local_payload.get('has_report'):
+                # Prepare values needed by the next step.
                 status_info['status'] = 'completed'
                 status_info['error_message'] = None
             elif (
@@ -9066,6 +10678,7 @@ def api_report_status(report_id):
             ):
                 status_info['status'] = local_status
                 status_info['message'] = local_payload.get('message')
+            # Process each item in this collection using the same rule set.
             for key in (
                 'queue_size',
                 'queue_position',
@@ -9082,11 +10695,14 @@ def api_report_status(report_id):
                 'source_scope',
                 'source_label',
             ):
+                # Choose the correct branch before the workflow continues.
                 if key in ('source_scope', 'source_label') and status_info.get('source_scope') != 'local':
                     continue
                 if key in local_payload:
+                    # Prepare values needed by the next step.
                     status_info[key] = local_payload.get(key)
 
+        # Prepare status for the next step.
         status = status_info.get('status', 'unknown')
         generating_message = (
             status_info.get('alert_message')
@@ -9102,6 +10718,7 @@ def api_report_status(report_id):
             'skipped': f"Skipped - not a work environment: {status_info.get('error_message', 'Invalid scene')}"
         }
 
+        # Return the prepared result to the caller.
         return jsonify({
             'status': status,
             'has_report': status_info.get('has_report', False),
@@ -9130,22 +10747,28 @@ def api_report_status(report_id):
         })
 
     except Exception as e:
+        # Choose the correct branch before the workflow continues.
         if local_payload:
+            # Trigger the side effect required for this stage.
             logger.warning(f"Report status falling back to local artifacts for {report_id}: {e}")
             return jsonify(local_payload)
         logger.error(f"Error fetching report status: {e}", exc_info=True)
         return jsonify({'error': 'Failed to fetch status'}), 500
 
 
+# Section: run the api report prefetch workflow with clear inputs and outputs.
 @app.route('/api/report/<report_id>/prefetch', methods=['POST'])
 def api_report_prefetch(report_id):
     """Warm backend caches so the next /report/<id> open is low-latency."""
+    # Prepare started for the next step.
     started = time.perf_counter()
 
     try:
+        # Prepare local report html for the next step.
         local_report_html = VIOLATIONS_DIR / report_id / 'report.html'
 
         if _get_any_cached_rendered_report_html(report_id):
+            # Return the prepared result to the caller.
             return jsonify({
                 'success': True,
                 'report_id': report_id,
@@ -9154,13 +10777,16 @@ def api_report_prefetch(report_id):
                 'duration_ms': round((time.perf_counter() - started) * 1000, 2)
             })
 
+        # Section: run the local prefetch response workflow with clear inputs and outputs.
         def _local_prefetch_response(
             source: str,
             violation: Optional[Dict[str, Any]] = None,
             event: Optional[Dict[str, Any]] = None,
             cache_key: Optional[str] = None,
         ):
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare trace payload for the next step.
                 trace_payload = _build_traceability_payload(
                     report_id=report_id,
                     violation=violation or {},
@@ -9173,6 +10799,7 @@ def api_report_prefetch(report_id):
                     trace_payload,
                     cache_key=cache_key,
                 )
+                # Return the prepared result to the caller.
                 return jsonify({
                     'success': True,
                     'report_id': report_id,
@@ -9182,15 +10809,19 @@ def api_report_prefetch(report_id):
                 })
             except FallbackReportTemplateError:
                 logger.warning(f"Report prefetch blocked fallback-template local HTML for {report_id}")
+                # Return the prepared result to the caller.
                 return jsonify({
                     'success': False,
                     'error': 'Report content is fallback-template output. Regenerate to use model-generated response.'
                 }), 409
 
+        # Prepare restriction block for the next step.
         restriction_block = None
         if storage_manager is not None:
+            # Prepare blocked for the next step.
             blocked = _egress_budget_blocked_response()
             if blocked:
+                # Prepare restriction block for the next step.
                 restriction_block = blocked
             elif storage_manager._restriction_active():
                 restriction_reason = (
@@ -9201,22 +10832,28 @@ def api_report_prefetch(report_id):
                     'api_report_prefetch.restricted',
                     f"HTTP 402 restricted: {restriction_reason}",
                 )
+                # Prepare restriction block for the next step.
                 restriction_block = (jsonify({
                     'success': False,
                     'error': 'Supabase project restricted',
                     'detail': restriction_reason,
                 }), 402)
 
+        # Choose the correct branch before the workflow continues.
         if restriction_block and not local_report_html.exists():
+            # Return the prepared result to the caller.
             return restriction_block
 
         if storage_manager is None or db_manager is None:
             if local_report_html.exists():
+                # Return the prepared result to the caller.
                 return _local_prefetch_response('local_filesystem_prefetch')
             return jsonify({'success': False, 'error': 'Report not found'}), 404
 
         event, violation = _get_report_event_and_violation(report_id)
+        # Choose the correct branch before the workflow continues.
         if not violation:
+            # Choose the correct branch before the workflow continues.
             if local_report_html.exists():
                 return _local_prefetch_response('local_filesystem_prefetch', event=event)
             return jsonify({'success': False, 'error': 'Report not found'}), 404
@@ -9224,11 +10861,14 @@ def api_report_prefetch(report_id):
         report_html_key = violation.get('report_html_key')
         if not report_html_key:
             if local_report_html.exists():
+                # Return the prepared result to the caller.
                 return _local_prefetch_response('local_filesystem_prefetch', violation=violation, event=event)
             return jsonify({'success': False, 'error': 'Report HTML not available'}), 404
 
+        # Prepare rendered for the next step.
         rendered = _get_cached_rendered_report_html(report_id, report_html_key)
         if rendered:
+            # Return the prepared result to the caller.
             return jsonify({
                 'success': True,
                 'report_id': report_id,
@@ -9237,10 +10877,13 @@ def api_report_prefetch(report_id):
                 'duration_ms': round((time.perf_counter() - started) * 1000, 2)
             })
 
+        # Prepare html content for the next step.
         html_content = _get_cached_report_html_content(report_id, report_html_key)
         source_layer = 'source_cache'
         if html_content is None:
+            # Choose the correct branch before the workflow continues.
             if local_report_html.exists():
+                # Prepare local response for the next step.
                 local_response = _local_prefetch_response(
                     'local_filesystem_prefetch',
                     violation=violation,
@@ -9249,12 +10892,16 @@ def api_report_prefetch(report_id):
                 )
                 status_code = local_response[1] if isinstance(local_response, tuple) and len(local_response) > 1 else 200
                 if status_code == 200:
+                    # Return the prepared result to the caller.
                     return local_response
 
+            # Choose the correct branch before the workflow continues.
             if html_content is None:
+                # Prepare html content for the next step.
                 html_content = storage_manager.download_file_content(report_html_key)
                 source_layer = 'supabase_storage'
 
+        # Choose the correct branch before the workflow continues.
         if not html_content:
             blocked = _egress_budget_blocked_response()
             if blocked:
@@ -9262,10 +10909,12 @@ def api_report_prefetch(report_id):
             return jsonify({'success': False, 'error': 'Failed to download report HTML'}), 404
 
         if isinstance(html_content, (bytes, bytearray)):
+            # Prepare html content for the next step.
             html_content = html_content.decode('utf-8', errors='replace')
         elif not isinstance(html_content, str):
             html_content = str(html_content)
 
+        # Trigger the side effect required for this stage.
         _set_cached_report_html_content(report_id, report_html_key, html_content)
         _persist_local_report_html_cache(report_id, html_content)
 
@@ -9276,6 +10925,7 @@ def api_report_prefetch(report_id):
             source='supabase_storage_prefetch',
             failed_view_requested=False,
         )
+        # Prepare rendered for the next step.
         rendered = _repair_report_documentation_block(html_content, report_id)
         rendered = _normalize_report_footer_branding(rendered)
         rendered = _inject_traceability_widget(rendered, trace_payload)
@@ -9289,13 +10939,16 @@ def api_report_prefetch(report_id):
             'duration_ms': round((time.perf_counter() - started) * 1000, 2)
         })
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.warning(f"Report prefetch failed for {report_id}: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Section: run the api queue status workflow with clear inputs and outputs.
 @app.route('/api/queue/status')
 def api_queue_status():
     """Get the current status of the violation processing queue."""
+    # Choose the correct branch before the workflow continues.
     if violation_queue is None:
         return jsonify({
             'available': False,
@@ -9303,15 +10956,18 @@ def api_queue_status():
         })
 
     try:
+        # Prepare stats for the next step.
         stats = violation_queue.get_stats()
         queue_preview = []
         if hasattr(violation_queue, 'get_queue_preview'):
+            # Prepare queue preview for the next step.
             queue_preview = violation_queue.get_queue_preview(limit=20)
         heartbeat_age_seconds = _queue_worker_heartbeat_age_seconds()
         progress = get_report_progress() or {}
         progress_status = str(progress.get('status') or '').strip().lower()
         active_report_id = None
         active_step = None
+        # Choose the correct branch before the workflow continues.
         if progress_status in ('waiting', 'processing', 'generating', 'running', 'active'):
             active_report_id = str(progress.get('current') or '').strip() or None
             active_step = progress.get('current_step')
@@ -9344,44 +11000,57 @@ def api_queue_status():
             'queue_preview': queue_preview,
         })
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error getting queue status: {e}")
         return jsonify({'error': 'Failed to get queue status'}), 500
 
 
+# Section: run the iso or none workflow with clear inputs and outputs.
 def _iso_or_none(value):
     """Safely convert datetime-like values to ISO8601 strings."""
+    # Choose the correct branch before the workflow continues.
     if value is None:
         return None
     if hasattr(value, 'isoformat'):
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Return the prepared result to the caller.
             return value.isoformat()
         except Exception:
             return str(value)
     return str(value)
 
 
+# Section: run the read generation failure reason workflow with clear inputs and outputs.
 def _read_generation_failure_reason(failure_path: Path) -> Optional[str]:
     """Read the latest generation failure reason from local cache."""
+    # Choose the correct branch before the workflow continues.
     if not failure_path.exists():
+        # Return the prepared result to the caller.
         return None
 
     try:
         with open(failure_path, 'r', encoding='utf-8', errors='ignore') as f:
+            # Prepare lines for the next step.
             lines = [line.strip() for line in f.readlines() if line.strip()]
         if not lines:
             return None
         return lines[-1][:400]
     except Exception:
+        # Return the prepared result to the caller.
         return None
 
 
+# Section: run the push realtime report event workflow with clear inputs and outputs.
 def _push_realtime_report_event(report_row: Dict[str, Any], event_type: str = 'violation_detected') -> None:
     """Publish an in-memory realtime row immediately after YOLO capture."""
+    # Choose the correct branch before the workflow continues.
     if not isinstance(report_row, dict):
         return
 
     report_id = str(report_row.get('report_id') or '').strip()
     if not report_id:
+        # Return the prepared result to the caller.
         return
 
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -9408,18 +11077,23 @@ def _push_realtime_report_event(report_row: Dict[str, Any], event_type: str = 'v
         'event_type': event_type,
     }
 
+    # Open the managed resource only for the block that needs it.
     with realtime_event_lock:
+        # Trigger the side effect required for this stage.
         realtime_report_events.append(event_row)
     _invalidate_local_report_state_cache()
     _invalidate_dashboard_snapshot_cache()
 
 
+# Section: run the get realtime report events workflow with clear inputs and outputs.
 def _get_realtime_report_events(limit: int = 40) -> List[Dict[str, Any]]:
     with realtime_event_lock:
         rows = list(realtime_report_events)[-max(1, int(limit or 1)):]
+    # Return the prepared result to the caller.
     return [dict(row) for row in rows if isinstance(row, dict)]
 
 
+# Section: run the scan local report state rows uncached workflow with clear inputs and outputs.
 def _scan_local_report_state_rows_uncached(
     max_rows: int,
     queue_snapshot: Optional[Dict[str, Any]] = None,
@@ -9427,7 +11101,9 @@ def _scan_local_report_state_rows_uncached(
     rows: List[Dict[str, Any]] = []
     queue_snapshot = queue_snapshot if isinstance(queue_snapshot, dict) else _get_queue_context_snapshot()
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare violation dirs for the next step.
         violation_dirs = sorted(
             (path for path in VIOLATIONS_DIR.iterdir() if path.is_dir()),
             key=lambda path: path.name,
@@ -9437,7 +11113,9 @@ def _scan_local_report_state_rows_uncached(
         logger.debug(f"Unable to scan local violation cache for realtime rows: {e}")
         return []
 
+    # Process each item in this collection using the same rule set.
     for violation_dir in violation_dirs:
+        # Choose the correct branch before the workflow continues.
         if len(rows) >= max_rows:
             break
 
@@ -9447,6 +11125,7 @@ def _scan_local_report_state_rows_uncached(
 
         original_path = violation_dir / 'original.jpg'
         annotated_path = violation_dir / 'annotated.jpg'
+        # Prepare caption path for the next step.
         caption_path = violation_dir / 'caption.txt'
         report_path = violation_dir / 'report.html'
         failure_path = violation_dir / 'generation_failure.txt'
@@ -9455,10 +11134,13 @@ def _scan_local_report_state_rows_uncached(
             violation_dir / 'SKIPPED_NO_RETRY.txt',
             violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt',
         ):
+            # Choose the correct branch before the workflow continues.
             if candidate.exists():
+                # Prepare skipped path for the next step.
                 skipped_path = candidate
                 break
 
+        # Prepare has original for the next step.
         has_original = original_path.exists()
         has_annotated = annotated_path.exists()
         has_report = report_path.exists()
@@ -9467,7 +11149,9 @@ def _scan_local_report_state_rows_uncached(
         error_message = None
 
         if has_report:
+            # Prepare status for the next step.
             status = 'completed'
+        # Choose the correct branch before the workflow continues.
         elif failure_path.exists():
             status = 'failed'
             error_message = _read_generation_failure_reason(failure_path)
@@ -9476,9 +11160,11 @@ def _scan_local_report_state_rows_uncached(
         elif has_annotated or caption_path.exists():
             # Ignore orphaned partial artifacts (no original frame) to avoid stale
             # "local generating" rows hijacking cloud-backed report state.
+            # Choose the correct branch before the workflow continues.
             if not has_original:
                 continue
             status = 'generating'
+        # Choose the correct branch before the workflow continues.
         elif has_original:
             status = 'pending'
         else:
@@ -9486,29 +11172,37 @@ def _scan_local_report_state_rows_uncached(
 
         queue_context = _queue_context_for_target_from_snapshot(report_id, queue_snapshot)
         if status in ('pending', 'generating'):
+            # Choose the correct branch before the workflow continues.
             if str(queue_context.get('active_report_id') or '') == report_id:
+                # Prepare status for the next step.
                 status = 'generating'
             elif queue_context.get('queued'):
                 status = 'pending'
 
+        # Prepare timestamp value for the next step.
         timestamp_value = None
         try:
             timestamp_value = _parse_report_id_timestamp(report_id).isoformat()
         except Exception:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare timestamp value for the next step.
                 timestamp_value = datetime.fromtimestamp(violation_dir.stat().st_mtime, tz=timezone.utc).isoformat()
             except Exception:
                 timestamp_value = None
 
+        # Prepare updated source for the next step.
         updated_source = violation_dir
         if has_report:
             updated_source = report_path
         elif failure_path.exists():
+            # Prepare updated source for the next step.
             updated_source = failure_path
         elif skipped_path is not None:
             updated_source = skipped_path
         elif caption_path.exists():
             updated_source = caption_path
+        # Choose the correct branch before the workflow continues.
         elif has_annotated:
             updated_source = annotated_path
         elif has_original:
@@ -9516,6 +11210,7 @@ def _scan_local_report_state_rows_uncached(
 
         updated_at_value = None
         try:
+            # Prepare updated at value for the next step.
             updated_at_value = datetime.fromtimestamp(updated_source.stat().st_mtime, tz=timezone.utc).isoformat()
         except Exception:
             updated_at_value = timestamp_value
@@ -9534,18 +11229,23 @@ def _scan_local_report_state_rows_uncached(
         metadata_device_id = None
         metadata_source_scope = None
         metadata_source_label = None
+        # Prepare metadata source for the next step.
         metadata_source = None
         metadata_sync_source = None
         metadata_origin = None
         metadata_sync_state = None
         metadata_source_reason = None
         try:
+            # Prepare metadata path for the next step.
             metadata_path = violation_dir / 'metadata.json'
             if metadata_path.exists():
+                # Open the managed resource only for the block that needs it.
                 with open(metadata_path, 'r', encoding='utf-8') as _mf:
+                    # Prepare meta for the next step.
                     _meta = json.load(_mf) or {}
                 if isinstance(_meta, dict):
                     if isinstance(_meta.get('violation_count'), (int, float)):
+                        # Prepare metadata violation count for the next step.
                         metadata_violation_count = int(_meta.get('violation_count') or 0)
                     if isinstance(_meta.get('person_count'), (int, float)):
                         metadata_person_count = int(_meta.get('person_count') or 0)
@@ -9553,11 +11253,13 @@ def _scan_local_report_state_rows_uncached(
                         metadata_missing_ppe = [
                             str(x).strip() for x in _meta.get('missing_ppe') if str(x).strip()
                         ]
+                    # Choose the correct branch before the workflow continues.
                     if isinstance(_meta.get('ppe_tags'), list):
                         metadata_ppe_tags = [
                             str(x).strip() for x in _meta.get('ppe_tags') if str(x).strip()
                         ]
                     if not metadata_ppe_tags and isinstance(_meta.get('violation_types'), list):
+                        # Prepare metadata ppe tags for the next step.
                         metadata_ppe_tags = [
                             str(x).strip() for x in _meta.get('violation_types') if str(x).strip()
                         ]
@@ -9565,9 +11267,11 @@ def _scan_local_report_state_rows_uncached(
                         metadata_ppe_tags = [
                             str(x).strip() for x in _meta.get('violations') if str(x).strip()
                         ]
+                    # Choose the correct branch before the workflow continues.
                     if not metadata_ppe_tags and isinstance(_meta.get('detections'), list):
                         metadata_ppe_tags = _extract_violation_types_from_detections(_meta.get('detections') or [])
                     if not metadata_missing_ppe and metadata_ppe_tags:
+                        # Prepare metadata missing ppe for the next step.
                         metadata_missing_ppe = [
                             str(tag).replace('NO-', '').replace('NO ', '').replace('-', ' ').strip()
                             for tag in metadata_ppe_tags
@@ -9575,9 +11279,11 @@ def _scan_local_report_state_rows_uncached(
                         ]
                     if isinstance(_meta.get('violation_summary'), str):
                         metadata_violation_summary = _meta.get('violation_summary')
+                    # Choose the correct branch before the workflow continues.
                     if isinstance(_meta.get('violation_type'), str):
                         metadata_violation_type = _meta.get('violation_type')
                     if isinstance(_meta.get('device_id'), str):
+                        # Prepare metadata device id for the next step.
                         metadata_device_id = _meta.get('device_id')
                     if isinstance(_meta.get('source_scope'), str):
                         metadata_source_scope = _meta.get('source_scope')
@@ -9585,17 +11291,21 @@ def _scan_local_report_state_rows_uncached(
                         metadata_source_label = _meta.get('source_label')
                     if isinstance(_meta.get('source'), str):
                         metadata_source = _meta.get('source')
+                    # Choose the correct branch before the workflow continues.
                     if isinstance(_meta.get('sync_source'), str):
                         metadata_sync_source = _meta.get('sync_source')
                     if isinstance(_meta.get('origin'), str):
+                        # Prepare metadata origin for the next step.
                         metadata_origin = _meta.get('origin')
                     if isinstance(_meta.get('sync_state'), str):
                         metadata_sync_state = _meta.get('sync_state')
                     if isinstance(_meta.get('source_reason'), str):
                         metadata_source_reason = _meta.get('source_reason')
         except Exception as meta_err:
+            # Trigger the side effect required for this stage.
             logger.debug(f"Could not parse metadata.json for {report_id}: {meta_err}")
 
+        # Trigger the side effect required for this stage.
         rows.append({
             'report_id': report_id,
             'status': status,
@@ -9625,39 +11335,52 @@ def _scan_local_report_state_rows_uncached(
     return rows
 
 
+# Section: run the collect local report state rows workflow with clear inputs and outputs.
 def _collect_local_report_state_rows(limit: int = 120) -> List[Dict[str, Any]]:
     """Collect local report lifecycle rows from filesystem artifacts."""
     if not VIOLATIONS_DIR.exists():
+        # Return the prepared result to the caller.
         return []
 
     max_rows = max(1, int(limit or 1))
+    # Prepare now for the next step.
     now = time.time()
 
     if LOCAL_REPORT_STATE_CACHE_TTL_SECONDS > 0:
         with local_report_state_cache_lock:
+            # Prepare cached rows for the next step.
             cached_rows = local_report_state_cache.get('rows') or []
             cached_limit = int(local_report_state_cache.get('limit') or 0)
             cached_ts = float(local_report_state_cache.get('ts') or 0.0)
             if cached_rows and cached_limit >= max_rows and (now - cached_ts) < LOCAL_REPORT_STATE_CACHE_TTL_SECONDS:
+                # Return the prepared result to the caller.
                 return [dict(row) for row in cached_rows[:max_rows] if isinstance(row, dict)]
 
+    # Prepare queue snapshot for the next step.
     queue_snapshot = _get_queue_context_snapshot()
     rows = _scan_local_report_state_rows_uncached(max_rows=max_rows, queue_snapshot=queue_snapshot)
 
     if LOCAL_REPORT_STATE_CACHE_TTL_SECONDS > 0:
+        # Open the managed resource only for the block that needs it.
         with local_report_state_cache_lock:
+            # Prepare values needed by the next step.
             local_report_state_cache['ts'] = now
             local_report_state_cache['limit'] = max_rows
             local_report_state_cache['rows'] = [dict(row) for row in rows]
 
+    # Return the prepared result to the caller.
     return rows
 
 
+# Section: run the build realtime snapshot workflow with clear inputs and outputs.
 def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = False) -> Dict[str, Any]:
     """Collect compact realtime state for frontend auto-refresh subscribers."""
+    # Section: run the realtime source payload workflow with clear inputs and outputs.
     def _realtime_source_payload(scope: str, reason: str) -> Dict[str, str]:
+        # Prepare normalized scope for the next step.
         normalized_scope = str(scope or '').strip().lower()
         if normalized_scope not in ('local', 'cloud', 'shared', 'synced_local'):
+            # Prepare normalized scope for the next step.
             normalized_scope = 'cloud'
         label_map = {
             'local': 'Local',
@@ -9665,28 +11388,36 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             'shared': 'Shared',
             'synced_local': 'Local Synced',
         }
+        # Return the prepared result to the caller.
         return {
             'source_scope': normalized_scope,
             'source_label': label_map.get(normalized_scope, 'Cloud'),
             'source_reason': str(reason or '').strip() or 'realtime_snapshot',
         }
 
+    # Section: run the normalize realtime source scope workflow with clear inputs and outputs.
     def _normalize_realtime_source_scope(scope: Any) -> str:
         normalized = str(scope or '').strip().lower()
         return normalized if normalized in ('local', 'cloud', 'shared', 'synced_local') else ''
 
+    # Section: run the parse realtime detection payload workflow with clear inputs and outputs.
     def _parse_realtime_detection_payload(value: Any) -> Dict[str, Any]:
+        # Choose the correct branch before the workflow continues.
         if isinstance(value, dict):
+            # Return the prepared result to the caller.
             return value
         if isinstance(value, str) and value.strip():
             try:
+                # Prepare parsed for the next step.
                 parsed = json.loads(value)
                 return parsed if isinstance(parsed, dict) else {}
             except Exception:
                 return {}
         return {}
 
+    # Section: run the infer realtime db source scope workflow with clear inputs and outputs.
     def _infer_realtime_db_source_scope(row: Dict[str, Any]) -> str:
+        # Prepare detection payload for the next step.
         detection_payload = _parse_realtime_detection_payload(row.get('detection_data'))
         device_id = str(
             row.get('violation_device_id')
@@ -9699,6 +11430,7 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             or detection_payload.get('source')
             or ''
         ).strip().lower()
+        # Prepare sync state for the next step.
         sync_state = str(
             detection_payload.get('sync_state')
             or detection_payload.get('cloud_sync_state')
@@ -9711,6 +11443,7 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             or row.get('report_html_key')
             or row.get('report_pdf_key')
         )
+        # Prepare has cloud report artifact for the next step.
         has_cloud_report_artifact = bool(row.get('report_html_key') or row.get('report_pdf_key'))
         confirmed_synced_local = _has_confirmed_synced_local_evidence(
             sync_source=source_marker,
@@ -9720,15 +11453,18 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             has_cloud_report_artifact=has_cloud_report_artifact,
             report_id=str(row.get('report_id') or ''),
         )
+        # Prepare explicit scope for the next step.
         explicit_scope = _normalize_realtime_source_scope(
             detection_payload.get('source_scope')
             or detection_payload.get('report_scope')
             or detection_payload.get('scope')
         )
         if explicit_scope == 'synced_local':
+            # Return the prepared result to the caller.
             return 'synced_local' if confirmed_synced_local else ('local' if _is_local_artifact_origin_device(device_id) else 'cloud')
         if explicit_scope == 'local' and has_cloud_artifacts and not _is_local_artifact_origin_device(device_id):
             return 'cloud'
+        # Choose the correct branch before the workflow continues.
         if explicit_scope:
             return explicit_scope
         if confirmed_synced_local:
@@ -9740,9 +11476,12 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             sync_source=source_marker,
             device_id=device_id,
         ):
+            # Return the prepared result to the caller.
             return 'local'
+        # Return the prepared result to the caller.
         return ''
 
+    # Prepare queue data for the next step.
     queue_data = {
         'available': violation_queue is not None,
         'worker_running': _is_queue_worker_alive(),
@@ -9752,7 +11491,9 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
     }
 
     if violation_queue is not None:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare stats for the next step.
             stats = violation_queue.get_stats()
             queue_data.update({
                 'queue_size': stats.get('current_size', 0),
@@ -9762,6 +11503,7 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
         except Exception as e:
             logger.debug(f"Queue stats unavailable for realtime snapshot: {e}")
 
+    # Prepare progress for the next step.
     progress = get_report_progress()
     progress_status = str(progress.get('status') or '').strip().lower()
     queue_size = int(queue_data.get('queue_size') or 0)
@@ -9773,9 +11515,11 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
         and getattr(db_manager, 'conn', None) is not None
         and not _is_supabase_offline_backoff_active()
     ):
+        # Prepare values needed by the next step.
         cached_rows, cached_at = _get_realtime_supabase_cached_rows()
         should_poll = True
         if active_local and not REALTIME_SUPABASE_POLL_DURING_ACTIVE_LOCAL:
+            # Prepare should poll for the next step.
             should_poll = False
 
         if should_poll:
@@ -9785,10 +11529,13 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                 and not force_supabase_refresh
                 and (now_epoch - cached_at) < REALTIME_SUPABASE_POLL_INTERVAL_SECONDS
             ):
+                # Prepare report rows for the next step.
                 report_rows = list(report_rows) + list(cached_rows)
             else:
                 try:
+                    # Open the managed resource only for the block that needs it.
                     with db_manager.conn.cursor() as cur:
+                        # Trigger the side effect required for this stage.
                         cur.execute(
                             """
                             SELECT
@@ -9823,8 +11570,10 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                             """,
                             (int(limit),)
                         )
+                        # Prepare rows for the next step.
                         rows = cur.fetchall()
 
+                    # Prepare existing realtime rows for the next step.
                     existing_realtime_rows = list(report_rows)
                     report_rows = existing_realtime_rows
                     for row in rows:
@@ -9842,20 +11591,25 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                             'report_html_key': row.get('report_html_key'),
                             **(_realtime_source_payload(source_scope, 'db_realtime_snapshot') if source_scope else {})
                         })
+                    # Trigger the side effect required for this stage.
                     _set_realtime_supabase_cached_rows(report_rows)
                 except Exception as e:
                     safe_rollback = getattr(db_manager, '_safe_rollback', None)
                     if callable(safe_rollback):
+                        # Trigger the side effect required for this stage.
                         safe_rollback()
                     logger.debug(f"Realtime report snapshot query failed: {e}")
                     report_rows = list(report_rows) + list(cached_rows)
                 finally:
                     cleanup_tx = getattr(db_manager, '_cleanup_transaction_state', None)
+                    # Choose the correct branch before the workflow continues.
                     if callable(cleanup_tx):
                         cleanup_tx()
         else:
+            # Prepare report rows for the next step.
             report_rows = list(report_rows) + list(cached_rows)
 
+    # Prepare active realtime profile for the next step.
     active_realtime_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
     supabase_realtime_authoritative = (
         db_manager is not None
@@ -9865,9 +11619,12 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
     local_rows = _collect_local_report_state_rows(limit=max(40, int(limit) * 2))
     if local_rows:
         by_id: Dict[str, Dict[str, Any]] = {}
+        # Process each item in this collection using the same rule set.
         for row in report_rows:
+            # Prepare report id for the next step.
             report_id = str(row.get('report_id') or '').strip()
             if report_id:
+                # Prepare values needed by the next step.
                 by_id[report_id] = row
 
         visible_sync_probe_rows: List[Dict[str, Any]] = []
@@ -9876,8 +11633,10 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             if not report_id:
                 continue
 
+            # Prepare local visible sync candidate for the next step.
             local_visible_sync_candidate = _is_visible_local_cache_sync_candidate(local_row)
             if local_visible_sync_candidate:
+                # Trigger the side effect required for this stage.
                 visible_sync_probe_rows.append(local_row)
             existing = by_id.get(report_id)
             local_status = str(local_row.get('status') or '').strip().lower() or 'unknown'
@@ -9885,9 +11644,12 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             if local_row_scope not in ('local', 'cloud', 'shared', 'synced_local'):
                 local_row_scope = 'local'
 
+            # Choose the correct branch before the workflow continues.
             if existing:
                 existing_status = str(existing.get('status') or '').strip().lower()
+                # Process each item in this collection using the same rule set.
                 for flag_key in ('has_original', 'has_annotated', 'has_report'):
+                    # Prepare values needed by the next step.
                     existing[flag_key] = bool(existing.get(flag_key)) or bool(local_row.get(flag_key))
                 if local_row.get('has_report'):
                     existing['has_local_report'] = True
@@ -9900,25 +11662,32 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                     'violation_type',
                     'device_id',
                 ):
+                    # Prepare local value for the next step.
                     local_value = local_row.get(detail_key)
                     if local_value not in (None, '', [], {}):
+                        # Prepare current value for the next step.
                         current_value = existing.get(detail_key)
                         if current_value in (None, '', [], {}):
+                            # Prepare values needed by the next step.
                             existing[detail_key] = local_value
+                # Choose the correct branch before the workflow continues.
                 if not existing.get('source_scope'):
                     existing.update(_realtime_source_payload(local_row_scope, 'local_cache_row'))
                 if local_status in ('completed', 'failed', 'skipped') and existing_status in (
                     'pending', 'queued', 'processing', 'generating', 'unknown', ''
                 ):
+                    # Prepare values needed by the next step.
                     existing['status'] = local_status
                 elif bool(local_row.get('has_report')) and existing_status in (
                     'pending', 'queued', 'processing', 'generating', 'unknown', ''
                 ):
                     existing['status'] = 'completed'
 
+                # Choose the correct branch before the workflow continues.
                 if not existing.get('error_message') and local_row.get('error_message'):
                     existing['error_message'] = local_row.get('error_message')
                 if not existing.get('timestamp') and local_row.get('timestamp'):
+                    # Prepare values needed by the next step.
                     existing['timestamp'] = local_row.get('timestamp')
                 if (
                     not existing.get('updated_at')
@@ -9927,6 +11696,7 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                     existing['updated_at'] = local_row.get('updated_at')
                 continue
 
+            # Choose the correct branch before the workflow continues.
             if supabase_realtime_authoritative and not local_visible_sync_candidate:
                 continue
 
@@ -9952,15 +11722,18 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                 'sync_state': local_row.get('sync_state'),
                 **_realtime_source_payload(local_row_scope, 'local_cache_row'),
             }
+            # Trigger the side effect required for this stage.
             report_rows.append(snapshot_row)
             by_id[report_id] = snapshot_row
 
+        # Choose the correct branch before the workflow continues.
         if visible_sync_probe_rows and supabase_realtime_authoritative:
             _maybe_attempt_visible_local_cache_sync(
                 'realtime_visible_local',
                 local_rows=visible_sync_probe_rows,
             )
 
+    # Choose the correct branch before the workflow continues.
     if report_rows:
         status_priority = {
             'completed': 50,
@@ -9974,13 +11747,17 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             'unknown': 0,
         }
 
+        # Section: run the row status sequence workflow with clear inputs and outputs.
         def _row_status_sequence(*rows: Dict[str, Any]) -> List[str]:
             sequence: List[str] = []
+            # Process each item in this collection using the same rule set.
             for candidate in rows:
+                # Choose the correct branch before the workflow continues.
                 if not isinstance(candidate, dict):
                     continue
                 raw_sequence = candidate.get('status_sequence')
                 if isinstance(raw_sequence, list):
+                    # Prepare values for the next step.
                     values = raw_sequence
                 else:
                     values = [candidate.get('status')]
@@ -9989,18 +11766,23 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
                     if not status_value:
                         continue
                     if not sequence or sequence[-1] != status_value:
+                        # Trigger the side effect required for this stage.
                         sequence.append(status_value)
+            # Return the prepared result to the caller.
             return sequence[-6:]
 
         deduped_rows: Dict[str, Dict[str, Any]] = {}
+        # Process each item in this collection using the same rule set.
         for row in report_rows:
             report_id = str((row or {}).get('report_id') or '').strip()
             if not report_id:
                 continue
             row = dict(row)
             row['status_sequence'] = _row_status_sequence(row)
+            # Prepare existing for the next step.
             existing = deduped_rows.get(report_id)
             if not existing:
+                # Prepare values needed by the next step.
                 deduped_rows[report_id] = row
                 continue
 
@@ -10008,16 +11790,20 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
             existing_status = str(existing.get('status') or '').strip().lower()
             row_updated = str(row.get('updated_at') or row.get('timestamp') or '')
             existing_updated = str(existing.get('updated_at') or existing.get('timestamp') or '')
+            # Prepare status sequence for the next step.
             status_sequence = _row_status_sequence(existing, row)
             if (
                 status_priority.get(row_status, 0) > status_priority.get(existing_status, 0)
                 or row_updated > existing_updated
             ):
+                # Prepare values needed by the next step.
                 deduped_rows[report_id] = {**existing, **row, 'status_sequence': status_sequence}
             else:
                 deduped_rows[report_id] = {**row, **existing, 'status_sequence': status_sequence}
+        # Prepare report rows for the next step.
         report_rows = list(deduped_rows.values())
 
+    # Trigger the side effect required for this stage.
     report_rows.sort(
         key=lambda item: str(item.get('updated_at') or item.get('timestamp') or ''),
         reverse=True
@@ -10032,18 +11818,23 @@ def _build_realtime_snapshot(limit: int = 30, *, force_supabase_refresh: bool = 
     }
 
 
+# Section: run the api realtime stream workflow with clear inputs and outputs.
 @app.route('/api/realtime/stream', methods=['GET'])
 def api_realtime_stream():
     """Server-Sent Events stream for live UI updates without manual refresh."""
+    # Prepare startup gate for the next step.
     startup_gate = _startup_gate_response()
     if startup_gate is not None:
+        # Return the prepared result to the caller.
         return startup_gate
 
+    # Section: run the event stream workflow with clear inputs and outputs.
     def _event_stream():
         last_signature = None
         heartbeat_counter = 0
 
         while True:
+            # Prepare payload for the next step.
             payload = _build_realtime_snapshot(limit=30)
             signature_source = {
                 'queue': payload.get('queue'),
@@ -10053,6 +11844,7 @@ def api_realtime_stream():
             signature = json.dumps(signature_source, sort_keys=True, default=str)
 
             progress = payload.get('progress') or {}
+            # Prepare progress status for the next step.
             progress_status = str(progress.get('status') or '').strip().lower()
             queue = payload.get('queue') or {}
             active_generation = (
@@ -10069,12 +11861,15 @@ def api_realtime_stream():
             else:
                 heartbeat_counter += 1
                 if heartbeat_counter >= 15:
+                    # Prepare heartbeat counter for the next step.
                     heartbeat_counter = 0
                     ping = json.dumps({'server_time': datetime.now(timezone.utc).isoformat()})
                     yield f"event: heartbeat\ndata: {ping}\n\n"
 
+            # Trigger the side effect required for this stage.
             time.sleep(1)
 
+    # Prepare response for the next step.
     response = Response(_event_stream(), mimetype='text/event-stream')
     response.headers['Cache-Control'] = 'no-cache'
     response.headers['Connection'] = 'keep-alive'
@@ -10082,11 +11877,14 @@ def api_realtime_stream():
     return response
 
 
+# Section: run the api realtime snapshot workflow with clear inputs and outputs.
 @app.route('/api/realtime/snapshot', methods=['GET'])
 def api_realtime_snapshot():
     """Lightweight realtime snapshot endpoint for websocket-triggered UI refresh."""
+    # Prepare startup gate for the next step.
     startup_gate = _startup_gate_response()
     if startup_gate is not None:
+        # Return the prepared result to the caller.
         return startup_gate
 
     limit_raw = request.args.get('limit', '30')
@@ -10095,18 +11893,22 @@ def api_realtime_snapshot():
     except Exception:
         limit = 30
 
+    # Prepare fresh raw for the next step.
     fresh_raw = str(request.args.get('fresh') or '').strip().lower()
     force_supabase_refresh = fresh_raw in ('1', 'true', 'yes', 'on')
     payload = _build_realtime_snapshot(limit=limit, force_supabase_refresh=force_supabase_refresh)
     return jsonify(payload)
 
 
+# Section: run the api environment validation workflow with clear inputs and outputs.
 @app.route('/api/settings/environment-validation', methods=['GET', 'POST'])
 def api_environment_validation():
     """Get or set environment validation setting."""
     global ENVIRONMENT_VALIDATION_ENABLED
 
+    # Choose the correct branch before the workflow continues.
     if request.method == 'GET':
+        # Return the prepared result to the caller.
         return jsonify({
             'enabled': ENVIRONMENT_VALIDATION_ENABLED,
             'valid_keywords': VALID_ENVIRONMENT_KEYWORDS[:10],  # First 10 for display
@@ -10117,6 +11919,7 @@ def api_environment_validation():
     try:
         data = request.get_json()
         if 'enabled' in data:
+            # Prepare environment validation enabled for the next step.
             ENVIRONMENT_VALIDATION_ENABLED = bool(data['enabled'])
             logger.info(f"Environment validation {'enabled' if ENVIRONMENT_VALIDATION_ENABLED else 'disabled'}")
             return jsonify({
@@ -10127,16 +11930,20 @@ def api_environment_validation():
         else:
             return jsonify({'error': 'Missing "enabled" field'}), 400
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error updating environment validation: {e}")
         return jsonify({'error': str(e)}), 500
 
 
+# Section: run the api cooldown setting workflow with clear inputs and outputs.
 @app.route('/api/settings/cooldown', methods=['GET', 'POST'])
 def api_cooldown_setting():
     """Get or set the violation capture cooldown."""
     global VIOLATION_COOLDOWN, LIVE_VIOLATION_DEDUP_WINDOW_SECONDS
 
+    # Choose the correct branch before the workflow continues.
     if request.method == 'GET':
+        # Return the prepared result to the caller.
         return jsonify({
             'cooldown_seconds': VIOLATION_COOLDOWN,
             'live_dedup_window_seconds': LIVE_VIOLATION_DEDUP_WINDOW_SECONDS,
@@ -10147,8 +11954,10 @@ def api_cooldown_setting():
     try:
         data = request.get_json()
         if 'cooldown_seconds' in data:
+            # Prepare new cooldown for the next step.
             new_cooldown = int(data['cooldown_seconds'])
             if new_cooldown < 1:
+                # Return the prepared result to the caller.
                 return jsonify({'error': 'Cooldown must be at least 1 second'}), 400
             if new_cooldown > 300:
                 return jsonify({'error': 'Cooldown cannot exceed 300 seconds'}), 400
@@ -10162,17 +11971,22 @@ def api_cooldown_setting():
                 'message': f"Cooldown set to {VIOLATION_COOLDOWN} seconds"
             })
         else:
+            # Return the prepared result to the caller.
             return jsonify({'error': 'Missing "cooldown_seconds" field'}), 400
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error updating cooldown: {e}")
         return jsonify({'error': str(e)}), 500
 
 
+# Section: run the api disk space status workflow with clear inputs and outputs.
 @app.route('/api/settings/disk-space-status', methods=['GET'])
 def api_disk_space_status():
     """Return disk free space and whether it is sufficient for local model mode."""
+    # Protect this step so expected failures can fall back cleanly.
     try:
         required_gb = float(os.getenv('LOCAL_MODEL_REQUIRED_SPACE_GB', '12'))
+        # Prepare usage for the next step.
         usage = shutil.disk_usage(Path.cwd())
 
         free_gb = usage.free / (1024 ** 3)
@@ -10194,45 +12008,57 @@ def api_disk_space_status():
             )
         })
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error checking disk space status: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Section: run the normalize provider order workflow with clear inputs and outputs.
 def _normalize_provider_order(raw_value, default_order):
     """Normalize provider order payload into a validated list."""
+    # Prepare allowed for the next step.
     allowed = {'model_api', 'gemini', 'ollama', 'local'}
     if raw_value is None:
         return list(default_order)
 
     if isinstance(raw_value, str):
+        # Prepare parts for the next step.
         parts = [p.strip().lower() for p in raw_value.split(',') if p.strip()]
     elif isinstance(raw_value, list):
         parts = [str(p).strip().lower() for p in raw_value if str(p).strip()]
     else:
         return list(default_order)
 
+    # Prepare filtered for the next step.
     filtered = []
     for provider in parts:
         if provider in allowed and provider not in filtered:
+            # Trigger the side effect required for this stage.
             filtered.append(provider)
 
     return filtered if filtered else list(default_order)
 
 
+# Section: run the normalize provider profile workflow with clear inputs and outputs.
 def _normalize_provider_profile(value: str) -> str:
     """Normalize provider profile to local/cloud."""
+    # Return the prepared result to the caller.
     return 'local' if str(value or '').strip().lower() == 'local' else 'cloud'
 
 
+# Section: run the infer provider profile from order workflow with clear inputs and outputs.
 def _infer_provider_profile_from_order(order) -> str:
     """Infer profile from provider order: local/ollama-first => local, otherwise cloud."""
     normalized = _normalize_provider_order(order, [])
     if normalized and normalized[0] in ('local', 'ollama'):
+        # Return the prepared result to the caller.
         return 'local'
     return 'cloud'
 
 
+# Section: run the get provider profile preset workflow with clear inputs and outputs.
 def _get_provider_profile_preset(profile: str) -> Dict[str, Any]:
+    # Prepare normalized profile for the next step.
     normalized_profile = _normalize_provider_profile(profile)
     preset = PROVIDER_PROFILE_PRESETS.get(normalized_profile, PROVIDER_PROFILE_PRESETS['cloud'])
     return {
@@ -10245,6 +12071,7 @@ def _get_provider_profile_preset(profile: str) -> Dict[str, Any]:
     }
 
 
+# Section: run the sync report generator provider runtime workflow with clear inputs and outputs.
 def _sync_report_generator_provider_runtime(
     *,
     routing_profile: str,
@@ -10260,23 +12087,29 @@ def _sync_report_generator_provider_runtime(
     """Apply provider routing to the live report generator and reset stale state."""
     global report_generator
 
+    # Choose the correct branch before the workflow continues.
     if report_generator is None or not hasattr(report_generator, 'nlp_provider_order'):
+        # Return the prepared result to the caller.
         return False
 
     normalized_profile = _normalize_provider_profile(routing_profile)
 
     try:
         if hasattr(report_generator, 'notify_provider_route_changed'):
+            # Trigger the side effect required for this stage.
             report_generator.notify_provider_route_changed(normalized_profile, reason=reason)
         else:
             report_generator.routing_profile = normalized_profile
             if hasattr(report_generator, 'sticky_nlp_provider'):
+                # Prepare sticky nlp provider for the next step.
                 report_generator.sticky_nlp_provider = None
             if hasattr(report_generator, 'sticky_nlp_provider_until_epoch'):
                 report_generator.sticky_nlp_provider_until_epoch = 0.0
     except Exception as route_epoch_err:
+        # Trigger the side effect required for this stage.
         logger.warning(f"Could not invalidate report generator provider epoch: {route_epoch_err}")
 
+    # Prepare routing profile for the next step.
     report_generator.routing_profile = normalized_profile
     if hasattr(report_generator, 'strict_local_profile'):
         report_generator.strict_local_profile = bool(
@@ -10288,7 +12121,9 @@ def _sync_report_generator_provider_runtime(
         str(os.getenv('ALLOW_NLP_FALLBACK', 'false')).strip().lower()
         in ('1', 'true', 'yes', 'on')
     )
+    # Choose the correct branch before the workflow continues.
     if hasattr(report_generator, 'allow_nlp_fallback'):
+        # Prepare allow nlp fallback for the next step.
         report_generator.allow_nlp_fallback = (
             False if getattr(report_generator, 'strict_local_profile', False)
             else allow_nlp_fallback_default
@@ -10297,6 +12132,7 @@ def _sync_report_generator_provider_runtime(
     report_generator.model_api_enabled = bool(model_api_enabled)
     report_generator.nlp_provider_order = list(nlp_provider_order)
     report_generator.embedding_provider_order = list(embedding_provider_order)
+    # Prepare model for the next step.
     report_generator.model = OLLAMA_CONFIG.get('model', getattr(report_generator, 'model', None))
     report_generator.nlp_model = MODEL_API_CONFIG.get('nlp_model', report_generator.model)
     report_generator.embedding_api_model = MODEL_API_CONFIG.get(
@@ -10304,9 +12140,13 @@ def _sync_report_generator_provider_runtime(
         getattr(report_generator, 'embedding_model', None)
     )
 
+    # Section: run the float or env workflow with clear inputs and outputs.
     def _float_or_env(value: Optional[float], env_name: str, default: float = 0.0) -> float:
+        # Choose the correct branch before the workflow continues.
         if value is not None:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Return the prepared result to the caller.
                 return float(value)
             except (TypeError, ValueError):
                 return float(default)
@@ -10315,9 +12155,13 @@ def _sync_report_generator_provider_runtime(
         except (TypeError, ValueError):
             return float(default)
 
+    # Section: run the int or env workflow with clear inputs and outputs.
     def _int_or_env(value: Optional[int], env_name: str, default: int) -> int:
+        # Choose the correct branch before the workflow continues.
         if value is not None:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Return the prepared result to the caller.
                 return int(value)
             except (TypeError, ValueError):
                 return int(default)
@@ -10326,6 +12170,7 @@ def _sync_report_generator_provider_runtime(
         except (TypeError, ValueError):
             return int(default)
 
+    # Prepare gemini daily budget usd for the next step.
     report_generator.gemini_daily_budget_usd = max(
         0.0,
         _float_or_env(gemini_daily_budget_usd, 'GEMINI_DAILY_BUDGET_USD', 0.0)
@@ -10338,6 +12183,7 @@ def _sync_report_generator_provider_runtime(
         4096,
         _int_or_env(None, 'GEMINI_REPORT_MIN_OUTPUT_TOKENS', 6144)
     )
+    # Prepare gemini max output tokens per report for the next step.
     report_generator.gemini_max_output_tokens_per_report = max(
         gemini_min_output_tokens_per_report,
         _int_or_env(
@@ -10348,17 +12194,21 @@ def _sync_report_generator_provider_runtime(
     )
     report_generator.gemini_min_output_tokens_per_report = gemini_min_output_tokens_per_report
 
+    # Prepare gemini runtime available for the next step.
     gemini_runtime_available = False
     if normalized_profile == 'cloud' and gemini_enabled:
+        # Protect this step so expected failures can fall back cleanly.
         try:
             from pipeline.backend.integration.gemini_client import GeminiClient
 
+            # Prepare refreshed config for the next step.
             refreshed_config = dict(getattr(report_generator, 'config', {}) or _build_report_generator_config())
             refreshed_config['GEMINI_CONFIG'] = dict(GEMINI_CONFIG)
             refreshed_config['MODEL_API_CONFIG'] = dict(MODEL_API_CONFIG)
             refreshed_config['OLLAMA_CONFIG'] = dict(OLLAMA_CONFIG)
             refreshed_client = GeminiClient(refreshed_config)
             if getattr(refreshed_client, 'is_available', False):
+                # Prepare gemini client for the next step.
                 report_generator.gemini_client = refreshed_client
                 gemini_runtime_available = True
                 logger.info("Gemini client reinitialized after provider switch to cloud")
@@ -10369,11 +12219,14 @@ def _sync_report_generator_provider_runtime(
                     getattr(refreshed_client, 'last_error', 'unknown error'),
                 )
         except Exception as gemini_init_err:
+            # Prepare gemini client for the next step.
             report_generator.gemini_client = None
             logger.warning(f"Could not initialize Gemini client after routing switch to cloud: {gemini_init_err}")
     else:
+        # Prepare use gemini for the next step.
         report_generator.use_gemini = False
 
+    # Prepare use gemini for the next step.
     report_generator.use_gemini = (
         normalized_profile == 'cloud'
         and bool(gemini_enabled)
@@ -10382,20 +12235,24 @@ def _sync_report_generator_provider_runtime(
     )
 
     if getattr(report_generator, 'gemini_client', None) is not None:
+        # Prepare max tokens for the next step.
         report_generator.gemini_client.max_tokens = min(
             max(report_generator.gemini_client.max_tokens, gemini_min_output_tokens_per_report),
             report_generator.gemini_max_output_tokens_per_report,
         )
 
+    # Return the prepared result to the caller.
     return True
 
 
+# Section: run the apply provider profile workflow with clear inputs and outputs.
 def _apply_provider_profile(profile: str) -> Dict[str, Any]:
     """Apply strict provider profile to in-memory + env + active modules."""
     global report_generator
 
     applied = _get_provider_profile_preset(profile)
     routing_profile = applied['routing_profile']
+    # Prepare model api enabled for the next step.
     model_api_enabled = applied['model_api_enabled']
     gemini_enabled = applied['gemini_enabled']
     nlp_provider_order = applied['nlp_provider_order']
@@ -10405,15 +12262,18 @@ def _apply_provider_profile(profile: str) -> Dict[str, Any]:
     MODEL_API_CONFIG['enabled'] = model_api_enabled
     MODEL_API_CONFIG['nlp_provider_order'] = list(nlp_provider_order)
     MODEL_API_CONFIG['embedding_provider_order'] = list(embedding_provider_order)
+    # Prepare values needed by the next step.
     GEMINI_CONFIG['enabled'] = gemini_enabled
 
     if routing_profile == 'local':
+        # Prepare values needed by the next step.
         OLLAMA_CONFIG['model'] = STRICT_LOCAL_OLLAMA_MODEL
         os.environ['LOCAL_OLLAMA_UNIFIED_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
         os.environ['OLLAMA_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
         os.environ['OLLAMA_VISION_MODEL'] = STRICT_LOCAL_OLLAMA_MODEL
 
     os.environ['CASM_ROUTING_PROFILE'] = routing_profile
+    # Prepare values needed by the next step.
     os.environ['MODEL_API_ENABLED'] = 'true' if model_api_enabled else 'false'
     os.environ['GEMINI_ENABLED'] = 'true' if gemini_enabled else 'false'
     os.environ['NLP_PROVIDER_ORDER'] = ','.join(nlp_provider_order)
@@ -10422,6 +12282,7 @@ def _apply_provider_profile(profile: str) -> Dict[str, Any]:
 
     try:
         from caption_image import update_runtime_provider_settings
+        # Trigger the side effect required for this stage.
         update_runtime_provider_settings({
             'routing_profile': routing_profile,
             'vision_provider_order': vision_provider_order,
@@ -10431,6 +12292,7 @@ def _apply_provider_profile(profile: str) -> Dict[str, Any]:
     except Exception as caption_err:
         logger.warning(f"Could not apply strict vision provider profile at runtime: {caption_err}")
 
+    # Trigger the side effect required for this stage.
     _sync_report_generator_provider_runtime(
         routing_profile=routing_profile,
         model_api_enabled=model_api_enabled,
@@ -10440,12 +12302,15 @@ def _apply_provider_profile(profile: str) -> Dict[str, Any]:
         reason=f'apply_provider_profile:{routing_profile}',
     )
 
+    # Return the prepared result to the caller.
     return applied
 
 
+# Section: run the is quota related error workflow with clear inputs and outputs.
 def _is_quota_related_error(message: str) -> bool:
     text = str(message or '').lower()
     if not text:
+        # Return the prepared result to the caller.
         return False
     return (
         'resource_exhausted' in text
@@ -10456,10 +12321,13 @@ def _is_quota_related_error(message: str) -> bool:
     )
 
 
+# Section: run the detect ollama executable workflow with clear inputs and outputs.
 def _detect_ollama_executable() -> str:
     """Return best-effort Ollama executable path, including common non-PATH installs."""
+    # Prepare from path for the next step.
     from_path = shutil.which('ollama')
     if from_path:
+        # Return the prepared result to the caller.
         return from_path
 
     candidates = []
@@ -10475,7 +12343,9 @@ def _detect_ollama_executable() -> str:
             os.path.join(program_files_x86, 'Ollama', 'ollama.exe'),
             os.path.join(program_files_x86, 'Ollama', 'Ollama app.exe'),
         ])
+    # Choose the correct branch before the workflow continues.
     elif sys.platform == 'darwin':
+        # Trigger the side effect required for this stage.
         candidates.extend([
             '/Applications/Ollama.app/Contents/MacOS/Ollama',
             '/opt/homebrew/bin/ollama',
@@ -10488,16 +12358,22 @@ def _detect_ollama_executable() -> str:
             '/snap/bin/ollama',
         ])
 
+    # Process each item in this collection using the same rule set.
     for candidate in candidates:
+        # Choose the correct branch before the workflow continues.
         if candidate and os.path.exists(candidate):
+            # Return the prepared result to the caller.
             return candidate
 
     return ''
 
 
+# Section: run the get ollama install guidance workflow with clear inputs and outputs.
 def _get_ollama_install_guidance() -> Dict[str, Any]:
     """Build OS-specific install guidance for Ollama onboarding UX."""
+    # Choose the correct branch before the workflow continues.
     if os.name == 'nt':
+        # Return the prepared result to the caller.
         return {
             'install_url': 'https://ollama.com/download/windows',
             'install_commands': [
@@ -10511,7 +12387,9 @@ def _get_ollama_install_guidance() -> Dict[str, Any]:
             ]
         }
 
+    # Choose the correct branch before the workflow continues.
     if sys.platform == 'darwin':
+        # Return the prepared result to the caller.
         return {
             'install_url': 'https://ollama.com/download/mac',
             'install_commands': [
@@ -10524,6 +12402,7 @@ def _get_ollama_install_guidance() -> Dict[str, Any]:
             ]
         }
 
+    # Return the prepared result to the caller.
     return {
         'install_url': 'https://ollama.com/download/linux',
         'install_commands': [
@@ -10537,7 +12416,9 @@ def _get_ollama_install_guidance() -> Dict[str, Any]:
     }
 
 
+# Section: run the get local mode diagnostics workflow with clear inputs and outputs.
 def _get_local_mode_diagnostics() -> Dict[str, Any]:
+    # Prepare ollama base url for the next step.
     ollama_base_url = str(
         os.getenv('OLLAMA_BASE_URL')
         or (OLLAMA_CONFIG or {}).get('base_url')
@@ -10549,6 +12430,7 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
         or os.getenv('OLLAMA_VISION_MODEL')
         or LOCAL_OLLAMA_UNIFIED_MODEL
     ).strip()
+    # Prepare ollama executable for the next step.
     ollama_executable = _detect_ollama_executable()
     install_guidance = _get_ollama_install_guidance()
 
@@ -10558,16 +12440,21 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
     probe_error = None
 
     try:
+        # Prepare resp for the next step.
         resp = requests.get(tags_url, timeout=LOCAL_MODE_OLLAMA_TAGS_TIMEOUT_SECONDS)
         ollama_running = resp.ok
         if resp.ok:
+            # Prepare payload for the next step.
             payload = resp.json() if resp.content else {}
             models = payload.get('models', []) if isinstance(payload, dict) else []
             names = []
             for item in models:
+                # Choose the correct branch before the workflow continues.
                 if isinstance(item, dict):
+                    # Prepare name for the next step.
                     name = str(item.get('name') or item.get('model') or '').strip()
                     if name:
+                        # Trigger the side effect required for this stage.
                         names.append(name)
             model_available = any(
                 name == ollama_model
@@ -10576,10 +12463,13 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
                 for name in names
             )
         else:
+            # Prepare probe error for the next step.
             probe_error = f"Ollama tags request failed ({resp.status_code})"
     except Exception as e:
+        # Prepare probe error for the next step.
         probe_error = str(e)
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
         yolo_runtime = get_yolo_runtime_diagnostics()
     except Exception as yolo_diag_err:
@@ -10589,6 +12479,7 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
             'last_error': str(yolo_diag_err),
         }
 
+    # Return the prepared result to the caller.
     return {
         'ollama_base_url': ollama_base_url,
         'ollama_model': ollama_model,
@@ -10608,6 +12499,7 @@ def _get_local_mode_diagnostics() -> Dict[str, Any]:
     }
 
 
+# Section: run the get hosted local mode checkup diagnostics workflow with clear inputs and outputs.
 def _get_hosted_local_mode_checkup_diagnostics() -> Dict[str, Any]:
     """Fast cloud-side diagnostics for deployed UI checkups.
 
@@ -10615,6 +12507,7 @@ def _get_hosted_local_mode_checkup_diagnostics() -> Dict[str, Any]:
     readiness comes from the edge heartbeat instead. Skipping the localhost
     probe keeps Settings checkup responsive after deploy/reconnect.
     """
+    # Prepare ollama base url for the next step.
     ollama_base_url = str(
         os.getenv('OLLAMA_BASE_URL')
         or (OLLAMA_CONFIG or {}).get('base_url')
@@ -10626,6 +12519,7 @@ def _get_hosted_local_mode_checkup_diagnostics() -> Dict[str, Any]:
         or os.getenv('OLLAMA_VISION_MODEL')
         or LOCAL_OLLAMA_UNIFIED_MODEL
     ).strip()
+    # Prepare install guidance for the next step.
     install_guidance = _get_ollama_install_guidance()
 
     return {
@@ -10646,10 +12540,13 @@ def _get_hosted_local_mode_checkup_diagnostics() -> Dict[str, Any]:
     }
 
 
+# Section: run the start ollama service if needed workflow with clear inputs and outputs.
 def _start_ollama_service_if_needed(wait_seconds: int = 8) -> Dict[str, Any]:
     """Best-effort start of Ollama service when not already running."""
+    # Prepare before for the next step.
     before = _get_local_mode_diagnostics()
     if before.get('ollama_running'):
+        # Return the prepared result to the caller.
         return {
             'attempted': False,
             'started': False,
@@ -10657,8 +12554,10 @@ def _start_ollama_service_if_needed(wait_seconds: int = 8) -> Dict[str, Any]:
             'error': None,
         }
 
+    # Prepare ollama cmd for the next step.
     ollama_cmd = _detect_ollama_executable()
     if not ollama_cmd:
+        # Prepare guidance for the next step.
         guidance = _get_ollama_install_guidance()
         return {
             'attempted': True,
@@ -10669,7 +12568,9 @@ def _start_ollama_service_if_needed(wait_seconds: int = 8) -> Dict[str, Any]:
             'install_commands': guidance.get('install_commands', []),
         }
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare kwargs for the next step.
         kwargs = {
             'stdout': subprocess.DEVNULL,
             'stderr': subprocess.DEVNULL,
@@ -10677,10 +12578,12 @@ def _start_ollama_service_if_needed(wait_seconds: int = 8) -> Dict[str, Any]:
         }
 
         if os.name == 'nt':
+            # Prepare values needed by the next step.
             kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
         else:
             kwargs['start_new_session'] = True
 
+        # Prepare cmd lower for the next step.
         cmd_lower = os.path.basename(ollama_cmd).lower()
         if cmd_lower == 'ollama app.exe':
             subprocess.Popen([ollama_cmd], **kwargs)
@@ -10689,8 +12592,10 @@ def _start_ollama_service_if_needed(wait_seconds: int = 8) -> Dict[str, Any]:
 
         deadline = time.time() + max(1, int(wait_seconds))
         while time.time() < deadline:
+            # Prepare probe for the next step.
             probe = _get_local_mode_diagnostics()
             if probe.get('ollama_running'):
+                # Return the prepared result to the caller.
                 return {
                     'attempted': True,
                     'started': True,
@@ -10698,8 +12603,10 @@ def _start_ollama_service_if_needed(wait_seconds: int = 8) -> Dict[str, Any]:
                     'error': None,
                     'start_command': f'"{ollama_cmd}" serve' if cmd_lower != 'ollama app.exe' else f'"{ollama_cmd}"',
                 }
+            # Trigger the side effect required for this stage.
             time.sleep(1)
 
+        # Return the prepared result to the caller.
         return {
             'attempted': True,
             'started': False,
@@ -10717,10 +12624,13 @@ def _start_ollama_service_if_needed(wait_seconds: int = 8) -> Dict[str, Any]:
         }
 
 
+# Section: run the pull ollama model if needed workflow with clear inputs and outputs.
 def _pull_ollama_model_if_needed(ollama_base_url: str, model_name: str, timeout_seconds: int = 600) -> Dict[str, Any]:
     """Best-effort pull of required Ollama model when missing."""
+    # Prepare diag for the next step.
     diag = _get_local_mode_diagnostics()
     if diag.get('model_available'):
+        # Return the prepared result to the caller.
         return {
             'attempted': False,
             'pulled': False,
@@ -10728,6 +12638,7 @@ def _pull_ollama_model_if_needed(ollama_base_url: str, model_name: str, timeout_
             'error': None,
         }
 
+    # Choose the correct branch before the workflow continues.
     if not diag.get('ollama_running'):
         return {
             'attempted': False,
@@ -10737,13 +12648,16 @@ def _pull_ollama_model_if_needed(ollama_base_url: str, model_name: str, timeout_
         }
 
     pull_url = f"{str(ollama_base_url).rstrip('/')}/api/pull"
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare response for the next step.
         response = requests.post(
             pull_url,
             json={'model': model_name, 'stream': False},
             timeout=max(60, int(timeout_seconds))
         )
         if not response.ok:
+            # Return the prepared result to the caller.
             return {
                 'attempted': True,
                 'pulled': False,
@@ -10751,6 +12665,7 @@ def _pull_ollama_model_if_needed(ollama_base_url: str, model_name: str, timeout_
                 'error': f"Model pull failed (HTTP {response.status_code})",
             }
 
+        # Prepare post diag for the next step.
         post_diag = _get_local_mode_diagnostics()
         return {
             'attempted': True,
@@ -10767,8 +12682,11 @@ def _pull_ollama_model_if_needed(ollama_base_url: str, model_name: str, timeout_
         }
 
 
+# Section: run the apply nlp provider order workflow with clear inputs and outputs.
 def _apply_nlp_provider_order(order: List[str]) -> List[str]:
+    # Choose the correct branch before the workflow continues.
     if STRICT_PROVIDER_MODE_SPLIT:
+        # Prepare inferred profile for the next step.
         inferred_profile = _infer_provider_profile_from_order(order)
         applied = _apply_provider_profile(inferred_profile)
         return list(applied.get('nlp_provider_order', []))
@@ -10777,8 +12695,11 @@ def _apply_nlp_provider_order(order: List[str]) -> List[str]:
     MODEL_API_CONFIG['nlp_provider_order'] = normalized
     os.environ['NLP_PROVIDER_ORDER'] = ','.join(normalized)
 
+    # Choose the correct branch before the workflow continues.
     if report_generator is not None:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare nlp provider order for the next step.
             report_generator.nlp_provider_order = normalized
         except Exception:
             pass
@@ -10786,6 +12707,7 @@ def _apply_nlp_provider_order(order: List[str]) -> List[str]:
     return normalized
 
 
+# Section: run the migrate legacy luna state dir workflow with clear inputs and outputs.
 def _migrate_legacy_luna_state_dir(target_dir: Path) -> None:
     """One-shot migration: if a fresh CASM install lands on a machine that was
     previously provisioned under the old LUNA branding, copy the legacy state
@@ -10793,9 +12715,12 @@ def _migrate_legacy_luna_state_dir(target_dir: Path) -> None:
     request approval again. Safe to call repeatedly  only copies files that
     do not already exist in the new location.
     """
+    # Protect this step so expected failures can fall back cleanly.
     try:
         legacy_candidates: List[Path] = []
+        # Choose the correct branch before the workflow continues.
         if os.name == 'nt':
+            # Trigger the side effect required for this stage.
             legacy_candidates.append(Path(r'C:\LUNA_System\LUNA_LocalState'))
             legacy_candidates.append(Path.home() / 'LUNA_LocalState')
         else:
@@ -10805,14 +12730,18 @@ def _migrate_legacy_luna_state_dir(target_dir: Path) -> None:
 
         for legacy_dir in legacy_candidates:
             try:
+                # Choose the correct branch before the workflow continues.
                 if not legacy_dir.exists() or not legacy_dir.is_dir():
                     continue
                 copied_any = False
                 for fname in legacy_files:
+                    # Prepare src for the next step.
                     src = legacy_dir / fname
                     dst = target_dir / fname
                     if src.exists() and not dst.exists():
+                        # Protect this step so expected failures can fall back cleanly.
                         try:
+                            # Trigger the side effect required for this stage.
                             shutil.copy2(src, dst)
                             copied_any = True
                             logger.info(
@@ -10824,36 +12753,46 @@ def _migrate_legacy_luna_state_dir(target_dir: Path) -> None:
                                 f"Failed to migrate legacy LUNA state file '{fname}' "
                                 f"from {legacy_dir}: {copy_err}"
                             )
+                # Choose the correct branch before the workflow continues.
                 if copied_any:
+                    # Return the prepared result to the caller.
                     return
             except Exception:
                 continue
     except Exception as migrate_err:
+        # Trigger the side effect required for this stage.
         logger.warning(f"Legacy LUNA state migration skipped due to error: {migrate_err}")
 
 
+# Section: run the resolve local mode state dir workflow with clear inputs and outputs.
 def _resolve_local_mode_state_dir() -> Path:
+    # Prepare configured for the next step.
     configured = os.path.expandvars(str(os.getenv('CASM_STATE_DIR') or '').strip())
     if not configured:
         fallback_candidates: List[Path] = []
         if os.name == 'nt':
+            # Trigger the side effect required for this stage.
             fallback_candidates.append(Path(r'C:\CASM_System\CASM_LocalState'))
             fallback_candidates.append(Path.home() / 'CASM_LocalState')
         else:
             fallback_candidates.append(Path.home() / '.casm_local_state')
 
+        # Trigger the side effect required for this stage.
         fallback_candidates.append(Path('.'))
 
         for candidate in fallback_candidates:
             try:
+                # Trigger the side effect required for this stage.
                 candidate.mkdir(parents=True, exist_ok=True)
                 _migrate_legacy_luna_state_dir(candidate)
                 return candidate
             except Exception:
                 continue
 
+        # Return the prepared result to the caller.
         return Path('.')
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
         state_dir = Path(configured).expanduser()
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -10861,26 +12800,34 @@ def _resolve_local_mode_state_dir() -> Path:
         return state_dir
     except Exception as state_err:
         logger.warning(f"Invalid CASM_STATE_DIR '{configured}': {state_err}. Falling back to current directory.")
+        # Return the prepared result to the caller.
         return Path('.')
 
 
+# Prepare local mode state dir for the next step.
 LOCAL_MODE_STATE_DIR = _resolve_local_mode_state_dir()
 LOCAL_MODE_PROVISION_STATE_FILE = LOCAL_MODE_STATE_DIR / 'local_mode_provision_state.json'
 LOCAL_MODE_MACHINE_ID_FILE = LOCAL_MODE_STATE_DIR / 'machine_id.txt'
 
 
+# Section: run the local mode normalize cloud url workflow with clear inputs and outputs.
 def _local_mode_normalize_cloud_url(raw_url: str) -> str:
+    # Prepare value for the next step.
     value = str(raw_url or '').strip()
     if not value:
+        # Return the prepared result to the caller.
         return ''
     if not re.match(r'^https?://', value, flags=re.IGNORECASE):
         value = f"https://{value}"
     return value.rstrip('/')
 
 
+# Section: run the local mode cloud url is placeholder workflow with clear inputs and outputs.
 def _local_mode_cloud_url_is_placeholder(value: str) -> bool:
+    # Prepare normalized for the next step.
     normalized = str(value or '').strip().lower()
     if not normalized:
+        # Return the prepared result to the caller.
         return True
     placeholder_markers = (
         'your-cloud-dashboard-url',
@@ -10888,12 +12835,15 @@ def _local_mode_cloud_url_is_placeholder(value: str) -> bool:
         'your-railway-domain',
         'your cloud dashboard',
     )
+    # Return the prepared result to the caller.
     return any(marker in normalized for marker in placeholder_markers)
 
 
+# Section: run the local mode is name resolution error workflow with clear inputs and outputs.
 def _local_mode_is_name_resolution_error(raw_error: str) -> bool:
     normalized = str(raw_error or '').strip().lower()
     if not normalized:
+        # Return the prepared result to the caller.
         return False
 
     markers = (
@@ -10905,12 +12855,15 @@ def _local_mode_is_name_resolution_error(raw_error: str) -> bool:
         'nodename nor servname provided',
         'temporary failure in name resolution',
     )
+    # Return the prepared result to the caller.
     return any(marker in normalized for marker in markers)
 
 
+# Section: run the local mode is placeholder secret workflow with clear inputs and outputs.
 def _local_mode_is_placeholder_secret(value: str) -> bool:
     normalized = str(value or '').strip().lower()
     if not normalized:
+        # Return the prepared result to the caller.
         return True
     placeholder_markers = (
         'your-project-id',
@@ -10920,9 +12873,11 @@ def _local_mode_is_placeholder_secret(value: str) -> bool:
         'postgresql://postgres:your-db-password',
         'postgres://postgres:your-db-password',
     )
+    # Return the prepared result to the caller.
     return any(marker in normalized for marker in placeholder_markers)
 
 
+# Section: run the local mode has supabase credentials workflow with clear inputs and outputs.
 def _local_mode_has_supabase_credentials() -> bool:
     db_url = os.getenv('SUPABASE_DB_URL', '').strip()
     supa_url = os.getenv('SUPABASE_URL', '').strip()
@@ -10930,18 +12885,24 @@ def _local_mode_has_supabase_credentials() -> bool:
     return not any(_local_mode_is_placeholder_secret(v) for v in (db_url, supa_url, service_key))
 
 
+# Section: run the local mode load provision state workflow with clear inputs and outputs.
 def _local_mode_load_provision_state() -> Dict[str, Any]:
+    # Choose the correct branch before the workflow continues.
     if not LOCAL_MODE_PROVISION_STATE_FILE.exists():
+        # Return the prepared result to the caller.
         return {}
     try:
         with open(LOCAL_MODE_PROVISION_STATE_FILE, 'r') as f:
+            # Prepare payload for the next step.
             payload = json.load(f)
         return payload if isinstance(payload, dict) else {}
     except Exception:
         return {}
 
 
+# Section: run the local mode save provision state workflow with clear inputs and outputs.
 def _local_mode_save_provision_state(state: Dict[str, Any]) -> None:
+    # Prepare incoming for the next step.
     incoming = dict(state) if isinstance(state, dict) else {}
     existing = _local_mode_load_provision_state()
     clear_provision_secret = bool(incoming.pop('_clear_provision_secret', False))
@@ -10958,8 +12919,11 @@ def _local_mode_save_provision_state(state: Dict[str, Any]) -> None:
         'requested_at',
         'provisioned_at',
     ):
+        # Choose the correct branch before the workflow continues.
         if key not in merged and existing.get(key):
+            # Prepare values needed by the next step.
             merged[key] = existing.get(key)
+    # Choose the correct branch before the workflow continues.
     if (
         not clear_provision_secret
         and 'provision_secret' in merged
@@ -10969,11 +12933,14 @@ def _local_mode_save_provision_state(state: Dict[str, Any]) -> None:
         merged['provision_secret'] = existing.get('provision_secret')
 
     LOCAL_MODE_PROVISION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # Prepare tmp path for the next step.
     tmp_path = LOCAL_MODE_PROVISION_STATE_FILE.with_name(
         f"{LOCAL_MODE_PROVISION_STATE_FILE.name}.tmp.{uuid.uuid4().hex}"
     )
     try:
+        # Open the managed resource only for the block that needs it.
         with open(tmp_path, 'w', encoding='utf-8') as f:
+            # Trigger the side effect required for this stage.
             json.dump(merged, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
@@ -10981,11 +12948,13 @@ def _local_mode_save_provision_state(state: Dict[str, Any]) -> None:
     finally:
         if tmp_path.exists():
             try:
+                # Trigger the side effect required for this stage.
                 tmp_path.unlink()
             except Exception:
                 pass
 
 
+# Section: run the mark local provision secret stale workflow with clear inputs and outputs.
 def _mark_local_provision_secret_stale(
     *,
     machine_id: str,
@@ -10993,9 +12962,11 @@ def _mark_local_provision_secret_stale(
     error_text: str = '',
 ) -> None:
     """Clear a locally stale provision secret without mutating cloud approval state."""
+    # Prepare normalized machine id for the next step.
     normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
     normalized_cloud_url = _local_mode_normalize_cloud_url(cloud_url)
     if not normalized_machine_id:
+        # Return the prepared result to the caller.
         return
 
     state = _local_mode_load_provision_state()
@@ -11011,16 +12982,20 @@ def _mark_local_provision_secret_stale(
         'last_provision_secret_error_at': now_iso,
         'last_provision_secret_error_detail': str(error_text or '')[:240],
     })
+    # Trigger the side effect required for this stage.
     _local_mode_save_provision_state(state)
 
 
+# Section: run the has recent local provision secret stale marker workflow with clear inputs and outputs.
 def _has_recent_local_provision_secret_stale_marker(
     state: Dict[str, Any],
     *,
     max_age_seconds: Optional[int] = None,
 ) -> bool:
     if str((state or {}).get('last_provision_secret_error') or '').strip() != 'invalid_or_stale':
+        # Return the prepared result to the caller.
         return False
+    # Prepare marker epoch for the next step.
     marker_epoch = _parse_iso_epoch((state or {}).get('last_provision_secret_error_at'))
     if marker_epoch is None:
         return True
@@ -11032,20 +13007,26 @@ def _has_recent_local_provision_secret_stale_marker(
     return (time.time() - marker_epoch) < max(15, recovery_window)
 
 
+# Section: run the local mode normalize machine id workflow with clear inputs and outputs.
 def _local_mode_normalize_machine_id(raw_machine_id: Any) -> str:
+    # Prepare machine id for the next step.
     machine_id = str(raw_machine_id or '').strip()
     if not machine_id:
+        # Return the prepared result to the caller.
         return ''
     if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
         return ''
     return machine_id
 
 
+# Section: run the local mode generate deterministic machine id workflow with clear inputs and outputs.
 def _local_mode_generate_deterministic_machine_id() -> str:
+    # Prepare seed override for the next step.
     seed_override = str(os.getenv('CASM_MACHINE_ID_SEED') or '').strip()
     seed_parts: List[str] = []
 
     if seed_override:
+        # Trigger the side effect required for this stage.
         seed_parts.append(seed_override)
     else:
         seed_parts.extend([
@@ -11055,34 +13036,44 @@ def _local_mode_generate_deterministic_machine_id() -> str:
             str(LOCAL_MODE_STATE_DIR).strip(),
             str(sys.platform or '').strip(),
         ])
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare mac int for the next step.
             mac_int = int(uuid.getnode())
             if mac_int > 0:
+                # Trigger the side effect required for this stage.
                 seed_parts.append(f"mac:{mac_int:012x}")
         except Exception:
             pass
 
+    # Prepare seed source for the next step.
     seed_source = '|'.join(part for part in seed_parts if part) or 'casm-local-machine-seed'
     suffix = hashlib.sha256(seed_source.encode('utf-8')).hexdigest()[:12].upper()
     return f"Edge-{suffix}"
 
 
+# Section: run the local mode get existing machine id workflow with clear inputs and outputs.
 def _local_mode_get_existing_machine_id() -> str:
     configured = _local_mode_normalize_machine_id(os.getenv('CASM_MACHINE_ID', ''))
     if configured:
+        # Trigger the side effect required for this stage.
         _local_mode_write_machine_id(configured)
         return configured
 
+    # Prepare existing for the next step.
     existing = ''
     if LOCAL_MODE_MACHINE_ID_FILE.exists():
         try:
+            # Prepare existing for the next step.
             existing = _local_mode_normalize_machine_id(
                 LOCAL_MODE_MACHINE_ID_FILE.read_text(encoding='utf-8')
             )
         except Exception:
             existing = ''
 
+    # Choose the correct branch before the workflow continues.
     if existing:
+        # Return the prepared result to the caller.
         return existing
 
     state_machine_id = _local_mode_normalize_machine_id(
@@ -11092,34 +13083,44 @@ def _local_mode_get_existing_machine_id() -> str:
         _local_mode_write_machine_id(state_machine_id)
         return state_machine_id
 
+    # Return the prepared result to the caller.
     return ''
 
 
+# Section: run the local mode get or create machine id workflow with clear inputs and outputs.
 def _local_mode_get_or_create_machine_id() -> str:
     existing_machine_id = _local_mode_get_existing_machine_id()
     if existing_machine_id:
+        # Return the prepared result to the caller.
         return existing_machine_id
 
     machine_id = _local_mode_generate_deterministic_machine_id()
+    # Trigger the side effect required for this stage.
     _local_mode_write_machine_id(machine_id)
     return machine_id
 
 
+# Section: run the local mode write machine id workflow with clear inputs and outputs.
 def _local_mode_write_machine_id(machine_id: str) -> None:
     normalized = _local_mode_normalize_machine_id(machine_id)
     if not normalized:
+        # Return the prepared result to the caller.
         return
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
         LOCAL_MODE_MACHINE_ID_FILE.write_text(normalized, encoding='utf-8')
     except Exception as machine_id_err:
         logger.warning(f"Unable to persist local machine_id '{normalized}': {machine_id_err}")
 
 
+# Section: run the local mode upsert env values workflow with clear inputs and outputs.
 def _local_mode_upsert_env_values(updates: Dict[str, str], env_path: Path = LOCAL_ENV_PATH) -> None:
     env_lines: List[str] = []
     if env_path.exists():
+        # Prepare env lines for the next step.
         env_lines = env_path.read_text(encoding='utf-8').splitlines()
+    # Choose the correct branch before the workflow continues.
     elif LOCAL_ENV_EXAMPLE_PATH.exists():
         env_lines = LOCAL_ENV_EXAMPLE_PATH.read_text(encoding='utf-8').splitlines()
 
@@ -11128,24 +13129,30 @@ def _local_mode_upsert_env_values(updates: Dict[str, str], env_path: Path = LOCA
 
     for index, line in enumerate(env_lines):
         match = key_pattern.match(line)
+        # Choose the correct branch before the workflow continues.
         if not match:
             continue
         key = match.group(1)
         if key in updates:
+            # Prepare values needed by the next step.
             env_lines[index] = f"{key}={str(updates[key]).strip()}"
             replaced_keys.add(key)
 
+    # Choose the correct branch before the workflow continues.
     if env_lines and env_lines[-1].strip() != '':
         env_lines.append('')
 
     for key, value in updates.items():
+        # Choose the correct branch before the workflow continues.
         if key not in replaced_keys:
             env_lines.append(f"{key}={str(value).strip()}")
 
     env_path.write_text('\n'.join(env_lines).rstrip() + '\n', encoding='utf-8')
 
 
+# Section: run the local mode apply supabase credentials workflow with clear inputs and outputs.
 def _local_mode_apply_supabase_credentials(credentials: Dict[str, Any]) -> Dict[str, Any]:
+    # Prepare required keys for the next step.
     required_keys = ('SUPABASE_DB_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY')
     resolved_credentials = {
         key: str(credentials.get(key) or '').strip()
@@ -11153,11 +13160,13 @@ def _local_mode_apply_supabase_credentials(credentials: Dict[str, Any]) -> Dict[
     }
 
     if any(_local_mode_is_placeholder_secret(value) for value in resolved_credentials.values()):
+        # Return the prepared result to the caller.
         return {
             'success': False,
             'error': 'Received invalid provisioning credentials from cloud exchange.',
         }
 
+    # Trigger the side effect required for this stage.
     _local_mode_upsert_env_values(resolved_credentials)
     for key, value in resolved_credentials.items():
         os.environ[key] = value
@@ -11165,10 +13174,12 @@ def _local_mode_apply_supabase_credentials(credentials: Dict[str, Any]) -> Dict[
     reinit_success = False
     reinit_error = None
     try:
+        # Prepare reinit success for the next step.
         reinit_success = bool(initialize_pipeline_components())
     except Exception as e:
         reinit_error = str(e)
 
+    # Return the prepared result to the caller.
     return {
         'success': True,
         'reinitialized': reinit_success,
@@ -11176,17 +13187,22 @@ def _local_mode_apply_supabase_credentials(credentials: Dict[str, Any]) -> Dict[
     }
 
 
+# Section: run the extract json response payload workflow with clear inputs and outputs.
 def _extract_json_response_payload(response_result: Any) -> Tuple[Dict[str, Any], int]:
     """Normalize Flask route return values into payload/status for internal callers."""
+    # Prepare status code for the next step.
     status_code = 200
     response_obj: Any = response_result
 
     if isinstance(response_result, tuple):
+        # Choose the correct branch before the workflow continues.
         if len(response_result) >= 1:
+            # Prepare response obj for the next step.
             response_obj = response_result[0]
         if len(response_result) >= 2 and isinstance(response_result[1], int):
             status_code = int(response_result[1])
 
+    # Choose the correct branch before the workflow continues.
     if hasattr(response_obj, 'status_code'):
         try:
             status_code = int(getattr(response_obj, 'status_code') or status_code)
@@ -11194,10 +13210,13 @@ def _extract_json_response_payload(response_result: Any) -> Tuple[Dict[str, Any]
             pass
 
     if isinstance(response_obj, dict):
+        # Return the prepared result to the caller.
         return response_obj, status_code
 
+    # Choose the correct branch before the workflow continues.
     if hasattr(response_obj, 'get_json'):
         try:
+            # Prepare payload for the next step.
             payload = response_obj.get_json(silent=True)
             return payload if isinstance(payload, dict) else {}, status_code
         except Exception:
@@ -11206,10 +13225,13 @@ def _extract_json_response_payload(response_result: Any) -> Tuple[Dict[str, Any]
     return {}, status_code
 
 
+# Section: run the run local mode auto provision once workflow with clear inputs and outputs.
 def _run_local_mode_auto_provision_once(cloud_url_override: str = '') -> Tuple[Dict[str, Any], int]:
     request_payload: Dict[str, Any] = {}
+    # Prepare normalized cloud url for the next step.
     normalized_cloud_url = _local_mode_normalize_cloud_url(cloud_url_override)
     if normalized_cloud_url:
+        # Prepare values needed by the next step.
         request_payload['cloud_url'] = normalized_cloud_url
 
     with app.test_request_context(
@@ -11219,9 +13241,11 @@ def _run_local_mode_auto_provision_once(cloud_url_override: str = '') -> Tuple[D
     ):
         response_result = api_local_mode_auto_provisioning()
 
+    # Return the prepared result to the caller.
     return _extract_json_response_payload(response_result)
 
 
+# Section: run the startup local auto provision worker workflow with clear inputs and outputs.
 def _startup_local_auto_provision_worker() -> None:
     logger.info(
         "Startup auto-provision worker started "
@@ -11229,9 +13253,12 @@ def _startup_local_auto_provision_worker() -> None:
         f"max_attempts={STARTUP_AUTO_PROVISION_MAX_ATTEMPTS})"
     )
 
+    # Prepare attempts for the next step.
     attempts = 0
     while True:
+        # Choose the correct branch before the workflow continues.
         if _local_mode_has_supabase_credentials():
+            # Trigger the side effect required for this stage.
             logger.info('Startup auto-provision: credentials already present; worker exiting.')
             return
 
@@ -11241,10 +13268,13 @@ def _startup_local_auto_provision_worker() -> None:
             return
 
         attempts += 1
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare values needed by the next step.
             payload, status_code = _run_local_mode_auto_provision_once(cloud_url)
         except Exception as provision_exc:
             if attempts == 1 or attempts % 4 == 0:
+                # Trigger the side effect required for this stage.
                 logger.warning(f'Startup auto-provision attempt {attempts} failed: {provision_exc}')
         else:
             status = str(payload.get('status') or '').strip().lower()
@@ -11254,7 +13284,9 @@ def _startup_local_auto_provision_worker() -> None:
                 logger.info('Startup auto-provision completed: Supabase credentials are active locally.')
                 return
 
+            # Choose the correct branch before the workflow continues.
             if status == 'rejected':
+                # Trigger the side effect required for this stage.
                 logger.warning('Startup auto-provision stopped: request rejected by admin.')
                 return
 
@@ -11264,7 +13296,9 @@ def _startup_local_auto_provision_worker() -> None:
                     f"Startup auto-provision attempt {attempts}: status={status or 'unknown'}, detail={detail}"
                 )
 
+        # Choose the correct branch before the workflow continues.
         if STARTUP_AUTO_PROVISION_MAX_ATTEMPTS > 0 and attempts >= STARTUP_AUTO_PROVISION_MAX_ATTEMPTS:
+            # Trigger the side effect required for this stage.
             logger.info(
                 'Startup auto-provision stopped after max attempts '
                 f'({STARTUP_AUTO_PROVISION_MAX_ATTEMPTS}).'
@@ -11274,10 +13308,13 @@ def _startup_local_auto_provision_worker() -> None:
         time.sleep(STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS)
 
 
+# Section: run the ensure startup local auto provision worker workflow with clear inputs and outputs.
 def _ensure_startup_local_auto_provision_worker() -> None:
     global startup_auto_provision_thread
 
+    # Choose the correct branch before the workflow continues.
     if not STARTUP_AUTO_PROVISION_LOCAL_MODE:
+        # Return the prepared result to the caller.
         return
     if _is_hosted_runtime_environment():
         return
@@ -11286,12 +13323,15 @@ def _ensure_startup_local_auto_provision_worker() -> None:
     if _local_mode_has_supabase_credentials():
         return
 
+    # Prepare cloud url for the next step.
     cloud_url = _local_mode_normalize_cloud_url(os.getenv('CLOUD_URL', '').strip())
     if not cloud_url or _local_mode_cloud_url_is_placeholder(cloud_url):
+        # Return the prepared result to the caller.
         return
 
     with startup_auto_provision_thread_lock:
         if startup_auto_provision_thread and startup_auto_provision_thread.is_alive():
+            # Return the prepared result to the caller.
             return
 
         startup_auto_provision_thread = Thread(
@@ -11299,37 +13339,46 @@ def _ensure_startup_local_auto_provision_worker() -> None:
             daemon=True,
             name='startup-auto-provision',
         )
+        # Trigger the side effect required for this stage.
         startup_auto_provision_thread.start()
 
 
+# Section: run the normalize cloud provision status workflow with clear inputs and outputs.
 def _normalize_cloud_provision_status(raw_status: Any) -> str:
+    # Prepare normalized for the next step.
     normalized = str(raw_status or '').strip().lower()
     if normalized in ('pending', 'pending_approval'):
         return 'pending_approval'
     if normalized in ('approved', 'provisioned', 'active', 'rejected'):
         return normalized
     if normalized in ('not_found', 'missing', 'unknown'):
+        # Return the prepared result to the caller.
         return 'idle'
     return normalized or 'idle'
 
 
+# Section: run the normalize heartbeat provision status workflow with clear inputs and outputs.
 def _normalize_heartbeat_provision_status(raw_status: Any) -> str:
+    # Prepare normalized for the next step.
     normalized = str(raw_status or '').strip().lower()
     if normalized in ('pending', 'pending_approval'):
         return 'pending_approval'
     if normalized in ('approved', 'provisioned', 'active', 'rejected', 'credentials_present'):
+        # Return the prepared result to the caller.
         return normalized
     if normalized in ('not_found', 'missing', 'unknown'):
         return 'idle'
     return normalized if normalized in ('idle',) else 'idle'
 
 
+# Section: run the local mode fetch authoritative status workflow with clear inputs and outputs.
 def _local_mode_fetch_authoritative_status(
     cloud_url: str,
     machine_id: str,
     provision_secret: str,
     timeout_seconds: int = 20,
 ) -> Dict[str, Any]:
+    # Prepare normalized cloud url for the next step.
     normalized_cloud_url = _local_mode_normalize_cloud_url(cloud_url)
     normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
     normalized_secret = str(provision_secret or '').strip()
@@ -11343,7 +13392,9 @@ def _local_mode_fetch_authoritative_status(
         'error': '',
     }
 
+    # Choose the correct branch before the workflow continues.
     if not normalized_cloud_url or _local_mode_cloud_url_is_placeholder(normalized_cloud_url):
+        # Prepare values needed by the next step.
         result['error'] = 'cloud_url_missing'
         return result
 
@@ -11353,8 +13404,10 @@ def _local_mode_fetch_authoritative_status(
 
     if not normalized_secret:
         result['error'] = 'provision_secret_missing'
+        # Return the prepared result to the caller.
         return result
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
         response = requests.get(
             f"{normalized_cloud_url}/api/provision/status",
@@ -11364,21 +13417,26 @@ def _local_mode_fetch_authoritative_status(
             },
             timeout=max(3, int(timeout_seconds)),
         )
+        # Prepare body for the next step.
         body = response.json() if response.content else {}
     except Exception as status_err:
         result['error'] = f'cloud_status_poll_failed: {status_err}'
         return result
 
+    # Prepare raw status for the next step.
     raw_status = str((body or {}).get('status') or '').strip().lower()
     normalized_status = _normalize_cloud_provision_status(raw_status)
 
     if response.status_code == 403:
+        # Prepare normalized status for the next step.
         normalized_status = 'rejected'
     elif response.status_code in (401, 404):
         normalized_status = 'idle'
     elif response.status_code == 503:
         if normalized_status not in ('approved', 'provisioned', 'active', 'pending_approval'):
+            # Prepare normalized status for the next step.
             normalized_status = 'idle'
+    # Choose the correct branch before the workflow continues.
     elif not response.ok:
         if normalized_status not in ('approved', 'provisioned', 'active', 'pending_approval', 'rejected'):
             normalized_status = 'idle'
@@ -11391,17 +13449,22 @@ def _local_mode_fetch_authoritative_status(
         'payload': body if isinstance(body, dict) else {},
         'error': '',
     })
+    # Return the prepared result to the caller.
     return result
 
 
+# Section: run the is localhost like hostname workflow with clear inputs and outputs.
 def _is_localhost_like_hostname(hostname: str) -> bool:
     host = str(hostname or '').strip().lower()
     if not host:
+        # Return the prepared result to the caller.
         return False
     return host in {'localhost', '127.0.0.1', '0.0.0.0'} or host.endswith('.local')
 
 
+# Section: run the local mode collect cloud heartbeat submission workflow with clear inputs and outputs.
 def _local_mode_collect_cloud_heartbeat_submission() -> Dict[str, Any]:
+    # Prepare state for the next step.
     state = _local_mode_load_provision_state()
     cloud_url = _local_mode_normalize_cloud_url(
         os.getenv('CLOUD_URL')
@@ -11410,7 +13473,9 @@ def _local_mode_collect_cloud_heartbeat_submission() -> Dict[str, Any]:
     )
 
     if not cloud_url:
+        # Return the prepared result to the caller.
         return {'ready': False, 'reason': 'cloud_url_missing'}
+    # Choose the correct branch before the workflow continues.
     if _local_mode_cloud_url_is_placeholder(cloud_url):
         return {'ready': False, 'reason': 'cloud_url_placeholder'}
 
@@ -11419,8 +13484,10 @@ def _local_mode_collect_cloud_heartbeat_submission() -> Dict[str, Any]:
     except Exception:
         cloud_host = ''
     if _is_localhost_like_hostname(cloud_host):
+        # Return the prepared result to the caller.
         return {'ready': False, 'reason': 'cloud_url_localhost'}
 
+    # Prepare machine id for the next step.
     machine_id = _local_mode_normalize_machine_id(state.get('machine_id')) or _local_mode_get_existing_machine_id()
     if not machine_id:
         return {'ready': False, 'reason': 'machine_id_missing'}
@@ -11430,9 +13497,11 @@ def _local_mode_collect_cloud_heartbeat_submission() -> Dict[str, Any]:
         return {'ready': False, 'reason': 'provision_secret_missing'}
 
     diagnostics = _get_local_mode_diagnostics()
+    # Prepare cached status for the next step.
     cached_status = _normalize_heartbeat_provision_status(state.get('status'))
     credentials_present = _local_mode_has_supabase_credentials()
     if cached_status == 'idle' and credentials_present:
+        # Prepare cached status for the next step.
         cached_status = 'credentials_present'
 
     return {
@@ -11446,6 +13515,7 @@ def _local_mode_collect_cloud_heartbeat_submission() -> Dict[str, Any]:
     }
 
 
+# Section: run the send local mode cloud heartbeat once workflow with clear inputs and outputs.
 def _send_local_mode_cloud_heartbeat_once(
     *,
     skip_authoritative_fetch: bool = False,
@@ -11461,7 +13531,9 @@ def _send_local_mode_cloud_heartbeat_once(
       - ``lean_payload=True`` strips the diagnostics dict from the request
         body. Use during steady state to keep the body well under 256B.
     """
+    # Choose the correct branch before the workflow continues.
     if not LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED:
+        # Return the prepared result to the caller.
         return {'sent': False, 'reason': 'heartbeat_disabled'}
     if _is_hosted_runtime_environment():
         return {'sent': False, 'reason': 'hosted_runtime'}
@@ -11491,6 +13563,7 @@ def _send_local_mode_cloud_heartbeat_once(
                 recovery_state.get('machine_id')
             ) or _local_mode_get_existing_machine_id()
 
+            # Prepare can attempt recovery for the next step.
             can_attempt_recovery = (
                 _local_mode_has_supabase_credentials()
                 and bool(recovery_cloud_url)
@@ -11499,7 +13572,9 @@ def _send_local_mode_cloud_heartbeat_once(
             )
 
             if can_attempt_recovery:
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Trigger the side effect required for this stage.
                     _run_local_mode_auto_provision_once(recovery_cloud_url)
                 except Exception as recovery_err:
                     return {
@@ -11508,17 +13583,22 @@ def _send_local_mode_cloud_heartbeat_once(
                         'error': f'provision_secret_recovery_failed: {recovery_err}',
                     }
 
+                # Prepare submission for the next step.
                 submission = _local_mode_collect_cloud_heartbeat_submission()
 
+        # Choose the correct branch before the workflow continues.
         if not submission.get('ready'):
+            # Return the prepared result to the caller.
             return {'sent': False, 'reason': str(submission.get('reason') or initial_reason)}
 
+    # Prepare cloud url for the next step.
     cloud_url = str(submission.get('cloud_url') or '').strip()
     machine_id = str(submission.get('machine_id') or '').strip()
     provision_secret = str(submission.get('provision_secret') or '').strip()
     provision_status = _normalize_heartbeat_provision_status(submission.get('provision_status'))
     credentials_present = bool(submission.get('credentials_present'))
     if provision_status == 'idle' and credentials_present:
+        # Prepare provision status for the next step.
         provision_status = 'credentials_present'
 
     # Egress guard: only do the authoritative status round-trip when caller
@@ -11528,6 +13608,7 @@ def _send_local_mode_cloud_heartbeat_once(
     if skip_authoritative_fetch:
         authoritative_status = ''
     else:
+        # Prepare cloud state for the next step.
         cloud_state = _local_mode_fetch_authoritative_status(
             cloud_url=cloud_url,
             machine_id=machine_id,
@@ -11535,6 +13616,7 @@ def _send_local_mode_cloud_heartbeat_once(
             timeout_seconds=min(8, max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS))),
         )
         authoritative_status = _normalize_heartbeat_provision_status(cloud_state.get('status'))
+    # Choose the correct branch before the workflow continues.
     if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected'):
         provision_status = authoritative_status
 
@@ -11547,7 +13629,9 @@ def _send_local_mode_cloud_heartbeat_once(
         'source': 'local-backend-worker',
         'provision_status': provision_status,
     }
+    # Choose the correct branch before the workflow continues.
     if not lean_payload:
+        # Prepare values needed by the next step.
         heartbeat_payload['diagnostics'] = {
             'local_mode_possible': bool(diagnostics.get('local_mode_possible')),
             'ollama_installed': bool(diagnostics.get('ollama_installed')),
@@ -11557,12 +13641,15 @@ def _send_local_mode_cloud_heartbeat_once(
             'error': str(diagnostics.get('error') or '').strip(),
         }
 
+    # Prepare response for the next step.
     response = None
     body = {}
     last_heartbeat_error = None
     heartbeat_timeout = max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS))
     for attempt_index in range(int(LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS)):
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare response for the next step.
             response = requests.post(
                 f"{cloud_url}/api/local-mode/heartbeat",
                 json=heartbeat_payload,
@@ -11572,16 +13659,21 @@ def _send_local_mode_cloud_heartbeat_once(
             last_heartbeat_error = None
             break
         except requests.exceptions.RequestException as heartbeat_err:
+            # Prepare last heartbeat error for the next step.
             last_heartbeat_error = heartbeat_err
             if attempt_index + 1 < int(LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_ATTEMPTS):
+                # Trigger the side effect required for this stage.
                 time.sleep(float(LOCAL_MODE_CLOUD_HEARTBEAT_RETRY_DELAY_SECONDS))
         except Exception as heartbeat_err:
             last_heartbeat_error = heartbeat_err
             break
 
+    # Choose the correct branch before the workflow continues.
     if last_heartbeat_error is not None or response is None:
+        # Prepare error text for the next step.
         error_text = str(last_heartbeat_error or 'heartbeat request failed')
         if _is_supabase_connectivity_failure(error_text):
+            # Return the prepared result to the caller.
             return {
                 'sent': False,
                 'reason': 'cloud_unreachable',
@@ -11593,7 +13685,9 @@ def _send_local_mode_cloud_heartbeat_once(
             'error': error_text,
         }
 
+    # Choose the correct branch before the workflow continues.
     if not response.ok:
+        # Prepare response status code for the next step.
         response_status_code = int(response.status_code)
         response_error = str((body or {}).get('error') or f'HTTP {response.status_code}').strip()
         invalid_secret_rejected = (
@@ -11602,6 +13696,7 @@ def _send_local_mode_cloud_heartbeat_once(
         )
 
         if invalid_secret_rejected:
+            # Protect this step so expected failures can fall back cleanly.
             try:
                 # The heartbeat just proved this local secret is stale. Do not
                 # send it back as current_provision_secret; use the admin token
@@ -11611,11 +13706,13 @@ def _send_local_mode_cloud_heartbeat_once(
                 refresh_headers = {}
                 _local_admin_token = str(os.getenv('CLOUD_ADMIN_TOKEN') or os.getenv('ADMIN_PASSWORD') or '').strip()
                 if _local_admin_token:
+                    # Prepare values needed by the next step.
                     refresh_headers['X-Admin-Token'] = _local_admin_token
                 refresh_headers.update(
                     _build_provision_credential_recovery_headers(machine_id)
                 )
 
+                # Prepare refresh response for the next step.
                 refresh_response = requests.post(
                     f"{cloud_url}/api/provision/request",
                     json=refresh_body_payload,
@@ -11625,7 +13722,9 @@ def _send_local_mode_cloud_heartbeat_once(
                 refresh_body = refresh_response.json() if refresh_response.content else {}
                 refreshed_secret = str((refresh_body or {}).get('provision_secret') or '').strip()
 
+                # Choose the correct branch before the workflow continues.
                 if refresh_response.ok and refreshed_secret and refreshed_secret != provision_secret:
+                    # Prepare refreshed state for the next step.
                     refreshed_state = _local_mode_load_provision_state()
                     refreshed_state.update({
                         'machine_id': machine_id,
@@ -11638,7 +13737,9 @@ def _send_local_mode_cloud_heartbeat_once(
                         ).strip().lower() or 'pending_approval',
                         'updated_at': datetime.now(timezone.utc).isoformat(),
                     })
+                    # Choose the correct branch before the workflow continues.
                     if not refreshed_state.get('requested_at'):
+                        # Prepare values needed by the next step.
                         refreshed_state['requested_at'] = datetime.now(timezone.utc).isoformat()
                     _local_mode_save_provision_state(refreshed_state)
 
@@ -11649,14 +13750,17 @@ def _send_local_mode_cloud_heartbeat_once(
                         json=retry_payload,
                         timeout=max(3, int(LOCAL_MODE_CLOUD_HEARTBEAT_TIMEOUT_SECONDS)),
                     )
+                    # Prepare retry body for the next step.
                     retry_body = retry_response.json() if retry_response.content else {}
                     if retry_response.ok:
+                        # Prepare retry heartbeat summary for the next step.
                         retry_heartbeat_summary = (
                             dict(retry_body.get('heartbeat') or {})
                             if isinstance(retry_body, dict) and isinstance(retry_body.get('heartbeat'), dict)
                             else {}
                         )
                         try:
+                            # Trigger the side effect required for this stage.
                             _upsert_local_mode_heartbeat(
                                 machine_id,
                                 retry_heartbeat_summary or {
@@ -11667,9 +13771,11 @@ def _send_local_mode_cloud_heartbeat_once(
                                 },
                             )
                         except Exception as mirror_err:
+                            # Trigger the side effect required for this stage.
                             logger.debug(
                                 f"Unable to mirror retried cloud heartbeat locally for {machine_id}: {mirror_err}"
                             )
+                        # Trigger the side effect required for this stage.
                         logger.info(
                             f"Recovered stale provision_secret and retried local heartbeat for {machine_id}"
                         )
@@ -11682,15 +13788,18 @@ def _send_local_mode_cloud_heartbeat_once(
                             'authoritative_fetched': not skip_authoritative_fetch,
                         }
 
+                    # Prepare response error for the next step.
                     response_error = str(
                         (retry_body or {}).get('error') or f'HTTP {retry_response.status_code}'
                     ).strip()
                     response_status_code = int(retry_response.status_code)
             except Exception as refresh_err:
+                # Trigger the side effect required for this stage.
                 logger.debug(
                     f"Heartbeat provision_secret recovery failed for {machine_id}: {refresh_err}"
                 )
 
+            # Trigger the side effect required for this stage.
             _mark_local_provision_secret_stale(
                 machine_id=machine_id,
                 cloud_url=cloud_url,
@@ -11703,6 +13812,7 @@ def _send_local_mode_cloud_heartbeat_once(
                 'error': response_error,
             }
 
+        # Return the prepared result to the caller.
         return {
             'sent': False,
             'reason': 'request_rejected',
@@ -11710,8 +13820,10 @@ def _send_local_mode_cloud_heartbeat_once(
             'error': response_error,
         }
 
+    # Prepare cloud heartbeat summary for the next step.
     cloud_heartbeat_summary = {}
     if isinstance(body, dict) and isinstance(body.get('heartbeat'), dict):
+        # Prepare cloud heartbeat summary for the next step.
         cloud_heartbeat_summary = dict(body.get('heartbeat') or {})
 
     local_mirror_record = cloud_heartbeat_summary or {
@@ -11720,7 +13832,9 @@ def _send_local_mode_cloud_heartbeat_once(
         'source': str(heartbeat_payload.get('source') or '').strip() or 'local-backend-worker',
         'provision_status': provision_status,
     }
+    # Choose the correct branch before the workflow continues.
     if not cloud_heartbeat_summary and isinstance(heartbeat_payload.get('diagnostics'), dict):
+        # Prepare payload diagnostics for the next step.
         payload_diagnostics = heartbeat_payload.get('diagnostics') or {}
         local_mirror_record.update({
             'local_mode_possible': bool(payload_diagnostics.get('local_mode_possible')),
@@ -11730,7 +13844,9 @@ def _send_local_mode_cloud_heartbeat_once(
             'ollama_model': str(payload_diagnostics.get('ollama_model') or '').strip(),
             'error': str(payload_diagnostics.get('error') or '').strip(),
         })
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Trigger the side effect required for this stage.
         _upsert_local_mode_heartbeat(machine_id, local_mirror_record)
     except Exception as mirror_err:
         logger.debug(f"Unable to mirror successful cloud heartbeat locally for {machine_id}: {mirror_err}")
@@ -11746,6 +13862,7 @@ def _send_local_mode_cloud_heartbeat_once(
     }
 
 
+# Section: run the send local mode cloud heartbeat background workflow with clear inputs and outputs.
 def _send_local_mode_cloud_heartbeat_background(
     *,
     reason: str = '',
@@ -11753,16 +13870,21 @@ def _send_local_mode_cloud_heartbeat_background(
     lean_payload: bool = True,
 ) -> Optional[Thread]:
     """Fire a bounded one-shot heartbeat without blocking startup/UI requests."""
+    # Choose the correct branch before the workflow continues.
     if not LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED or _is_hosted_runtime_environment():
+        # Return the prepared result to the caller.
         return None
 
+    # Section: run the target workflow with clear inputs and outputs.
     def _target() -> None:
         try:
+            # Prepare result for the next step.
             result = _send_local_mode_cloud_heartbeat_once(
                 skip_authoritative_fetch=skip_authoritative_fetch,
                 lean_payload=lean_payload,
             )
             if result.get('sent'):
+                # Trigger the side effect required for this stage.
                 logger.debug(
                     "Local-mode cloud heartbeat one-shot sent "
                     f"(reason={reason or 'unspecified'}, machine_id={result.get('machine_id')})"
@@ -11773,11 +13895,13 @@ def _send_local_mode_cloud_heartbeat_background(
                     f"(reason={reason or 'unspecified'}, skip_reason={result.get('reason')})"
                 )
         except Exception as heartbeat_err:
+            # Trigger the side effect required for this stage.
             logger.debug(
                 f"Local-mode cloud heartbeat one-shot failed "
                 f"(reason={reason or 'unspecified'}): {heartbeat_err}"
             )
 
+    # Prepare heartbeat thread for the next step.
     heartbeat_thread = Thread(
         target=_target,
         daemon=True,
@@ -11787,7 +13911,9 @@ def _send_local_mode_cloud_heartbeat_background(
     return heartbeat_thread
 
 
+# Section: run the local mode cloud heartbeat worker workflow with clear inputs and outputs.
 def _local_mode_cloud_heartbeat_worker() -> None:
+    # Trigger the side effect required for this stage.
     logger.info(
         'Local-mode cloud heartbeat worker started '
         f'(min_interval={LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS}s, '
@@ -11797,6 +13923,7 @@ def _local_mode_cloud_heartbeat_worker() -> None:
     failure_count = 0
     cycle_index = 0
     last_status: str = ''
+    # Prepare steady streak for the next step.
     steady_streak = 0
     current_interval = LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS
 
@@ -11804,6 +13931,7 @@ def _local_mode_cloud_heartbeat_worker() -> None:
         cycle_index += 1
         # Decide whether this cycle includes the authoritative status fetch.
         # Always do it on the first cycle, every Nth cycle, and after any error.
+        # Prepare force full for the next step.
         force_full = (
             cycle_index == 1
             or failure_count > 0
@@ -11822,7 +13950,9 @@ def _local_mode_cloud_heartbeat_worker() -> None:
         sent = bool(result.get('sent'))
 
         if sent:
+            # Choose the correct branch before the workflow continues.
             if failure_count > 0:
+                # Trigger the side effect required for this stage.
                 logger.info('Local-mode cloud heartbeat recovered after temporary failures.')
             failure_count = 0
 
@@ -11845,6 +13975,7 @@ def _local_mode_cloud_heartbeat_worker() -> None:
                 current_interval = LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS
         else:
             failure_count += 1
+            # Prepare steady streak for the next step.
             steady_streak = 0
             current_interval = LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS
             reason = str(result.get('reason') or '').strip().lower()
@@ -11863,6 +13994,7 @@ def _local_mode_cloud_heartbeat_worker() -> None:
                 'supabase_offline_backoff',
                 'cloud_unreachable',
             }
+            # Prepare noisy reason for the next step.
             noisy_reason = not quiet_reason
 
             # In local/offline workflows, cloud heartbeat unreachability is expected and should not
@@ -11873,21 +14005,26 @@ def _local_mode_cloud_heartbeat_worker() -> None:
                     f"(reason={reason}, error={error_text or 'none'})"
                 )
 
+            # Choose the correct branch before the workflow continues.
             if noisy_reason and (failure_count == 1 or failure_count % 8 == 0):
                 logger.warning(
                     'Local-mode cloud heartbeat failed '
                     f"(reason={reason or 'unknown'}, error={error_text or 'none'})"
                 )
 
+        # Trigger the side effect required for this stage.
         time.sleep(current_interval)
 
 
+# Section: run the ensure local mode cloud heartbeat worker workflow with clear inputs and outputs.
 def _ensure_local_mode_cloud_heartbeat_worker() -> None:
     global local_mode_heartbeat_thread
 
+    # Choose the correct branch before the workflow continues.
     if not LOCAL_MODE_CLOUD_HEARTBEAT_ENABLED:
         return
     if _is_hosted_runtime_environment():
+        # Return the prepared result to the caller.
         return
 
     # Egress guard: if no Supabase cloud credentials are configured (pure
@@ -11899,10 +14036,12 @@ def _ensure_local_mode_cloud_heartbeat_worker() -> None:
         logger.info(
             'Local-mode cloud heartbeat worker not started: pure-local profile with no Supabase credentials.'
         )
+        # Return the prepared result to the caller.
         return
 
     with local_mode_heartbeat_thread_lock:
         if local_mode_heartbeat_thread and local_mode_heartbeat_thread.is_alive():
+            # Return the prepared result to the caller.
             return
 
         local_mode_heartbeat_thread = Thread(
@@ -11910,10 +14049,13 @@ def _ensure_local_mode_cloud_heartbeat_worker() -> None:
             daemon=True,
             name='local-mode-cloud-heartbeat',
         )
+        # Trigger the side effect required for this stage.
         local_mode_heartbeat_thread.start()
 
 
+# Section: run the get cloud local mode heartbeat snapshot workflow with clear inputs and outputs.
 def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[str, Any]:
+    # Prepare records for the next step.
     records = _load_local_mode_heartbeats()
     normalized_hint = _local_mode_normalize_machine_id(machine_id_hint)
 
@@ -11922,22 +14064,27 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
     matched_requested_machine = not bool(normalized_hint)
 
     if normalized_hint:
+        # Choose the correct branch before the workflow continues.
         if isinstance(records.get(normalized_hint), dict):
+            # Prepare selected machine id for the next step.
             selected_machine_id = normalized_hint
             selected_record = records.get(normalized_hint)
             matched_requested_machine = True
         else:
             hint_lower = normalized_hint.lower()
             for machine_id, record in records.items():
+                # Choose the correct branch before the workflow continues.
                 if not isinstance(record, dict):
                     continue
                 existing_machine_id = str(machine_id or '').strip()
                 if existing_machine_id.lower() == hint_lower:
+                    # Prepare selected machine id for the next step.
                     selected_machine_id = existing_machine_id
                     selected_record = record
                     matched_requested_machine = True
                     break
 
+    # Choose the correct branch before the workflow continues.
     if selected_record is None:
         # The newest heartbeat is useful as a visibility signal in cloud mode
         # even when the browser's own machine_id does not match the local host.
@@ -11947,19 +14094,23 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
         newest_machine_id = ''
         newest_record: Optional[Dict[str, Any]] = None
         for machine_id, record in records.items():
+            # Choose the correct branch before the workflow continues.
             if not isinstance(record, dict):
                 continue
             last_seen_epoch = _parse_iso_epoch(record.get('last_seen_at'))
             if last_seen_epoch is None:
                 continue
             if last_seen_epoch > newest_epoch:
+                # Prepare newest epoch for the next step.
                 newest_epoch = last_seen_epoch
                 newest_machine_id = str(machine_id or '').strip()
                 newest_record = record
 
+        # Prepare selected machine id for the next step.
         selected_machine_id = newest_machine_id
         selected_record = newest_record
 
+    # Choose the correct branch before the workflow continues.
     if not selected_record:
         return {
             'available': False,
@@ -11980,27 +14131,32 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
             'matches_requested_machine': bool(matched_requested_machine),
         }
 
+    # Prepare last seen at for the next step.
     last_seen_at = str(selected_record.get('last_seen_at') or '').strip()
     last_seen_epoch = _parse_iso_epoch(last_seen_at)
     age_seconds: Optional[int] = None
     is_recent = False
     if last_seen_epoch is not None:
+        # Prepare age seconds for the next step.
         age_seconds = max(0, int(time.time() - last_seen_epoch))
         is_recent = age_seconds <= int(LOCAL_MODE_CLOUD_HEARTBEAT_FRESH_SECONDS)
 
     local_mode_possible = bool(selected_record.get('local_mode_possible'))
 
+    # Choose the correct branch before the workflow continues.
     if is_recent and local_mode_possible:
         status = 'recent_ready'
     elif is_recent:
         status = 'recent_not_ready'
     else:
+        # Prepare status for the next step.
         status = 'stale'
 
     provision_status = _normalize_heartbeat_provision_status(selected_record.get('provision_status'))
     if normalized_hint and not matched_requested_machine:
         provision_status = 'idle'
 
+    # Return the prepared result to the caller.
     return {
         'available': True,
         'machine_id': selected_machine_id,
@@ -12021,8 +14177,10 @@ def _get_cloud_local_mode_heartbeat_snapshot(machine_id_hint: str = '') -> Dict[
     }
 
 
+# Section: run the api local mode provisioning status workflow with clear inputs and outputs.
 @app.route('/api/local-mode/provisioning/status', methods=['GET'])
 def api_local_mode_provisioning_status():
+    # Prepare state for the next step.
     state = _local_mode_load_provision_state()
     requested_machine_id = _local_mode_normalize_machine_id(request.args.get('machine_id') or '')
     cloud_url = _local_mode_normalize_cloud_url(os.getenv('CLOUD_URL', '').strip())
@@ -12032,8 +14190,10 @@ def api_local_mode_provisioning_status():
         and state_cloud_url
         and not _local_mode_cloud_url_is_placeholder(state_cloud_url)
     ):
+        # Prepare cloud url for the next step.
         cloud_url = state_cloud_url
 
+    # Prepare state machine id for the next step.
     state_machine_id = _local_mode_normalize_machine_id(state.get('machine_id'))
     machine_id = requested_machine_id or state_machine_id or _local_mode_get_existing_machine_id()
 
@@ -12046,10 +14206,12 @@ def api_local_mode_provisioning_status():
         state['machine_id'] = machine_id
         state['updated_at'] = datetime.now(timezone.utc).isoformat()
         try:
+            # Trigger the side effect required for this stage.
             _local_mode_save_provision_state(state)
         except Exception as persist_state_err:
             logger.warning(f"Unable to persist machine_id '{machine_id}' into local state: {persist_state_err}")
 
+    # Prepare provision secret for the next step.
     provision_secret = str(state.get('provision_secret') or '').strip()
     # Only resolve machine_id from the local provision_secret when the
     # caller did NOT pin a specific machine_id. Otherwise a cloud viewer
@@ -12058,18 +14220,21 @@ def api_local_mode_provisioning_status():
     if provision_secret and not requested_machine_id:
         resolved_machine_id = _find_machine_id_by_provision_secret(provision_secret)
         if resolved_machine_id and resolved_machine_id != machine_id:
+            # Prepare machine id for the next step.
             machine_id = resolved_machine_id
             state['machine_id'] = machine_id
             state['updated_at'] = datetime.now(timezone.utc).isoformat()
             _local_mode_save_provision_state(state)
             _local_mode_write_machine_id(machine_id)
 
+    # Prepare credentials present for the next step.
     credentials_present = _local_mode_has_supabase_credentials()
     credentials_imply_local_runtime = bool(credentials_present and not _is_hosted_runtime_environment())
     heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(machine_id)
     heartbeat_machine_id = _local_mode_normalize_machine_id(heartbeat_summary.get('machine_id'))
 
     if not machine_id and heartbeat_machine_id:
+        # Prepare machine id for the next step.
         machine_id = heartbeat_machine_id
 
     # Cap the outbound status-poll timeout well below the frontend's
@@ -12101,9 +14266,12 @@ def api_local_mode_provisioning_status():
         try:
             _public_device = _load_pending_device(machine_id)
             if isinstance(_public_device, dict):
+                # Prepare public status for the next step.
                 _public_status = str(_public_device.get('status') or '').strip().lower()
                 if _public_status in ('pending_approval', 'pending', 'approved', 'provisioned', 'active', 'rejected'):
+                    # Choose the correct branch before the workflow continues.
                     if _public_status == 'pending':
+                        # Prepare public status for the next step.
                         _public_status = 'pending_approval'
                     authoritative_status = _public_status
                     cloud_state['checked'] = True
@@ -12113,11 +14281,14 @@ def api_local_mode_provisioning_status():
                         f"Public device-status fallback resolved machine_id={machine_id} -> {_public_status}"
                     )
         except Exception as _public_lookup_err:
+            # Trigger the side effect required for this stage.
             logger.debug(
                 f"Public device-status fallback lookup failed for machine_id={machine_id}: {_public_lookup_err}"
             )
 
+    # Choose the correct branch before the workflow continues.
     if authoritative_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected'):
+        # Prepare normalized status for the next step.
         normalized_status = authoritative_status
     elif credentials_imply_local_runtime:
         normalized_status = 'credentials_present'
@@ -12127,8 +14298,11 @@ def api_local_mode_provisioning_status():
     heartbeat_provision_status = _normalize_heartbeat_provision_status(
         heartbeat_summary.get('provision_status')
     )
+    # Choose the correct branch before the workflow continues.
     if heartbeat_provision_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected'):
+        # Choose the correct branch before the workflow continues.
         if normalized_status in ('idle', 'credentials_present'):
+            # Prepare normalized status for the next step.
             normalized_status = heartbeat_provision_status
     elif heartbeat_provision_status == 'credentials_present' and normalized_status == 'idle':
         normalized_status = 'credentials_present'
@@ -12140,6 +14314,7 @@ def api_local_mode_provisioning_status():
         and heartbeat_summary.get('local_mode_possible')
         and heartbeat_matches_requested
     )
+    # Prepare cloud device status for the next step.
     cloud_device_status = normalized_status
     missing_local_secret_for_cloud_device = bool(
         not _is_hosted_runtime_environment()
@@ -12149,17 +14324,21 @@ def api_local_mode_provisioning_status():
         and not heartbeat_active
     )
     if missing_local_secret_for_cloud_device:
+        # Prepare device status for the next step.
         device_status = 'validation_required'
         response_status = 'validation_required'
     else:
         device_status = normalized_status
         response_status = normalized_status
+    # Choose the correct branch before the workflow continues.
     if (
         heartbeat_active
         and normalized_status in ('approved', 'provisioned', 'active', 'credentials_present')
     ):
+        # Prepare response status for the next step.
         response_status = 'active'
         if device_status == 'credentials_present':
+            # Prepare device status for the next step.
             device_status = 'provisioned'
 
     if missing_local_secret_for_cloud_device:
@@ -12169,26 +14348,34 @@ def api_local_mode_provisioning_status():
             state['updated_at'] = datetime.now(timezone.utc).isoformat()
             state['last_provision_secret_error'] = 'missing_for_cloud_approved_device'
             state['last_provision_secret_error_at'] = state['updated_at']
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Trigger the side effect required for this stage.
                 _local_mode_save_provision_state(state)
             except Exception as persist_status_err:
                 logger.debug(f"Unable to mark local cached status as validation_required: {persist_status_err}")
+    # Choose the correct branch before the workflow continues.
     elif (
         provision_secret
         and cloud_state.get('checked')
         and device_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected')
     ):
+        # Prepare cached status for the next step.
         cached_status = 'pending' if device_status == 'pending_approval' else device_status
         current_cached_status = str(state.get('status') or '').strip().lower()
         if current_cached_status != cached_status:
+            # Prepare values needed by the next step.
             state['status'] = cached_status
             state['updated_at'] = datetime.now(timezone.utc).isoformat()
             try:
+                # Trigger the side effect required for this stage.
                 _local_mode_save_provision_state(state)
             except Exception as persist_status_err:
                 logger.debug(f"Unable to sync local cached status from cloud authority: {persist_status_err}")
 
+    # Choose the correct branch before the workflow continues.
     if missing_local_secret_for_cloud_device:
+        # Prepare status source for the next step.
         status_source = 'validation_required'
     elif (
         device_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected')
@@ -12197,7 +14384,9 @@ def api_local_mode_provisioning_status():
         status_source = 'cloud'
     elif response_status == 'active':
         status_source = 'heartbeat'
+    # Choose the correct branch before the workflow continues.
     elif device_status in ('pending_approval', 'approved', 'provisioned', 'active', 'rejected', 'credentials_present'):
+        # Prepare status source for the next step.
         status_source = 'heartbeat' if heartbeat_provision_status == device_status else 'credentials'
     else:
         status_source = 'idle'
@@ -12225,12 +14414,14 @@ def api_local_mode_provisioning_status():
         'requested_at': state.get('requested_at'),
         'provisioned_at': state.get('provisioned_at'),
     })
+    # Prepare values needed by the next step.
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
     return response
 
 
+# Section: run the api local mode installer redirect workflow with clear inputs and outputs.
 @app.route('/api/local-mode/installer/redirect', methods=['GET'])
 def api_local_mode_installer_redirect():
     """Server-side proxy that redirects the browser to the cloud installer
@@ -12244,6 +14435,7 @@ def api_local_mode_installer_redirect():
     issues a 302 to the cloud, so the browser never needs to know the
     secret.
     """
+    # Prepare state for the next step.
     state = _local_mode_load_provision_state() or {}
     machine_id = str(state.get('machine_id') or '').strip()
     provision_secret = str(state.get('provision_secret') or '').strip()
@@ -12259,7 +14451,9 @@ def api_local_mode_installer_redirect():
     _client_ip = _client_ip_raw.lower()
     _loopback_ips = {'127.0.0.1', '::1', 'localhost'}
     if _client_ip not in _loopback_ips and not _client_ip.startswith('127.'):
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Trigger the side effect required for this stage.
             logger.warning(
                 f"Blocked non-loopback access to /api/local-mode/installer/redirect from {_client_ip_raw}"
             )
@@ -12271,20 +14465,24 @@ def api_local_mode_installer_redirect():
             )
         except Exception:
             pass
+        # Return the prepared result to the caller.
         return jsonify({
             'error': 'This endpoint is restricted to the host PC. Open the dashboard on the PC running the local backend and retry.'
         }), 403
 
+    # Prepare cloud url for the next step.
     cloud_url = _local_mode_normalize_cloud_url(
         os.getenv('CLOUD_URL', '').strip()
         or str(state.get('cloud_url') or '').strip()
     )
 
     if not machine_id or not provision_secret:
+        # Return the prepared result to the caller.
         return jsonify({
             'error': 'Local provisioning state is empty. Run Local Mode Checkup to provision this device first.'
         }), 409
 
+    # Choose the correct branch before the workflow continues.
     if not cloud_url:
         return jsonify({
             'error': 'CLOUD_URL is not configured. Set CLOUD_URL in the backend .env and restart.'
@@ -12305,9 +14503,11 @@ def api_local_mode_installer_redirect():
             live_status = str(live_check.get('status') or '').strip().lower()
             if live_status in ('approved', 'provisioned', 'active'):
                 # Heal the disk state so subsequent calls pass the fast path.
+                # Prepare values needed by the next step.
                 state['status'] = live_status
                 state['updated_at'] = datetime.now(timezone.utc).isoformat()
                 try:
+                    # Trigger the side effect required for this stage.
                     _local_mode_save_provision_state(state)
                 except Exception:
                     pass
@@ -12321,10 +14521,12 @@ def api_local_mode_installer_redirect():
                     )
                 }), 403
         else:
+            # Return the prepared result to the caller.
             return jsonify({
                 'error': f'Device is not approved yet (status={status or "unknown"}). Wait for admin approval, then retry.'
             }), 403
 
+    # Prepare target for the next step.
     target = (
         f"{cloud_url.rstrip('/')}/api/bootstrap/installer/request"
         f"?machine_id={quote(machine_id)}"
@@ -12334,25 +14536,32 @@ def api_local_mode_installer_redirect():
     response = redirect(target, code=302)
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
+    # Prepare values needed by the next step.
     response.headers['Expires'] = '0'
     return response
 
 
+# Section: run the api local mode auto provisioning workflow with clear inputs and outputs.
 @app.route('/api/local-mode/provisioning/auto', methods=['GET', 'POST'])
 def api_local_mode_auto_provisioning():
     with local_mode_auto_provision_lock:
+        # Return the prepared result to the caller.
         return _api_local_mode_auto_provisioning_impl()
 
 
 
 
 
+# Section: run the api local mode auto provisioning impl workflow with clear inputs and outputs.
 def _api_local_mode_auto_provisioning_impl():
     """Auto-trigger cloud approval + bootstrap credential exchange for local mode access."""
+    # Prepare payload for the next step.
     payload = request.get_json(silent=True) or {}
     if request.method == 'GET':
+        # Prepare query cloud url for the next step.
         query_cloud_url = str(request.args.get('cloud_url') or '').strip()
         if query_cloud_url and not payload.get('cloud_url'):
+            # Prepare values needed by the next step.
             payload['cloud_url'] = query_cloud_url
     cloud_url = _local_mode_normalize_cloud_url(
         payload.get('cloud_url')
@@ -12360,7 +14569,9 @@ def _api_local_mode_auto_provisioning_impl():
         or ''
     )
 
+    # Choose the correct branch before the workflow continues.
     if not cloud_url:
+        # Return the prepared result to the caller.
         return jsonify({
             'success': False,
             'status': 'cloud_url_missing',
@@ -12370,8 +14581,11 @@ def _api_local_mode_auto_provisioning_impl():
 
     _ensure_local_mode_cloud_heartbeat_worker()
 
+    # Choose the correct branch before the workflow continues.
     if not _local_mode_cloud_url_is_placeholder(cloud_url):
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Trigger the side effect required for this stage.
             _local_mode_upsert_env_values({'CLOUD_URL': cloud_url})
             os.environ['CLOUD_URL'] = cloud_url
         except Exception as cloud_url_err:
@@ -12379,7 +14593,9 @@ def _api_local_mode_auto_provisioning_impl():
 
     state = _local_mode_load_provision_state()
     state_machine_id = str(state.get('machine_id') or '').strip()
+    # Choose the correct branch before the workflow continues.
     if state_machine_id and re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', state_machine_id):
+        # Prepare machine id for the next step.
         machine_id = state_machine_id
     else:
         machine_id = _local_mode_get_or_create_machine_id()
@@ -12396,6 +14612,7 @@ def _api_local_mode_auto_provisioning_impl():
         if payload_secret and (_client_ip.startswith('127.') or _client_ip in {'::1', 'localhost'}):
             # Basic format sanity: reject anything that doesn't look like a
             # hex/base64 secret token (alphanumeric + dashes, 16-256 chars).
+            # Choose the correct branch before the workflow continues.
             if re.fullmatch(r'[A-Za-z0-9_\-]{16,256}', payload_secret):
                 _payload_secret_candidate = payload_secret
                 provision_secret = payload_secret
@@ -12404,15 +14621,19 @@ def _api_local_mode_auto_provisioning_impl():
                     "Rejected browser-injected provision_secret: failed format validation"
                 )
 
+    # Choose the correct branch before the workflow continues.
     if provision_secret:
+        # Prepare resolved machine id for the next step.
         resolved_machine_id = _find_machine_id_by_provision_secret(provision_secret)
         if resolved_machine_id and resolved_machine_id != machine_id:
+            # Prepare machine id for the next step.
             machine_id = resolved_machine_id
             state['machine_id'] = machine_id
             state['updated_at'] = datetime.now(timezone.utc).isoformat()
             _local_mode_save_provision_state(state)
             _local_mode_write_machine_id(machine_id)
 
+    # Prepare admin portal url for the next step.
     admin_portal_url = f"{cloud_url}/admin/devices"
 
     credentials_present = _local_mode_has_supabase_credentials()
@@ -12422,6 +14643,7 @@ def _api_local_mode_auto_provisioning_impl():
         'status_code': None,
     }
     if credentials_present or provision_secret:
+        # Prepare cloud state for the next step.
         cloud_state = _local_mode_fetch_authoritative_status(
             cloud_url=cloud_url,
             machine_id=machine_id,
@@ -12435,6 +14657,7 @@ def _api_local_mode_auto_provisioning_impl():
     if _payload_secret_candidate:
         _cloud_confirmed_status = str(cloud_state.get('status') or '').strip().lower()
         if _cloud_confirmed_status in ('approved', 'provisioned', 'active', 'pending_approval'):
+            # Prepare values needed by the next step.
             state['provision_secret'] = _payload_secret_candidate
             state['updated_at'] = datetime.now(timezone.utc).isoformat()
             _local_mode_save_provision_state(state)
@@ -12449,8 +14672,10 @@ def _api_local_mode_auto_provisioning_impl():
                 f"(code={cloud_state.get('status_code')})"
             )
 
+    # Prepare authoritative status for the next step.
     authoritative_status = str(cloud_state.get('status') or '').strip().lower()
     if authoritative_status in ('pending_approval', 'rejected'):
+        # Prepare effective status for the next step.
         effective_status = authoritative_status
         _send_local_mode_cloud_heartbeat_once()
         return jsonify({
@@ -12465,7 +14690,9 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_status_code': cloud_state.get('status_code'),
         })
 
+    # Choose the correct branch before the workflow continues.
     if credentials_present and authoritative_status in ('approved', 'provisioned', 'active'):
+        # Prepare effective status for the next step.
         effective_status = authoritative_status
         heartbeat_result = _send_local_mode_cloud_heartbeat_once()
         heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(machine_id)
@@ -12475,6 +14702,7 @@ def _api_local_mode_auto_provisioning_impl():
             and heartbeat_summary.get('local_mode_possible')
             and heartbeat_summary.get('matches_requested_machine', True)
         )
+        # Prepare response status for the next step.
         response_status = 'active' if heartbeat_active else effective_status
         return jsonify({
             'success': True,
@@ -12492,12 +14720,15 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_status_code': cloud_state.get('status_code'),
         })
 
+    # Choose the correct branch before the workflow continues.
     if credentials_present:
+        # Trigger the side effect required for this stage.
         logger.info(
             f"Local auto-provision: credentials are present but no cloud provisioning record for "
             f"machine_id={machine_id}; requesting approval workflow."
         )
 
+    # Section: run the request new secret workflow with clear inputs and outputs.
     def _request_new_secret(skip_existing_secret: bool = False) -> Tuple[bool, str, str, int]:
         """Request a new provision_secret from the cloud backend.
 
@@ -12509,6 +14740,7 @@ def _api_local_mode_auto_provisioning_impl():
 
         Returns: (success, new_secret, error_text, http_status_code)
         """
+        # Protect this step so expected failures can fall back cleanly.
         try:
             # Include the current provision_secret (if any) so the cloud can
             # authenticate the rotation as a legitimate re-request without
@@ -12520,12 +14752,14 @@ def _api_local_mode_auto_provisioning_impl():
             if not skip_existing_secret:
                 existing_local_secret = str(state.get('provision_secret') or '').strip()
                 if existing_local_secret:
+                    # Prepare values needed by the next step.
                     request_body['current_provision_secret'] = existing_local_secret
 
             request_headers = {}
             local_admin_token = str(os.getenv('CLOUD_ADMIN_TOKEN') or os.getenv('ADMIN_PASSWORD') or '').strip()
             if local_admin_token:
                 request_headers['X-Admin-Token'] = local_admin_token
+            # Trigger the side effect required for this stage.
             request_headers.update(
                 _build_provision_credential_recovery_headers(machine_id)
             )
@@ -12536,15 +14770,19 @@ def _api_local_mode_auto_provisioning_impl():
                 headers=request_headers,
                 timeout=max(12, int(LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS)),
             )
+            # Prepare body for the next step.
             body = response.json() if response.content else {}
         except Exception as e:
             err_text = str(e)
             if _local_mode_is_name_resolution_error(err_text):
+                # Return the prepared result to the caller.
                 return False, '', f'cloud_endpoint_unreachable: {err_text}', 0
             return False, '', f'Failed to request provisioning approval: {err_text}', 0
 
+        # Choose the correct branch before the workflow continues.
         if not response.ok:
             err = str((body or {}).get('error') or f'Provision request failed ({response.status_code})')
+            # Return the prepared result to the caller.
             return False, '', err, response.status_code
 
         secret = str((body or {}).get('provision_secret') or '').strip()
@@ -12553,11 +14791,15 @@ def _api_local_mode_auto_provisioning_impl():
 
         return True, secret, '', response.status_code
 
+    # Choose the correct branch before the workflow continues.
     if not provision_secret or str(state.get('cloud_url') or '') != cloud_url:
+        # Prepare values needed by the next step.
         requested, provision_secret, request_error, _ = _request_new_secret()
         if not requested:
+            # Prepare request error text for the next step.
             request_error_text = str(request_error or '').strip()
             if request_error_text.lower().startswith('cloud_endpoint_unreachable:'):
+                # Prepare warning message for the next step.
                 warning_message = (
                     'Cloud approval endpoint is unreachable right now. '
                     'Local mode remains available, and cloud sync will resume after CLOUD_URL/DNS is fixed.'
@@ -12567,6 +14809,7 @@ def _api_local_mode_auto_provisioning_impl():
                     'Local auto-provision reached cloud endpoint unreachable state '
                     f'(machine_id={machine_id}, cloud_url={cloud_url}).'
                 )
+                # Return the prepared result to the caller.
                 return jsonify({
                     'success': True,
                     'status': fallback_status,
@@ -12578,6 +14821,7 @@ def _api_local_mode_auto_provisioning_impl():
                     'cloud_reachable': False,
                 })
 
+            # Return the prepared result to the caller.
             return jsonify({
                 'success': False,
                 'status': 'request_failed',
@@ -12587,6 +14831,7 @@ def _api_local_mode_auto_provisioning_impl():
                 'cloud_url': cloud_url,
             }), 502
 
+        # Prepare state for the next step.
         state = {
             'machine_id': machine_id,
             'provision_secret': provision_secret,
@@ -12597,7 +14842,9 @@ def _api_local_mode_auto_provisioning_impl():
         }
         _local_mode_save_provision_state(state)
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare status response for the next step.
         status_response = requests.get(
             f"{cloud_url}/api/provision/status",
             params={
@@ -12608,8 +14855,10 @@ def _api_local_mode_auto_provisioning_impl():
         )
         status_body = status_response.json() if status_response.content else {}
     except Exception as e:
+        # Prepare poll error text for the next step.
         poll_error_text = str(e)
         if _local_mode_is_name_resolution_error(poll_error_text):
+            # Prepare warning message for the next step.
             warning_message = (
                 'Cloud status endpoint is unreachable right now. '
                 'Local mode remains available, and cloud sync will resume after CLOUD_URL/DNS is fixed.'
@@ -12619,6 +14868,7 @@ def _api_local_mode_auto_provisioning_impl():
                 'Local auto-provision cloud status poll unreachable '
                 f'(machine_id={machine_id}, cloud_url={cloud_url}).'
             )
+            # Return the prepared result to the caller.
             return jsonify({
                 'success': True,
                 'status': fallback_status,
@@ -12630,6 +14880,7 @@ def _api_local_mode_auto_provisioning_impl():
                 'cloud_reachable': False,
             })
 
+        # Return the prepared result to the caller.
         return jsonify({
             'success': False,
             'status': 'poll_failed',
@@ -12639,6 +14890,7 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_url': cloud_url,
         }), 502
 
+    # Choose the correct branch before the workflow continues.
     if status_response.status_code in (401, 404):
         # PRV3 (relaxed)  A 401/404 from /api/provision/status can mean either:
         #   (a) the admin deleted the device record (genuine revocation), OR
@@ -12662,6 +14914,7 @@ def _api_local_mode_auto_provisioning_impl():
         )
 
         if retry_ok and retry_secret:
+            # Prepare state for the next step.
             state = {
                 'machine_id': machine_id,
                 'provision_secret': retry_secret,
@@ -12672,6 +14925,7 @@ def _api_local_mode_auto_provisioning_impl():
             }
             _local_mode_save_provision_state(state)
 
+            # Trigger the side effect required for this stage.
             _send_local_mode_cloud_heartbeat_once()
             return jsonify({
                 'success': True,
@@ -12705,6 +14959,7 @@ def _api_local_mode_auto_provisioning_impl():
                     '(secret no longer recognised and re-registration was refused).'
                 ),
             })
+            # Trigger the side effect required for this stage.
             _local_mode_save_provision_state(state)
             return jsonify({
                 'success': False,
@@ -12731,6 +14986,7 @@ def _api_local_mode_auto_provisioning_impl():
             'Cleared local secret -- device stays approved on cloud; '
             'operator should re-request via browser or admin portal.'
         )
+        # Return the prepared result to the caller.
         return jsonify({
             'success': True,
             'status': 'idle',
@@ -12743,7 +14999,9 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_url': cloud_url,
         })
 
+    # Choose the correct branch before the workflow continues.
     if status_response.status_code == 403:
+        # Trigger the side effect required for this stage.
         state.update({
             'machine_id': machine_id,
             'cloud_url': cloud_url,
@@ -12760,7 +15018,9 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_url': cloud_url,
         }), 403
 
+    # Choose the correct branch before the workflow continues.
     if status_response.status_code == 503:
+        # Return the prepared result to the caller.
         return jsonify({
             'success': False,
             'status': 'cloud_credentials_missing',
@@ -12771,7 +15031,9 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_url': cloud_url,
         }), 502
 
+    # Choose the correct branch before the workflow continues.
     if not status_response.ok:
+        # Return the prepared result to the caller.
         return jsonify({
             'success': False,
             'status': 'poll_failed',
@@ -12781,6 +15043,7 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_url': cloud_url,
         }), 502
 
+    # Prepare current status for the next step.
     current_status = str((status_body or {}).get('status') or 'pending').strip().lower()
     state.update({
         'machine_id': machine_id,
@@ -12791,7 +15054,9 @@ def _api_local_mode_auto_provisioning_impl():
     })
     _local_mode_save_provision_state(state)
 
+    # Choose the correct branch before the workflow continues.
     if current_status == 'pending':
+        # Trigger the side effect required for this stage.
         _send_local_mode_cloud_heartbeat_once()
         return jsonify({
             'success': True,
@@ -12802,9 +15067,12 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_url': cloud_url,
         })
 
+    # Prepare bootstrap token for the next step.
     bootstrap_token = str((status_body or {}).get('bootstrap_token') or '').strip()
     if not bootstrap_token:
+        # Choose the correct branch before the workflow continues.
         if (status_body or {}).get('bootstrap_exchange_ready') is False:
+            # Return the prepared result to the caller.
             return jsonify({
                 'success': False,
                 'status': 'cloud_credentials_missing',
@@ -12814,6 +15082,7 @@ def _api_local_mode_auto_provisioning_impl():
                 'admin_portal_url': admin_portal_url,
                 'cloud_url': cloud_url,
             }), 502
+        # Return the prepared result to the caller.
         return jsonify({
             'success': False,
             'status': 'bootstrap_missing',
@@ -12823,7 +15092,9 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_url': cloud_url,
         }), 502
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare exchange response for the next step.
         exchange_response = requests.post(
             f"{cloud_url}/api/provision/bootstrap-exchange",
             json={
@@ -12833,6 +15104,7 @@ def _api_local_mode_auto_provisioning_impl():
             },
             timeout=max(12, int(LOCAL_MODE_PROVISION_HTTP_TIMEOUT_SECONDS)),
         )
+        # Prepare exchange body for the next step.
         exchange_body = exchange_response.json() if exchange_response.content else {}
     except Exception as e:
         return jsonify({
@@ -12844,7 +15116,9 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_url': cloud_url,
         }), 502
 
+    # Choose the correct branch before the workflow continues.
     if not exchange_response.ok:
+        # Return the prepared result to the caller.
         return jsonify({
             'success': False,
             'status': 'exchange_failed',
@@ -12854,8 +15128,10 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_url': cloud_url,
         }), 502
 
+    # Prepare credentials for the next step.
     credentials = (exchange_body or {}).get('credentials')
     if not isinstance(credentials, dict):
+        # Return the prepared result to the caller.
         return jsonify({
             'success': False,
             'status': 'exchange_failed',
@@ -12865,8 +15141,10 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_url': cloud_url,
         }), 502
 
+    # Prepare apply result for the next step.
     apply_result = _local_mode_apply_supabase_credentials(credentials)
     if not apply_result.get('success'):
+        # Return the prepared result to the caller.
         return jsonify({
             'success': False,
             'status': 'apply_failed',
@@ -12876,6 +15154,7 @@ def _api_local_mode_auto_provisioning_impl():
             'cloud_url': cloud_url,
         }), 500
 
+    # Trigger the side effect required for this stage.
     state.update({
         'status': 'provisioned',
         'provisioned_at': datetime.now(timezone.utc).isoformat(),
@@ -12885,6 +15164,7 @@ def _api_local_mode_auto_provisioning_impl():
 
     _send_local_mode_cloud_heartbeat_once()
 
+    # Return the prepared result to the caller.
     return jsonify({
         'success': True,
         'status': 'provisioned',
@@ -12898,28 +15178,34 @@ def _api_local_mode_auto_provisioning_impl():
     })
 
 
+# Section: run the api local mode heartbeat workflow with clear inputs and outputs.
 @app.route('/api/local-mode/heartbeat', methods=['POST'])
 def api_local_mode_heartbeat():
     """Receive local edge heartbeat snapshots so cloud-hosted checkups can verify edge readiness."""
+    # Prepare payload for the next step.
     payload = request.get_json(silent=True) or {}
 
     requested_machine_id = _local_mode_normalize_machine_id(payload.get('machine_id'))
     if not requested_machine_id:
+        # Return the prepared result to the caller.
         return jsonify({'success': False, 'error': 'Missing or invalid machine_id'}), 400
 
     provision_secret = str(payload.get('provision_secret') or '').strip()
     if not provision_secret:
         return jsonify({'success': False, 'error': 'Missing provision_secret'}), 401
 
+    # Prepare devices for the next step.
     devices = _load_pending_devices()
     resolved_machine_id, device = _resolve_pending_device(requested_machine_id, devices=devices)
     if not device:
+        # Return the prepared result to the caller.
         return jsonify({'success': False, 'error': 'Unknown machine_id'}), 404
 
     if not _is_valid_provision_secret(device, provision_secret):
         return jsonify({'success': False, 'error': 'Invalid provision_secret'}), 401
 
     diagnostics = payload.get('diagnostics') if isinstance(payload.get('diagnostics'), dict) else {}
+    # Prepare diagnostics present for the next step.
     diagnostics_present = bool(diagnostics)
     heartbeat_provision_status = _normalize_heartbeat_provision_status(
         payload.get('provision_status')
@@ -12933,7 +15219,9 @@ def api_local_mode_heartbeat():
         'source': str(payload.get('source') or '').strip() or 'local-backend-worker',
         'provision_status': heartbeat_provision_status,
     }
+    # Choose the correct branch before the workflow continues.
     if diagnostics_present:
+        # Trigger the side effect required for this stage.
         merged_record.update({
             'local_mode_possible': bool(diagnostics.get('local_mode_possible')),
             'ollama_installed': bool(diagnostics.get('ollama_installed')),
@@ -12943,6 +15231,7 @@ def api_local_mode_heartbeat():
             'error': str(diagnostics.get('error') or '').strip(),
         })
 
+    # Trigger the side effect required for this stage.
     _upsert_local_mode_heartbeat(resolved_machine_id, merged_record)
 
     return jsonify({
@@ -12953,10 +15242,13 @@ def api_local_mode_heartbeat():
     })
 
 
+# Section: run the api prepare local mode workflow with clear inputs and outputs.
 @app.route('/api/local-mode/prepare', methods=['POST'])
 def api_prepare_local_mode():
     """One-click local mode bootstrap: start Ollama, pull model if needed, and optionally switch local-first routing."""
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare payload for the next step.
         payload = request.get_json(silent=True) or {}
         auto_pull = bool(payload.get('auto_pull', True))
         set_local_first = bool(payload.get('set_local_first', True))
@@ -12982,8 +15274,10 @@ def api_prepare_local_mode():
             }
         }
 
+        # Prepare mid for the next step.
         mid = _get_local_mode_diagnostics()
         if auto_pull and mid.get('ollama_running') and not mid.get('model_available'):
+            # Prepare values needed by the next step.
             actions['pull_model'] = _pull_ollama_model_if_needed(
                 ollama_base_url=mid.get('ollama_base_url') or before.get('ollama_base_url') or 'http://localhost:11434',
                 model_name=mid.get('ollama_model') or before.get('ollama_model') or LOCAL_OLLAMA_UNIFIED_MODEL,
@@ -12992,8 +15286,11 @@ def api_prepare_local_mode():
 
         after = _get_local_mode_diagnostics()
 
+        # Choose the correct branch before the workflow continues.
         if set_local_first and after.get('local_mode_possible'):
+            # Choose the correct branch before the workflow continues.
             if STRICT_PROVIDER_MODE_SPLIT:
+                # Prepare applied profile for the next step.
                 applied_profile = _apply_provider_profile('local')
                 applied_order = list(applied_profile.get('nlp_provider_order', []))
             else:
@@ -13004,6 +15301,7 @@ def api_prepare_local_mode():
                 'routing_profile': 'local',
             }
 
+        # Prepare ready for the next step.
         ready = bool(after.get('local_mode_possible'))
 
         return jsonify({
@@ -13014,37 +15312,48 @@ def api_prepare_local_mode():
             'actions': actions,
         }), 200
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error preparing local mode: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Section: run the parse report id timestamp workflow with clear inputs and outputs.
 def _parse_report_id_timestamp(report_id: str) -> datetime:
     """Parse report_id as configured local timezone timestamp with a safe fallback."""
+    # Prepare tz info for the next step.
     tz_info = get_timezone_info()
     try:
         parsed = datetime.strptime(str(report_id), '%Y%m%d_%H%M%S')
+        # Return the prepared result to the caller.
         return parsed.replace(tzinfo=tz_info)
     except Exception:
         return datetime.now(tz_info)
 
 
+# Section: run the read local violation metadata workflow with clear inputs and outputs.
 def _read_local_violation_metadata(violation_dir: Path) -> Dict[str, Any]:
     """Read local metadata.json for a violation folder when available."""
+    # Prepare metadata path for the next step.
     metadata_path = violation_dir / 'metadata.json'
     if not metadata_path.exists():
+        # Return the prepared result to the caller.
         return {}
 
     try:
         with open(metadata_path, 'r', encoding='utf-8') as f:
+            # Prepare data for the next step.
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
 
+# Section: run the create force reprocess placeholder image workflow with clear inputs and outputs.
 def _create_force_reprocess_placeholder_image(report_id: str, output_path: Path, reason: str = '') -> bool:
     """Create a deterministic placeholder image for forced reprocess recovery paths."""
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Trigger the side effect required for this stage.
         output_path.parent.mkdir(parents=True, exist_ok=True)
         canvas = np.full((720, 1280, 3), (28, 35, 44), dtype=np.uint8)
         cv2.rectangle(canvas, (24, 24), (1256, 696), (64, 78, 97), thickness=2)
@@ -13053,8 +15362,10 @@ def _create_force_reprocess_placeholder_image(report_id: str, output_path: Path,
         subtitle = f'Report ID: {report_id}'
         reason_text = str(reason or 'Original artifact unavailable in runtime storage').strip()
         if len(reason_text) > 120:
+            # Prepare reason text for the next step.
             reason_text = reason_text[:117] + '...'
 
+        # Trigger the side effect required for this stage.
         cv2.putText(canvas, header, (54, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (245, 247, 250), 2, cv2.LINE_AA)
         cv2.putText(canvas, subtitle, (54, 176), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (203, 213, 225), 2, cv2.LINE_AA)
         cv2.putText(canvas, 'Forced reprocess fallback: source image missing', (54, 248), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (248, 250, 252), 2, cv2.LINE_AA)
@@ -13062,9 +15373,11 @@ def _create_force_reprocess_placeholder_image(report_id: str, output_path: Path,
 
         saved = bool(cv2.imwrite(str(output_path), canvas))
         if not saved:
+            # Trigger the side effect required for this stage.
             logger.warning(f"Could not write placeholder image for {report_id}: {output_path}")
         else:
             try:
+                # Prepare marker name for the next step.
                 marker_name = (
                     'REPROCESS_PLACEHOLDER_ORIGINAL.txt'
                     if output_path.name == 'original.jpg'
@@ -13075,7 +15388,9 @@ def _create_force_reprocess_placeholder_image(report_id: str, output_path: Path,
                     encoding='utf-8'
                 )
             except Exception as marker_err:
+                # Trigger the side effect required for this stage.
                 logger.debug(f"Could not write reprocess placeholder marker for {report_id}: {marker_err}")
+        # Return the prepared result to the caller.
         return saved
     except Exception as placeholder_err:
         logger.warning(
@@ -13084,6 +15399,7 @@ def _create_force_reprocess_placeholder_image(report_id: str, output_path: Path,
         return False
 
 
+# Section: run the recover reprocess images from storage workflow with clear inputs and outputs.
 def _recover_reprocess_images_from_storage(
     report_id: str,
     violation_dir: Path,
@@ -13096,7 +15412,9 @@ def _recover_reprocess_images_from_storage(
         'used_annotated_as_original': False,
         'errors': [],
     }
+    # Choose the correct branch before the workflow continues.
     if storage_manager is None or not isinstance(violation, dict):
+        # Return the prepared result to the caller.
         return result
 
     original_path = violation_dir / 'original.jpg'
@@ -13106,18 +15424,23 @@ def _recover_reprocess_images_from_storage(
     original_key = violation.get('original_image_key')
     annotated_key = violation.get('annotated_image_key')
 
+    # Section: run the download to path workflow with clear inputs and outputs.
     def _download_to_path(storage_key: Any, target_path: Path) -> bool:
+        # Prepare key for the next step.
         key = str(storage_key or '').strip()
         if not key:
+            # Return the prepared result to the caller.
             return False
         try:
             blob = storage_manager.download_file_content(key)
             if not blob:
+                # Return the prepared result to the caller.
                 return False
             if isinstance(blob, str):
                 blob = blob.encode('utf-8')
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_bytes(blob)
+            # Return the prepared result to the caller.
             return True
         except Exception as download_err:
             result['errors'].append(f"{target_path.name}:{download_err}")
@@ -13126,28 +15449,38 @@ def _recover_reprocess_images_from_storage(
             )
             return False
 
+    # Prepare should refresh original for the next step.
     should_refresh_original = (not original_path.exists()) or original_marker.exists()
     if should_refresh_original and _download_to_path(original_key, original_path):
+        # Prepare values needed by the next step.
         result['original_recovered'] = True
         try:
+            # Choose the correct branch before the workflow continues.
             if original_marker.exists():
+                # Trigger the side effect required for this stage.
                 original_marker.unlink()
         except Exception:
             pass
 
+    # Prepare should refresh annotated for the next step.
     should_refresh_annotated = (not annotated_path.exists()) or annotated_marker.exists()
     if should_refresh_annotated and _download_to_path(annotated_key, annotated_path):
+        # Prepare values needed by the next step.
         result['annotated_recovered'] = True
         try:
+            # Choose the correct branch before the workflow continues.
             if annotated_marker.exists():
+                # Trigger the side effect required for this stage.
                 annotated_marker.unlink()
         except Exception:
             pass
 
+    # Choose the correct branch before the workflow continues.
     if not original_path.exists() and annotated_path.exists():
         try:
             original_path.write_bytes(annotated_path.read_bytes())
             result['original_recovered'] = True
+            # Prepare values needed by the next step.
             result['used_annotated_as_original'] = True
             logger.info(
                 f"Recovered reprocess source for {report_id} from annotated image because original image was unavailable"
@@ -13155,21 +15488,26 @@ def _recover_reprocess_images_from_storage(
         except Exception as copy_err:
             result['errors'].append(f"annotated_as_original:{copy_err}")
 
+    # Return the prepared result to the caller.
     return result
 
 
+# Section: run the collect local recovery candidates workflow with clear inputs and outputs.
 def _collect_local_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
     """Collect pending/failed local reports from filesystem for offline recovery."""
     if not VIOLATIONS_DIR.exists():
+        # Return the prepared result to the caller.
         return []
 
     candidates: List[Dict[str, Any]] = []
+    # Process each item in this collection using the same rule set.
     for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
         if not violation_dir.is_dir():
             continue
         if len(candidates) >= max(1, int(limit or 1)):
             break
 
+        # Prepare report id for the next step.
         report_id = violation_dir.name
         original_path = violation_dir / 'original.jpg'
         report_html_path = violation_dir / 'report.html'
@@ -13179,15 +15517,20 @@ def _collect_local_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]
         metadata = _read_local_violation_metadata(violation_dir)
         failure_path = violation_dir / 'generation_failure.txt'
         failure_reason = str(metadata.get('failure_reason') or '').strip()
+        # Choose the correct branch before the workflow continues.
         if failure_path.exists() and not failure_reason:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Open the managed resource only for the block that needs it.
                 with open(failure_path, 'r', encoding='utf-8') as f:
+                    # Prepare failure reason for the next step.
                     failure_reason = f.read().strip().splitlines()[-1][:300]
             except Exception:
                 failure_reason = ''
 
         status = 'failed' if failure_path.exists() else 'pending'
         violation_type = str(metadata.get('violation_type') or '').strip()
+        # Prepare detection count for the next step.
         detection_count = metadata.get('violation_count', metadata.get('detection_count', 0))
 
         candidates.append({
@@ -13200,31 +15543,39 @@ def _collect_local_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]
             'violation_types': [violation_type] if violation_type else [],
         })
 
+    # Return the prepared result to the caller.
     return candidates
 
 
+# Section: run the collect recovery candidates workflow with clear inputs and outputs.
 def _collect_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
     if db_manager is None:
+        # Return the prepared result to the caller.
         return _collect_local_recovery_candidates(limit)
     if _is_supabase_offline_backoff_active():
         return _collect_local_recovery_candidates(limit)
 
+    # Prepare rows for the next step.
     rows = []
     try:
         if hasattr(db_manager, 'get_all_violations_with_status'):
+            # Prepare rows for the next step.
             rows = db_manager.get_all_violations_with_status(limit=limit) or []
         elif hasattr(db_manager, 'get_pending_reports'):
             rows = db_manager.get_pending_reports(limit=limit) or []
     except Exception as e:
+        # Trigger the side effect required for this stage.
         _activate_local_offline_runtime('collect_recovery_candidates', e)
         logger.warning(f"Failed collecting recovery candidates: {e}")
         return _collect_local_recovery_candidates(limit)
 
+    # Prepare candidates for the next step.
     candidates = []
     for row in rows:
         status = str((row or {}).get('status') or '').strip().lower()
         error_message = str((row or {}).get('error_message') or '').strip()
         report_id = (row or {}).get('report_id')
+        # Choose the correct branch before the workflow continues.
         if not report_id:
             continue
 
@@ -13243,15 +15594,18 @@ def _collect_recovery_candidates(limit: int = 200) -> List[Dict[str, Any]]:
             'violation_types': [],
         })
 
+    # Return the prepared result to the caller.
     return candidates
 
 
+# Section: run the current provider settings workflow with clear inputs and outputs.
 def _current_provider_settings():
     """Return current runtime provider routing settings."""
     routing_profile = _normalize_provider_profile(
         os.getenv('CASM_ROUTING_PROFILE')
         or _infer_provider_profile_from_order(MODEL_API_CONFIG.get('nlp_provider_order', []))
     )
+    # Prepare profile preset for the next step.
     profile_preset = _get_provider_profile_preset(routing_profile)
     nlp_default_order = list(profile_preset.get('nlp_provider_order', ['gemini'])) if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'gemini', 'ollama', 'local']
     embedding_default_order = list(profile_preset.get('embedding_provider_order', ['model_api'])) if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'ollama']
@@ -13259,6 +15613,7 @@ def _current_provider_settings():
 
     try:
         from caption_image import get_runtime_provider_settings
+        # Prepare vision settings for the next step.
         vision_settings = get_runtime_provider_settings()
     except Exception:
         vision_settings = {
@@ -13269,6 +15624,7 @@ def _current_provider_settings():
             'gemini_vision_model': os.getenv('GEMINI_VISION_MODEL', os.getenv('GEMINI_MODEL', 'gemini-2.5-flash'))
         }
 
+    # Prepare ollama nlp model for the next step.
     ollama_nlp_model = str(OLLAMA_CONFIG.get('model') or os.getenv('OLLAMA_MODEL') or LOCAL_OLLAMA_UNIFIED_MODEL).strip()
     ollama_vision_model = str(vision_settings.get('ollama_vision_model') or os.getenv('OLLAMA_VISION_MODEL') or ollama_nlp_model).strip()
 
@@ -13292,8 +15648,10 @@ def _current_provider_settings():
     }
 
 
+# Section: run the get provider runtime snapshot workflow with clear inputs and outputs.
 def _get_provider_runtime_snapshot() -> Dict[str, Any]:
     """Collect runtime provider diagnostics from NLP + vision modules."""
+    # Prepare default nlp order for the next step.
     default_nlp_order = (
         list(_get_provider_profile_preset(_normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE'))).get('nlp_provider_order', ['gemini']))
         if STRICT_PROVIDER_MODE_SPLIT
@@ -13323,8 +15681,11 @@ def _get_provider_runtime_snapshot() -> Dict[str, Any]:
         },
     }
 
+    # Choose the correct branch before the workflow continues.
     if report_generator is not None and hasattr(report_generator, 'get_runtime_provider_diagnostics'):
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare nlp runtime for the next step.
             nlp_runtime = report_generator.get_runtime_provider_diagnostics() or nlp_runtime
         except Exception as e:
             logger.warning(f"Unable to fetch NLP runtime diagnostics: {e}")
@@ -13339,10 +15700,13 @@ def _get_provider_runtime_snapshot() -> Dict[str, Any]:
         'vision_api_model': None,
     }
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
         from caption_image import get_runtime_provider_diagnostics
+        # Prepare payload for the next step.
         payload = get_runtime_provider_diagnostics()
         if isinstance(payload, dict):
+            # Prepare vision runtime for the next step.
             vision_runtime = payload
     except Exception as e:
         logger.warning(f"Unable to fetch vision runtime diagnostics: {e}")
@@ -13354,7 +15718,9 @@ def _get_provider_runtime_snapshot() -> Dict[str, Any]:
         'model_loaded': False,
         'last_error': None,
     }
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare yolo runtime for the next step.
         yolo_runtime = get_yolo_runtime_diagnostics() or yolo_runtime
     except Exception as e:
         yolo_runtime['last_error'] = str(e)
@@ -13367,8 +15733,10 @@ def _get_provider_runtime_snapshot() -> Dict[str, Any]:
     }
 
 
+# Section: run the estimate remaining report capacity workflow with clear inputs and outputs.
 def _estimate_remaining_report_capacity(provider_settings: Dict[str, Any], runtime_snapshot: Dict[str, Any], local_diag: Dict[str, Any]) -> Dict[str, Any]:
     """Best-effort remaining report capacity estimate for UX visibility."""
+    # Prepare nlp runtime for the next step.
     nlp_runtime = runtime_snapshot.get('nlp', {}) if isinstance(runtime_snapshot, dict) else {}
     vision_runtime = runtime_snapshot.get('vision', {}) if isinstance(runtime_snapshot, dict) else {}
     gemini_budget = nlp_runtime.get('gemini_budget', {}) if isinstance(nlp_runtime, dict) else {}
@@ -13378,6 +15746,7 @@ def _estimate_remaining_report_capacity(provider_settings: Dict[str, Any], runti
     model_api_enabled = bool(provider_settings.get('model_api_enabled', False))
     nlp_order = [str(p).lower() for p in provider_settings.get('nlp_provider_order', [])]
 
+    # Prepare nlp last error for the next step.
     nlp_last_error = str(nlp_runtime.get('last_error') or '')
     vision_failures = vision_runtime.get('recent_failures') or []
     gemini_quota_cooldown_remaining = int(vision_runtime.get('gemini_quota_cooldown_remaining_s') or 0)
@@ -13389,6 +15758,7 @@ def _estimate_remaining_report_capacity(provider_settings: Dict[str, Any], runti
         (daily_limit > 0 and daily_spend >= daily_limit)
         or (monthly_limit > 0 and monthly_spend >= monthly_limit)
     )
+    # Prepare budget blocked for the next step.
     budget_blocked = 'budget guardrail hit' in nlp_last_error.lower() or bool(gemini_budget.get('last_block_reason'))
 
     gemini_quota_signals = [
@@ -13399,7 +15769,9 @@ def _estimate_remaining_report_capacity(provider_settings: Dict[str, Any], runti
     ]
     gemini_likely_limited = any(gemini_quota_signals)
 
+    # Choose the correct branch before the workflow continues.
     if local_mode_possible and ('ollama' in nlp_order or 'local' in nlp_order):
+        # Return the prepared result to the caller.
         return {
             'estimate_reports_remaining': None,
             'confidence': 'medium',
@@ -13415,8 +15787,11 @@ def _estimate_remaining_report_capacity(provider_settings: Dict[str, Any], runti
             'message': 'Primary model API is enabled; remaining capacity depends on external account quota and cannot be measured precisely from runtime telemetry.'
         }
 
+    # Choose the correct branch before the workflow continues.
     if gemini_enabled and (budget_exhausted or budget_blocked):
+        # Choose the correct branch before the workflow continues.
         if daily_limit > 0 and daily_spend >= daily_limit:
+            # Prepare budget message for the next step.
             budget_message = f"Gemini daily budget reached ({daily_spend:.4f}/{daily_limit:.4f} USD)."
         elif monthly_limit > 0 and monthly_spend >= monthly_limit:
             budget_message = f"Gemini monthly budget reached ({monthly_spend:.4f}/{monthly_limit:.4f} USD)."
@@ -13429,7 +15804,9 @@ def _estimate_remaining_report_capacity(provider_settings: Dict[str, Any], runti
             'message': f"{budget_message} Routing should continue via lower-cost/local fallback providers."
         }
 
+    # Choose the correct branch before the workflow continues.
     if gemini_enabled and gemini_likely_limited:
+        # Return the prepared result to the caller.
         return {
             'estimate_reports_remaining': 0,
             'confidence': 'medium',
@@ -13445,6 +15822,7 @@ def _estimate_remaining_report_capacity(provider_settings: Dict[str, Any], runti
             'message': 'Gemini is enabled with no hard quota signal yet; conservative estimate assumes only a small remaining burst on free/shared quota.'
         }
 
+    # Return the prepared result to the caller.
     return {
         'estimate_reports_remaining': 0,
         'confidence': 'medium',
@@ -13453,23 +15831,30 @@ def _estimate_remaining_report_capacity(provider_settings: Dict[str, Any], runti
     }
 
 
+# Section: run the api provider routing settings workflow with clear inputs and outputs.
 @app.route('/api/settings/provider-routing', methods=['GET', 'POST'])
 def api_provider_routing_settings():
     """Get or update runtime provider routing settings for NLP/vision/embeddings."""
     global report_generator
 
+    # Choose the correct branch before the workflow continues.
     if request.method == 'GET':
+        # Return the prepared result to the caller.
         return jsonify(_current_provider_settings())
 
     try:
         data = request.get_json(silent=True) or {}
 
+        # Section: run the to float workflow with clear inputs and outputs.
         def _to_float(value, default=0.0):
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Return the prepared result to the caller.
                 return float(value)
             except (TypeError, ValueError):
                 return float(default)
 
+        # Section: run the to int workflow with clear inputs and outputs.
         def _to_int(value, default=0):
             try:
                 return int(value)
@@ -13479,6 +15864,7 @@ def api_provider_routing_settings():
         model_api_enabled = bool(data.get('model_api_enabled', MODEL_API_CONFIG.get('enabled', False)))
         gemini_enabled = bool(data.get('gemini_enabled', GEMINI_CONFIG.get('enabled', True)))
         gemini_daily_budget_usd = max(0.0, _to_float(data.get('gemini_daily_budget_usd', os.getenv('GEMINI_DAILY_BUDGET_USD', '0')), 0.0))
+        # Prepare gemini monthly budget usd for the next step.
         gemini_monthly_budget_usd = max(0.0, _to_float(data.get('gemini_monthly_budget_usd', os.getenv('GEMINI_MONTHLY_BUDGET_USD', '0')), 0.0))
         gemini_min_output_tokens_per_report = max(4096, _to_int(os.getenv('GEMINI_REPORT_MIN_OUTPUT_TOKENS', '6144'), 6144))
         gemini_max_output_tokens_per_report = max(
@@ -13490,6 +15876,7 @@ def api_provider_routing_settings():
             data.get('nlp_provider_order'),
             MODEL_API_CONFIG.get('nlp_provider_order', ['model_api', 'gemini', 'ollama', 'local'])
         )
+        # Prepare embedding provider order for the next step.
         embedding_provider_order = _normalize_provider_order(
             data.get('embedding_provider_order'),
             MODEL_API_CONFIG.get('embedding_provider_order', ['model_api', 'ollama'])
@@ -13499,9 +15886,12 @@ def api_provider_routing_settings():
             ['model_api', 'gemini', 'ollama']
         )
 
+        # Prepare routing profile for the next step.
         routing_profile = str(data.get('routing_profile') or '').strip().lower()
         if STRICT_PROVIDER_MODE_SPLIT:
+            # Choose the correct branch before the workflow continues.
             if routing_profile not in ('local', 'cloud'):
+                # Prepare routing profile for the next step.
                 routing_profile = _infer_provider_profile_from_order(nlp_provider_order)
             preset = _get_provider_profile_preset(routing_profile)
             routing_profile = preset['routing_profile']
@@ -13511,20 +15901,24 @@ def api_provider_routing_settings():
             embedding_provider_order = list(preset['embedding_provider_order'])
             vision_provider_order = list(preset['vision_provider_order'])
         else:
+            # Prepare routing profile for the next step.
             routing_profile = _normalize_provider_profile(
                 routing_profile or _infer_provider_profile_from_order(nlp_provider_order)
             )
 
         # Update in-memory config objects
+        # Prepare values needed by the next step.
         MODEL_API_CONFIG['enabled'] = model_api_enabled
         MODEL_API_CONFIG['nlp_provider_order'] = nlp_provider_order
         MODEL_API_CONFIG['embedding_provider_order'] = embedding_provider_order
 
         if data.get('nlp_model'):
+            # Prepare values needed by the next step.
             MODEL_API_CONFIG['nlp_model'] = str(data['nlp_model']).strip()
         if data.get('embedding_model'):
             MODEL_API_CONFIG['embedding_model'] = str(data['embedding_model']).strip()
 
+        # Prepare values needed by the next step.
         GEMINI_CONFIG['enabled'] = gemini_enabled
         if data.get('gemini_model'):
             selected_gemini_model = str(data['gemini_model']).strip()
@@ -13532,10 +15926,12 @@ def api_provider_routing_settings():
             GEMINI_CONFIG['report_model'] = str(
                 data.get('gemini_report_model') or selected_gemini_model
             ).strip()
+            # Prepare values needed by the next step.
             GEMINI_CONFIG['vision_model'] = str(
                 data.get('gemini_vision_model') or selected_gemini_model
             ).strip()
 
+        # Choose the correct branch before the workflow continues.
         if STRICT_PROVIDER_MODE_SPLIT and routing_profile == 'local':
             requested_local_model = STRICT_LOCAL_OLLAMA_MODEL
         else:
@@ -13545,7 +15941,9 @@ def api_provider_routing_settings():
                 or os.getenv('LOCAL_OLLAMA_UNIFIED_MODEL')
                 or LOCAL_OLLAMA_UNIFIED_MODEL
             ).strip()
+        # Choose the correct branch before the workflow continues.
         if requested_local_model:
+            # Prepare values needed by the next step.
             OLLAMA_CONFIG['model'] = requested_local_model
             os.environ['LOCAL_OLLAMA_UNIFIED_MODEL'] = requested_local_model
             os.environ['OLLAMA_MODEL'] = requested_local_model
@@ -13563,7 +15961,9 @@ def api_provider_routing_settings():
         os.environ['VISION_PROVIDER_ORDER'] = ','.join(vision_provider_order)
 
         if MODEL_API_CONFIG.get('nlp_model'):
+            # Prepare values needed by the next step.
             os.environ['NLP_API_MODEL'] = MODEL_API_CONFIG['nlp_model']
+        # Choose the correct branch before the workflow continues.
         if MODEL_API_CONFIG.get('embedding_model'):
             os.environ['EMBEDDING_API_MODEL'] = MODEL_API_CONFIG['embedding_model']
         if GEMINI_CONFIG.get('model'):
@@ -13573,10 +15973,12 @@ def api_provider_routing_settings():
         if GEMINI_CONFIG.get('vision_model'):
             os.environ['GEMINI_VISION_MODEL'] = GEMINI_CONFIG['vision_model']
         if OLLAMA_CONFIG.get('model'):
+            # Prepare values needed by the next step.
             os.environ['OLLAMA_MODEL'] = OLLAMA_CONFIG['model']
             os.environ['OLLAMA_VISION_MODEL'] = OLLAMA_CONFIG['model']
 
         # Update captioning module runtime routing without restart
+        # Prepare caption settings warning for the next step.
         caption_settings_warning = None
         try:
             from caption_image import update_runtime_provider_settings
@@ -13588,6 +15990,7 @@ def api_provider_routing_settings():
                 'ollama_vision_model': OLLAMA_CONFIG.get('model')
             })
         except Exception as caption_err:
+            # Trigger the side effect required for this stage.
             logger.warning(f"Could not update caption provider settings at runtime: {caption_err}")
             # M2  surface the warning to the caller so the UI can show it
             caption_settings_warning = f"Caption provider settings could not be applied: {caption_err}"
@@ -13626,7 +16029,9 @@ def api_provider_routing_settings():
             'message': 'Provider routing settings updated',
             'settings': _current_provider_settings()
         }
+        # Choose the correct branch before the workflow continues.
         if caption_settings_warning:
+            # Prepare values needed by the next step.
             resp_body['caption_settings_warning'] = caption_settings_warning
         return jsonify(resp_body)
 
@@ -13635,10 +16040,13 @@ def api_provider_routing_settings():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Section: run the api provider runtime status workflow with clear inputs and outputs.
 @app.route('/api/providers/runtime-status', methods=['GET'])
 def api_provider_runtime_status():
     """Expose active provider/model, failover reason, and capacity estimate for UX."""
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare settings for the next step.
         settings = _current_provider_settings()
         runtime_snapshot = _get_provider_runtime_snapshot()
         local_diag = _get_local_mode_diagnostics()
@@ -13651,6 +16059,7 @@ def api_provider_runtime_status():
             'local': local_diag,
             'capacity': capacity,
         })
+        # Prepare values needed by the next step.
         response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response.headers['Pragma'] = 'no-cache'
         response.headers['Expires'] = '0'
@@ -13660,9 +16069,11 @@ def api_provider_runtime_status():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Section: run the api report recovery options workflow with clear inputs and outputs.
 @app.route('/api/reports/recovery/options', methods=['GET'])
 def api_report_recovery_options():
     """Provide quota-recovery options before failover is executed."""
+    # Prepare requested machine id for the next step.
     requested_machine_id = _local_mode_normalize_machine_id(request.args.get('machine_id') or '')
     checkup_only = str(request.args.get('checkup_only') or '').strip().lower() in ('1', 'true', 'yes', 'on')
     diagnostics = (
@@ -13672,6 +16083,7 @@ def api_report_recovery_options():
     )
     heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(requested_machine_id)
     candidates = [] if checkup_only else _collect_recovery_candidates(limit=300)
+    # Prepare quota failed for the next step.
     quota_failed = [c for c in candidates if c.get('status') == 'failed']
     pending_like = [c for c in candidates if c.get('status') in ('pending', 'queued', 'processing', 'generating')]
 
@@ -13690,34 +16102,42 @@ def api_report_recovery_options():
             if STRICT_PROVIDER_MODE_SPLIT else ['model_api', 'gemini', 'ollama', 'local']
         )
     })
+    # Prepare values needed by the next step.
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     response.headers['Expires'] = '0'
     return response
 
 
+# Section: run the api report recovery execute workflow with clear inputs and outputs.
 @app.route('/api/reports/recovery/execute', methods=['POST'])
 def api_report_recovery_execute():
     """Run approved recovery action: local-first or failover for pending/quota-failed reports."""
+    # Prepare payload for the next step.
     payload = request.get_json(silent=True) or {}
     mode = str(payload.get('mode') or '').strip().lower()
     if mode not in ('local', 'failover'):
+        # Return the prepared result to the caller.
         return jsonify({'success': False, 'error': 'mode must be either "local" or "failover"'}), 400
 
     if not _ensure_violation_queue_runtime_ready(reason=f'recovery_execute:{mode}'):
         return jsonify({'success': False, 'error': 'Queue is not initialized'}), 503
 
     local_mode_warning = None
+    # Choose the correct branch before the workflow continues.
     if mode == 'local':
         diagnostics = _get_local_mode_diagnostics()
         if not diagnostics.get('local_mode_possible'):
+            # Prepare local mode warning for the next step.
             local_mode_warning = (
                 'Local mode is not currently feasible on this backend host. '
                 'Continuing with detection-only fallback where possible.'
             )
             logger.warning(local_mode_warning)
 
+    # Choose the correct branch before the workflow continues.
     if not ensure_queue_worker_running():
+        # Return the prepared result to the caller.
         return jsonify({'success': False, 'error': 'Queue worker is not running'}), 503
 
     target_profile = 'local' if mode == 'local' else 'cloud'
@@ -13727,8 +16147,10 @@ def api_report_recovery_execute():
     else:
         selected_order = ['local', 'ollama', 'model_api', 'gemini'] if mode == 'local' else ['gemini', 'model_api', 'ollama', 'local']
         applied_order = _apply_nlp_provider_order(selected_order)
+        # Prepare applied profile for the next step.
         applied_profile = {'routing_profile': _infer_provider_profile_from_order(applied_order)}
 
+    # Prepare candidates for the next step.
     candidates = _collect_recovery_candidates(limit=300)
     requested_report_ids = payload.get('report_ids')
     requested_set = set()
@@ -13737,12 +16159,15 @@ def api_report_recovery_execute():
         candidates = [c for c in candidates if c.get('report_id') in requested_set]
 
     try:
+        # Prepare max enqueue per call for the next step.
         max_enqueue_per_call = int(payload.get('max_enqueue') or 0)
     except Exception:
         max_enqueue_per_call = 0
 
+    # Choose the correct branch before the workflow continues.
     if max_enqueue_per_call <= 0:
         try:
+            # Prepare max enqueue per call for the next step.
             max_enqueue_per_call = max(
                 1,
                 min(int(os.getenv('REPORT_RECOVERY_MAX_ENQUEUE_PER_CALL', '4') or 4), 200),
@@ -13750,7 +16175,9 @@ def api_report_recovery_execute():
         except Exception:
             max_enqueue_per_call = 4
 
+    # Choose the correct branch before the workflow continues.
     if requested_set:
+        # Prepare max enqueue per call for the next step.
         max_enqueue_per_call = max(max_enqueue_per_call, len(requested_set))
 
     try:
@@ -13761,8 +16188,10 @@ def api_report_recovery_execute():
     except Exception:
         defer_queue_threshold = 12
 
+    # Prepare queue size now for the next step.
     queue_size_now = int(violation_queue.get_queue_size() if violation_queue is not None else 0)
     if not requested_set and queue_size_now >= defer_queue_threshold:
+        # Return the prepared result to the caller.
         return jsonify({
             'success': True,
             'mode': mode,
@@ -13782,13 +16211,16 @@ def api_report_recovery_execute():
             'max_enqueue_per_call': max_enqueue_per_call,
         })
 
+    # Prepare enqueued count for the next step.
     enqueued_count = 0
     skipped_count = 0
     errors = []
     enqueue_cap_reached = False
 
     for item in candidates:
+        # Choose the correct branch before the workflow continues.
         if enqueued_count >= max_enqueue_per_call:
+            # Prepare enqueue cap reached for the next step.
             enqueue_cap_reached = True
             break
 
@@ -13798,6 +16230,7 @@ def api_report_recovery_execute():
                 skipped_count += 1
                 continue
 
+            # Prepare db reads allowed for the next step.
             db_reads_allowed = bool(db_manager is not None and not _is_supabase_offline_backoff_active())
             event = db_manager.get_detection_event(report_id) if (db_reads_allowed and hasattr(db_manager, 'get_detection_event')) else None
             violation_dir = VIOLATIONS_DIR.absolute() / report_id
@@ -13808,10 +16241,12 @@ def api_report_recovery_execute():
                 skipped_count += 1
                 continue
 
+            # Prepare detections for the next step.
             detections = []
             violation = db_manager.get_violation(report_id) if (db_reads_allowed and hasattr(db_manager, 'get_violation')) else None
             detection_data = violation.get('detection_data') if isinstance(violation, dict) else None
             if isinstance(detection_data, dict):
+                # Prepare detections for the next step.
                 detections = detection_data.get('detections', []) or []
             else:
                 detection_data = {}
@@ -13821,6 +16256,7 @@ def api_report_recovery_execute():
                 or detection_data.get('report_scope')
                 or ''
             ).strip().lower()
+            # Prepare sync source marker for the next step.
             sync_source_marker = str(
                 detection_data.get('sync_source')
                 or detection_data.get('source')
@@ -13829,7 +16265,9 @@ def api_report_recovery_execute():
 
             local_violation_types = []
             if isinstance(item.get('violation_types'), list):
+                # Prepare local violation types for the next step.
                 local_violation_types = [str(v).strip() for v in item.get('violation_types') if str(v).strip()]
+            # Choose the correct branch before the workflow continues.
             elif item.get('violation_type'):
                 local_violation_types = [str(item.get('violation_type')).strip()]
 
@@ -13843,23 +16281,29 @@ def api_report_recovery_execute():
                 violation_summary=violation_summary_text,
                 fallback_count=fallback_count,
             )
+            # Prepare local violation types for the next step.
             local_violation_types = _normalize_violation_type_list(local_violation_types)
             if local_violation_types and _violation_types_are_generic(violation_types):
+                # Prepare violation types for the next step.
                 violation_types = local_violation_types
                 resolved_violation_count = max(int(resolved_violation_count or 0), len(violation_types), 1)
 
             if not annotated_path.exists():
                 try:
+                    # Prepare frame for the next step.
                     frame = cv2.imread(str(original_path))
                     if frame is not None:
+                        # Prepare values needed by the next step.
                         _, annotated = predict_image(frame, conf=0.25)
                         cv2.imwrite(str(annotated_path), annotated)
                 except Exception:
                     pass
 
+            # Prepare event ts for the next step.
             event_ts = event.get('timestamp') if isinstance(event, dict) else None
             item_ts = item.get('timestamp')
             if event_ts is not None:
+                # Prepare ts value for the next step.
                 ts_value = event_ts.isoformat() if hasattr(event_ts, 'isoformat') else str(event_ts)
             elif isinstance(item_ts, str) and item_ts.strip():
                 ts_value = item_ts
@@ -13872,6 +16316,7 @@ def api_report_recovery_execute():
                 violation_summary=violation_summary_text,
             )
 
+            # Prepare violation data for the next step.
             violation_data = {
                 'report_id': report_id,
                 'timestamp': ts_value,
@@ -13883,7 +16328,9 @@ def api_report_recovery_execute():
                 'violation_dir': str(violation_dir),
                 'severity': resolved_severity,
             }
+            # Choose the correct branch before the workflow continues.
             if source_scope_marker:
+                # Prepare values needed by the next step.
                 violation_data['source_scope'] = source_scope_marker
             if sync_source_marker:
                 violation_data['sync_source'] = sync_source_marker
@@ -13895,6 +16342,7 @@ def api_report_recovery_execute():
                     'recovery_pipeline_offline' if db_manager is None else 'recovery_pipeline'
                 )
 
+            # Prepare enqueue device id for the next step.
             enqueue_device_id = device_id
 
             enqueued = violation_queue.enqueue(
@@ -13904,13 +16352,16 @@ def api_report_recovery_execute():
                 severity='CRITICAL'
             )
 
+            # Choose the correct branch before the workflow continues.
             if not enqueued:
+                # Prepare queue stats for the next step.
                 queue_stats = violation_queue.get_stats()
                 queue_size = int(queue_stats.get('current_size', 0) or 0)
                 queue_capacity = int(queue_stats.get('capacity', 0) or 0)
                 queue_full = queue_capacity > 0 and queue_size >= queue_capacity
 
                 if not queue_full:
+                    # Prepare fallback device id for the next step.
                     fallback_device_id = f'recovery_reprocess_{report_id}_{time.time_ns()}'
                     enqueued = violation_queue.enqueue(
                         violation_data=violation_data,
@@ -13919,28 +16370,34 @@ def api_report_recovery_execute():
                         severity='CRITICAL'
                     )
                     if enqueued:
+                        # Prepare enqueue device id for the next step.
                         enqueue_device_id = fallback_device_id
                         logger.info(
                             f"Recovery enqueue fallback succeeded for {report_id} "
                             f"with device_id={fallback_device_id}"
                         )
 
+            # Choose the correct branch before the workflow continues.
             if not enqueued:
                 skipped_count += 1
                 continue
 
             if db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Trigger the side effect required for this stage.
                     db_manager.update_detection_status(report_id, 'pending')
                 except Exception as status_err:
                     logger.warning(f"Could not update pending status for {report_id}: {status_err}")
             enqueued_count += 1
 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             _activate_local_offline_runtime('api_report_recovery_execute.enqueue', e)
             errors.append(f"{report_id}: {e}")
             skipped_count += 1
 
+    # Trigger the side effect required for this stage.
     _invalidate_queue_context_snapshot_cache()
     _invalidate_local_report_state_cache()
     _invalidate_dashboard_snapshot_cache()
@@ -13963,6 +16420,7 @@ def api_report_recovery_execute():
     })
 
 
+# Section: run the sync local cache candidates workflow with clear inputs and outputs.
 def _sync_local_cache_candidates(
     max_items: int = 120,
     dry_run: bool = False,
@@ -13974,7 +16432,9 @@ def _sync_local_cache_candidates(
     """Scan local violation folders and enqueue unsynced local-origin items for Supabase reconciliation."""
     global db_manager, storage_manager
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare max items for the next step.
         max_items = max(1, min(int(max_items or 120), 500))
     except Exception:
         max_items = 120
@@ -13983,6 +16443,7 @@ def _sync_local_cache_candidates(
     sync_origin = str(origin or 'local_synced').strip().lower() or 'local_synced'
     if sync_origin not in {'local_synced', 'sync_local_cache', 'browser_local_draft_handoff'}:
         sync_origin = 'local_synced'
+    # Prepare is auto reconnect for the next step.
     is_auto_reconnect = reason in ('auto_reconnect', 'reconnect_auto')
     local_mode_sync_allowed = bool(allow_local_mode_sync or is_auto_reconnect)
 
@@ -13994,6 +16455,7 @@ def _sync_local_cache_candidates(
     active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
     cloud_mode_orphans_only = (active_profile != 'local')
     if active_profile == 'local' and not dry_run and not local_mode_sync_allowed:
+        # Return the prepared result to the caller.
         return {
             'success': True,
             'reconcile_reason': reason,
@@ -14015,48 +16477,64 @@ def _sync_local_cache_candidates(
             'message': 'Local-mode reports remain local until reconnect sync or cloud mode is available.',
         }
 
+    # Section: run the load local metadata workflow with clear inputs and outputs.
     def _load_local_metadata(violation_dir: Path) -> Dict[str, Any]:
+        # Prepare metadata path for the next step.
         metadata_path = violation_dir / 'metadata.json'
         if not metadata_path.exists():
+            # Return the prepared result to the caller.
             return {}
         try:
             with open(metadata_path, 'r', encoding='utf-8') as meta_file:
+                # Prepare parsed for the next step.
                 parsed = json.load(meta_file) or {}
             return parsed if isinstance(parsed, dict) else {}
         except Exception:
             return {}
 
+    # Section: run the parse detection payload workflow with clear inputs and outputs.
     def _parse_detection_payload(value: Any) -> Dict[str, Any]:
+        # Choose the correct branch before the workflow continues.
         if isinstance(value, dict):
+            # Return the prepared result to the caller.
             return value
         if isinstance(value, str):
             try:
+                # Prepare parsed for the next step.
                 parsed = json.loads(value)
                 return parsed if isinstance(parsed, dict) else {}
             except Exception:
                 return {}
         return {}
 
+    # Section: run the has local report id prefix workflow with clear inputs and outputs.
     def _has_local_report_id_prefix(report_id: str) -> bool:
+        # Return the prepared result to the caller.
         return bool(re.match(r'^(local|offline|browser_local|local-cache|offline-cache)[_-]', str(report_id or '').strip().lower()))
 
+    # Section: run the is strict local origin record workflow with clear inputs and outputs.
     def _is_strict_local_origin_record(record: Dict[str, Any]) -> bool:
         if not isinstance(record, dict):
+            # Return the prepared result to the caller.
             return False
         if _has_local_report_id_prefix(str(record.get('report_id') or '')):
             return True
 
         nested = _parse_detection_payload(record.get('detection_data'))
+        # Choose the correct branch before the workflow continues.
         if nested:
             nested.setdefault('report_id', record.get('report_id'))
             nested.setdefault('device_id', record.get('device_id'))
             if _is_strict_local_origin_record(nested):
+                # Return the prepared result to the caller.
                 return True
 
         scope = str(record.get('source_scope') or record.get('report_scope') or record.get('scope') or '').strip().lower()
         if scope == 'local':
+            # Return the prepared result to the caller.
             return True
 
+        # Prepare source marker for the next step.
         source_marker = str(
             record.get('origin')
             or record.get('sync_source')
@@ -14078,25 +16556,30 @@ def _sync_local_cache_candidates(
             'local_cache_sync',
             'local_synced',
         }
+        # Choose the correct branch before the workflow continues.
         if (
             source_marker in local_markers
             or source_marker.startswith('local_')
             or source_marker.startswith('offline_')
             or source_marker.startswith('browser_local')
         ):
+            # Return the prepared result to the caller.
             return True
 
         device_id = str(record.get('device_id') or '').strip().lower()
+        # Choose the correct branch before the workflow continues.
         if (
             device_id in {'local_cache', 'offline_local_cache', 'local_cache_sync', 'browser_local_draft'}
             or device_id.startswith('local_')
             or device_id.startswith('offline_')
             or device_id.startswith('browser_local')
         ):
+            # Return the prepared result to the caller.
             return True
 
         return str(record.get('source_label') or '').strip().lower() == 'local'
 
+    # Section: run the is strict local sync candidate workflow with clear inputs and outputs.
     def _is_strict_local_sync_candidate(
         *,
         report_id: str,
@@ -14105,8 +16588,10 @@ def _sync_local_cache_candidates(
         metadata: Dict[str, Any],
     ) -> bool:
         records: List[Dict[str, Any]] = []
+        # Prepare base for the next step.
         base = {'report_id': report_id}
         if isinstance(metadata, dict) and metadata:
+            # Trigger the side effect required for this stage.
             records.append({**base, **metadata})
         if isinstance(event, dict) and event:
             records.append({
@@ -14115,7 +16600,9 @@ def _sync_local_cache_candidates(
                 'detection_data': event.get('detection_data'),
                 'device_id': event.get('device_id'),
             })
+        # Choose the correct branch before the workflow continues.
         if isinstance(violation, dict) and violation:
+            # Trigger the side effect required for this stage.
             records.append({
                 **base,
                 **violation,
@@ -14125,11 +16612,15 @@ def _sync_local_cache_candidates(
         records.append(base)
         return any(_is_strict_local_origin_record(record) for record in records)
 
+    # Choose the correct branch before the workflow continues.
     if dry_run:
+        # Prepare scanned for the next step.
         scanned = 0
         candidates = 0
         if VIOLATIONS_DIR.exists():
+            # Process each item in this collection using the same rule set.
             for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
+                # Choose the correct branch before the workflow continues.
                 if not violation_dir.is_dir():
                     continue
                 scanned += 1
@@ -14144,9 +16635,11 @@ def _sync_local_cache_candidates(
                     )
                 ):
                     candidates += 1
+                # Choose the correct branch before the workflow continues.
                 if scanned >= max_items:
                     break
 
+        # Prepare skipped for the next step.
         skipped = max(0, scanned - candidates)
         return {
             'success': True,
@@ -14163,8 +16656,11 @@ def _sync_local_cache_candidates(
             'dry_run_mode': 'local_metadata_only',
         }
 
+    # Choose the correct branch before the workflow continues.
     if (db_manager is None or storage_manager is None) and not dry_run:
+        # Choose the correct branch before the workflow continues.
         if _is_supabase_offline_backoff_active():
+            # Prepare snapshot for the next step.
             snapshot = _get_supabase_offline_backoff_snapshot()
             return {
                 'success': False,
@@ -14173,8 +16669,10 @@ def _sync_local_cache_candidates(
                     f"(context={snapshot.get('context')}, remaining_seconds={snapshot.get('remaining_seconds')})"
                 )
             }
+        # Trigger the side effect required for this stage.
         _attempt_supabase_runtime_recovery(reason=f'sync_local_cache:{reason}', force=True)
 
+    # Choose the correct branch before the workflow continues.
     if db_manager is None:
         return {'success': False, 'error': 'Database manager unavailable'}
     if storage_manager is None:
@@ -14182,21 +16680,27 @@ def _sync_local_cache_candidates(
 
     if violation_queue is None:
         if dry_run:
+            # Trigger the side effect required for this stage.
             _ensure_violation_queue_runtime_ready(reason=f'sync_local_cache_dry_run:{reason}')
+        # Choose the correct branch before the workflow continues.
         elif require_worker:
             if not ensure_queue_worker_running():
+                # Return the prepared result to the caller.
                 return {'success': False, 'error': 'Queue worker is not running'}
         elif not _ensure_violation_queue_runtime_ready(reason=f'sync_local_cache:{reason}'):
             return {'success': False, 'error': 'Queue is not initialized'}
 
+    # Choose the correct branch before the workflow continues.
     if violation_queue is None and not dry_run:
         return {'success': False, 'error': 'Queue is not initialized'}
     if not dry_run and require_worker and not ensure_queue_worker_running():
+        # Return the prepared result to the caller.
         return {'success': False, 'error': 'Queue worker is not running'}
 
     if is_auto_reconnect and not dry_run:
         queue_size_now = int(violation_queue.get_queue_size() if violation_queue is not None else 0)
         try:
+            # Prepare reconnect defer threshold for the next step.
             reconnect_defer_threshold = max(
                 0,
                 int(os.getenv('LOCAL_CACHE_SYNC_DEFER_QUEUE_THRESHOLD', '0') or 0),
@@ -14204,6 +16708,7 @@ def _sync_local_cache_candidates(
         except Exception:
             reconnect_defer_threshold = 0
 
+        # Choose the correct branch before the workflow continues.
         if reconnect_defer_threshold > 0 and queue_size_now >= reconnect_defer_threshold:
             return {
                 'success': True,
@@ -14222,15 +16727,20 @@ def _sync_local_cache_candidates(
                 'queue_threshold': reconnect_defer_threshold,
             }
 
+    # Prepare local dirs for the next step.
     local_dirs = []
     if VIOLATIONS_DIR.exists():
+        # Process each item in this collection using the same rule set.
         for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True):
+            # Choose the correct branch before the workflow continues.
             if violation_dir.is_dir():
+                # Trigger the side effect required for this stage.
                 local_dirs.append(violation_dir)
             if len(local_dirs) >= max_items:
                 break
 
     scanned = 0
+    # Prepare enqueued for the next step.
     enqueued = 0
     skipped = 0
     candidates = 0
@@ -14240,8 +16750,11 @@ def _sync_local_cache_candidates(
     errors = []
     enqueue_cap_reached = False
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Choose the correct branch before the workflow continues.
         if is_auto_reconnect:
+            # Prepare max enqueue per call for the next step.
             max_enqueue_per_call = max(
                 1,
                 min(int(os.getenv('LOCAL_CACHE_SYNC_AUTO_MAX_ENQUEUE_PER_CALL', '4') or 4), 200),
@@ -14252,17 +16765,21 @@ def _sync_local_cache_candidates(
                 min(int(os.getenv('LOCAL_CACHE_SYNC_MAX_ENQUEUE_PER_CALL', '25') or 25), 500),
             )
     except Exception:
+        # Prepare max enqueue per call for the next step.
         max_enqueue_per_call = 4 if is_auto_reconnect else 25
 
+    # Prepare sync queue severity for the next step.
     sync_queue_severity = 'CRITICAL' if is_auto_reconnect else 'HIGH'
     sync_queue_expedite = bool(is_auto_reconnect)
 
     for violation_dir in local_dirs:
         if not dry_run and enqueued >= max_enqueue_per_call:
+            # Prepare enqueue cap reached for the next step.
             enqueue_cap_reached = True
             break
 
         scanned += 1
+        # Prepare report id for the next step.
         report_id = violation_dir.name
         original_path = violation_dir / 'original.jpg'
         annotated_path = violation_dir / 'annotated.jpg'
@@ -14274,7 +16791,9 @@ def _sync_local_cache_candidates(
             skipped += 1
             continue
 
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare event for the next step.
             event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
             violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
         except Exception as lookup_err:
@@ -14288,8 +16807,10 @@ def _sync_local_cache_candidates(
             violation=violation,
             metadata=metadata,
         )
+        # Choose the correct branch before the workflow continues.
         if not strict_local_sync_candidate and not (local_mode_sync_allowed and active_profile == 'local'):
             skipped += 1
+            # Trigger the side effect required for this stage.
             logger.debug(
                 "Skipping local-cache sync for %s: no strict local-origin marker "
                 "(cloud-origin artifacts are preserved)",
@@ -14297,6 +16818,7 @@ def _sync_local_cache_candidates(
             )
             continue
 
+        # Prepare event status for the next step.
         event_status = str((event or {}).get('status') or '').strip().lower()
         if local_has_report and event_status in ('pending', 'queued', 'processing', 'generating'):
             # In cloud mode this is almost always an in-flight cloud worker
@@ -14310,7 +16832,9 @@ def _sync_local_cache_candidates(
                 skipped += 1
                 continue
             try:
+                # Choose the correct branch before the workflow continues.
                 if hasattr(db_manager, 'update_detection_status'):
+                    # Trigger the side effect required for this stage.
                     db_manager.update_detection_status(
                         report_id,
                         'completed',
@@ -14320,6 +16844,7 @@ def _sync_local_cache_candidates(
             except Exception as status_heal_err:
                 logger.debug(f"Could not auto-heal stale status for {report_id}: {status_heal_err}")
 
+        # Choose the correct branch before the workflow continues.
         if _is_report_queued_or_processing(report_id):
             skipped += 1
             continue
@@ -14329,6 +16854,7 @@ def _sync_local_cache_candidates(
         has_cloud_report = bool((violation or {}).get('report_html_key'))
         has_cloud_artifacts = bool(has_cloud_original or has_cloud_annotated or has_cloud_report)
         has_cloud_report_artifact = bool(has_cloud_report or (violation or {}).get('report_pdf_key'))
+        # Prepare event detection data for the next step.
         event_detection_data = _parse_detection_payload((event or {}).get('detection_data')) if event else {}
         violation_detection_data = _parse_detection_payload((violation or {}).get('detection_data')) if violation else {}
         sync_state_marker = str(
@@ -14341,6 +16867,7 @@ def _sync_local_cache_candidates(
             or metadata.get('cloud_sync_state')
             or ''
         ).strip().lower()
+        # Prepare sync source marker for evidence for the next step.
         sync_source_marker_for_evidence = str(
             violation_detection_data.get('sync_source')
             or violation_detection_data.get('source')
@@ -14353,6 +16880,7 @@ def _sync_local_cache_candidates(
             or metadata.get('origin')
             or ''
         ).strip().lower()
+        # Prepare sync device key for the next step.
         sync_device_key = str(
             (event or {}).get('device_id')
             or (violation or {}).get('device_id')
@@ -14369,6 +16897,7 @@ def _sync_local_cache_candidates(
             has_cloud_report_artifact=has_cloud_report_artifact,
             report_id=report_id,
         )
+        # Prepare needs synced local repair for the next step.
         needs_synced_local_repair = bool(
             local_has_report
             and strict_local_sync_candidate
@@ -14402,6 +16931,7 @@ def _sync_local_cache_candidates(
                 or 'local' in violation_sync_source
             )
 
+            # Prepare needs sync for the next step.
             needs_sync = (
                 not event  # (A) true orphan
                 or (                         # (B) local-pipeline event missing cloud artifacts
@@ -14415,6 +16945,7 @@ def _sync_local_cache_candidates(
                 )
             )
         else:
+            # Prepare needs sync for the next step.
             needs_sync = (
                 not event
                 or not has_cloud_original
@@ -14423,6 +16954,7 @@ def _sync_local_cache_candidates(
                 or needs_synced_local_repair
             )
 
+        # Choose the correct branch before the workflow continues.
         if not needs_sync:
             skipped += 1
             continue
@@ -14432,9 +16964,11 @@ def _sync_local_cache_candidates(
         if dry_run:
             continue
 
+        # Prepare detections for the next step.
         detections = []
         detection_data = (violation or {}).get('detection_data') if isinstance(violation, dict) else None
         if isinstance(detection_data, dict):
+            # Prepare detections for the next step.
             detections = detection_data.get('detections', []) or []
         else:
             detection_data = {}
@@ -14445,23 +16979,29 @@ def _sync_local_cache_candidates(
                 item for item in metadata_detection_payload.get('detections') or []
                 if isinstance(item, dict)
             ]
+        # Choose the correct branch before the workflow continues.
         if not detections and isinstance(metadata.get('detections'), list):
+            # Prepare detections for the next step.
             detections = [item for item in metadata.get('detections') or [] if isinstance(item, dict)]
 
         if not local_has_report:
             ts_value = None
             if event and event.get('timestamp'):
+                # Prepare ts for the next step.
                 ts = event.get('timestamp')
                 ts_value = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
             else:
                 try:
+                    # Prepare ts obj for the next step.
                     ts_obj = _parse_report_id_timestamp(report_id)
                     ts_value = ts_obj.isoformat()
                 except Exception:
                     ts_value = get_local_time().isoformat()
 
+            # Prepare violation summary text for the next step.
             violation_summary_text = ''
             if isinstance(violation, dict):
+                # Prepare violation summary text for the next step.
                 violation_summary_text = str(violation.get('violation_summary') or '').strip()
             if not violation_summary_text:
                 violation_summary_text = str(metadata.get('violation_summary') or '').strip()
@@ -14472,6 +17012,7 @@ def _sync_local_cache_candidates(
                 violation_summary=violation_summary_text,
                 fallback_count=event.get('violation_count') if isinstance(event, dict) else metadata.get('violation_count'),
             )
+            # Prepare local metadata violation types for the next step.
             local_metadata_violation_types = _normalize_violation_type_list(
                 metadata.get('violation_types'),
                 metadata.get('ppe_tags'),
@@ -14482,7 +17023,9 @@ def _sync_local_cache_candidates(
                 metadata_detection_payload.get('violation_types') if isinstance(metadata_detection_payload, dict) else [],
                 metadata_detection_payload.get('ppe_tags') if isinstance(metadata_detection_payload, dict) else [],
             )
+            # Choose the correct branch before the workflow continues.
             if local_metadata_violation_types and _violation_types_are_generic(violation_types):
+                # Prepare violation types for the next step.
                 violation_types = local_metadata_violation_types
             elif local_metadata_violation_types:
                 violation_types = _normalize_violation_type_list(violation_types, local_metadata_violation_types)
@@ -14495,6 +17038,7 @@ def _sync_local_cache_candidates(
                 or 'local_cache_sync'
             ).strip() or 'local_cache_sync'
 
+            # Prepare handoff summary for the next step.
             handoff_summary = _handoff_partial_local_report_to_cloud(
                 report_id=report_id,
                 violation_dir=violation_dir,
@@ -14511,8 +17055,10 @@ def _sync_local_cache_candidates(
                 sync_source='sync_local_cache_partial',
                 reason=reason,
             )
+            # Choose the correct branch before the workflow continues.
             if handoff_summary.get('success'):
                 partial_handoffs += 1
+                # Trigger the side effect required for this stage.
                 partial_handoff_report_ids.append(report_id)
                 logger.info(
                     f"Partial local-cache handoff uploaded image artifacts for {report_id}; "
@@ -14526,6 +17072,7 @@ def _sync_local_cache_candidates(
                 )
             continue
 
+        # Prepare existing source scope marker for the next step.
         existing_source_scope_marker = str(
             detection_data.get('source_scope')
             or detection_data.get('report_scope')
@@ -14536,6 +17083,7 @@ def _sync_local_cache_candidates(
             if (needs_synced_local_repair or strict_local_sync_candidate)
             else (existing_source_scope_marker or 'synced_local')
         )
+        # Prepare original sync source for the next step.
         original_sync_source = str(
             detection_data.get('sync_source')
             or detection_data.get('source')
@@ -14546,25 +17094,32 @@ def _sync_local_cache_candidates(
         sync_source_marker = 'sync_local_cache'
 
         if not annotated_path.exists():
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare frame for the next step.
                 frame = cv2.imread(str(original_path))
                 if frame is not None:
+                    # Prepare values needed by the next step.
                     _, annotated = predict_image(frame, conf=0.25)
                     cv2.imwrite(str(annotated_path), annotated)
             except Exception:
                 pass
 
+        # Prepare ts value for the next step.
         ts_value = None
         if event and event.get('timestamp'):
+            # Prepare ts for the next step.
             ts = event.get('timestamp')
             ts_value = ts.isoformat() if hasattr(ts, 'isoformat') else str(ts)
         else:
             try:
+                # Prepare ts obj for the next step.
                 ts_obj = _parse_report_id_timestamp(report_id)
                 ts_value = ts_obj.isoformat()
             except Exception:
                 ts_value = get_local_time().isoformat()
 
+        # Prepare violation summary text for the next step.
         violation_summary_text = (violation or {}).get('violation_summary') if isinstance(violation, dict) else ''
         violation_types, resolved_violation_count = _resolve_violation_types_and_count(
             detections,
@@ -14586,7 +17141,9 @@ def _sync_local_cache_candidates(
                 )
             ],
         )
+        # Choose the correct branch before the workflow continues.
         if local_metadata_violation_types and _violation_types_are_generic(violation_types):
+            # Prepare violation types for the next step.
             violation_types = local_metadata_violation_types
         elif local_metadata_violation_types:
             violation_types = _normalize_violation_type_list(violation_types, local_metadata_violation_types)
@@ -14599,6 +17156,7 @@ def _sync_local_cache_candidates(
             violation_summary=violation_summary_text or metadata.get('violation_summary'),
         )
 
+        # Prepare violation data for the next step.
         violation_data = {
             'report_id': report_id,
             'timestamp': ts_value,
@@ -14616,13 +17174,16 @@ def _sync_local_cache_candidates(
             'origin': sync_origin,
             'severity': resolved_severity,
         }
+        # Choose the correct branch before the workflow continues.
         if original_sync_source:
+            # Prepare values needed by the next step.
             violation_data['origin_sync_source'] = original_sync_source
         event_device_id = (event.get('device_id') if isinstance(event, dict) else None) or 'local_cache_sync'
         queue_sync_device_id = f"local_cache_sync_{report_id}_{time.time_ns()}"
 
         try:
             if not event and hasattr(db_manager, 'insert_detection_event'):
+                # Trigger the side effect required for this stage.
                 db_manager.insert_detection_event(
                     report_id=report_id,
                     timestamp=ts_value,
@@ -14633,6 +17194,7 @@ def _sync_local_cache_candidates(
                     status='pending'
                 )
 
+            # Prepare queued for the next step.
             queued = violation_queue.enqueue(
                 violation_data=violation_data,
                 device_id=queue_sync_device_id,
@@ -14645,7 +17207,9 @@ def _sync_local_cache_candidates(
                 skipped += 1
                 continue
 
+            # Choose the correct branch before the workflow continues.
             if hasattr(db_manager, 'update_detection_status'):
+                # Trigger the side effect required for this stage.
                 db_manager.update_detection_status(
                     report_id,
                     'pending',
@@ -14654,6 +17218,7 @@ def _sync_local_cache_candidates(
 
             if hasattr(db_manager, 'log_event'):
                 try:
+                    # Trigger the side effect required for this stage.
                     db_manager.log_event(
                         event_type='local_cache_sync_queued',
                         message=f'Queued local cache report for Supabase reconciliation ({reason})',
@@ -14670,14 +17235,17 @@ def _sync_local_cache_candidates(
                         }
                     )
                 except Exception as log_err:
+                    # Trigger the side effect required for this stage.
                     logger.debug(f"Could not log local cache sync event for {report_id}: {log_err}")
 
             enqueued += 1
+            # Trigger the side effect required for this stage.
             queued_report_ids.append(report_id)
         except Exception as enqueue_err:
             errors.append(f"{report_id}: enqueue failed ({enqueue_err})")
             skipped += 1
 
+    # Return the prepared result to the caller.
     return {
         'success': True,
         'reconcile_reason': reason,
@@ -14698,12 +17266,15 @@ def _sync_local_cache_candidates(
     }
 
 
+# Section: run the api sync local cache to supabase workflow with clear inputs and outputs.
 @app.route('/api/reports/sync-local-cache', methods=['POST'])
 def api_sync_local_cache_to_supabase():
     """Scan local violation folders and enqueue unsynced items for Supabase reconciliation."""
+    # Prepare payload for the next step.
     payload = request.get_json(silent=True) or {}
     limit_raw = payload.get('limit', 120)
     try:
+        # Prepare max items for the next step.
         max_items = max(1, min(int(limit_raw or 120), 500))
     except Exception:
         max_items = 120
@@ -14711,6 +17282,7 @@ def api_sync_local_cache_to_supabase():
     sync_reason = str(payload.get('reason') or 'manual_api').strip() or 'manual_api'
     sync_origin = str(payload.get('origin') or 'local_synced').strip().lower() or 'local_synced'
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
         result = _sync_local_cache_candidates(
             max_items=max_items,
@@ -14721,6 +17293,7 @@ def api_sync_local_cache_to_supabase():
             allow_local_mode_sync=bool(payload.get('allow_local_mode_sync', False)),
         )
     except Exception as sync_err:
+        # Trigger the side effect required for this stage.
         logger.error(f"Local-cache sync endpoint failed: {sync_err}", exc_info=True)
         return jsonify({
             'success': False,
@@ -14730,8 +17303,11 @@ def api_sync_local_cache_to_supabase():
             'dry_run': dry_run,
         }), 500
 
+    # Choose the correct branch before the workflow continues.
     if result.get('success'):
+        # Choose the correct branch before the workflow continues.
         if not dry_run:
+            # Trigger the side effect required for this stage.
             _invalidate_queue_context_snapshot_cache()
             _invalidate_local_report_state_cache()
             _invalidate_dashboard_snapshot_cache()
@@ -14743,17 +17319,22 @@ def api_sync_local_cache_to_supabase():
         or 'not initialized' in error_message
         or 'not running' in error_message
     ):
+        # Return the prepared result to the caller.
         return jsonify(result), 503
+    # Return the prepared result to the caller.
     return jsonify(result), 500
 
 
+# Section: run the api report local draft handoff workflow with clear inputs and outputs.
 @app.route('/api/reports/local-draft-handoff', methods=['POST'])
 def api_report_local_draft_handoff():
     """Accept a browser-persisted local draft and let cloud generation continue it."""
     startup_gate = _startup_gate_response()
     if startup_gate is not None:
+        # Return the prepared result to the caller.
         return startup_gate
 
+    # Choose the correct branch before the workflow continues.
     if 'image' not in request.files:
         return jsonify({'success': False, 'error': 'No image provided'}), 400
 
@@ -14762,8 +17343,10 @@ def api_report_local_draft_handoff():
         return jsonify({'success': False, 'error': 'No image selected'}), 400
 
     try:
+        # Prepare raw metadata for the next step.
         raw_metadata = request.form.get('metadata') or '{}'
         try:
+            # Prepare metadata for the next step.
             metadata = json.loads(raw_metadata) if isinstance(raw_metadata, str) else {}
         except Exception:
             metadata = {}
@@ -14771,6 +17354,7 @@ def api_report_local_draft_handoff():
             metadata = {}
 
         img_bytes = file.read()
+        # Choose the correct branch before the workflow continues.
         if len(img_bytes) > BROWSER_LOCAL_DRAFT_HANDOFF_MAX_IMAGE_BYTES:
             return jsonify({
                 'success': False,
@@ -14780,7 +17364,9 @@ def api_report_local_draft_handoff():
 
         nparr = np.frombuffer(img_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        # Choose the correct branch before the workflow continues.
         if frame is None:
+            # Return the prepared result to the caller.
             return jsonify({'success': False, 'error': 'Invalid image format'}), 400
 
         report_id = _safe_report_id(
@@ -14789,20 +17375,24 @@ def api_report_local_draft_handoff():
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         violation_dir.mkdir(parents=True, exist_ok=True)
         original_path = violation_dir / 'original.jpg'
+        # Prepare annotated path for the next step.
         annotated_path = violation_dir / 'annotated.jpg'
 
         cv2.imwrite(str(original_path), frame)
 
         detections = metadata.get('detections') if isinstance(metadata.get('detections'), list) else []
         try:
+            # Prepare values needed by the next step.
             model_detections, annotated = predict_image(frame, conf=0.25)
             if not detections and isinstance(model_detections, list):
+                # Prepare detections for the next step.
                 detections = model_detections
             cv2.imwrite(str(annotated_path), annotated)
         except Exception as infer_err:
             logger.debug(f"Local draft handoff annotation skipped for {report_id}: {infer_err}")
             cv2.imwrite(str(annotated_path), frame)
 
+        # Prepare timestamp value for the next step.
         timestamp_value = (
             metadata.get('timestamp')
             or request.form.get('timestamp')
@@ -14815,6 +17405,7 @@ def api_report_local_draft_handoff():
             _extract_violation_types_from_summary(metadata.get('violation_summary') or ''),
             detections,
         )
+        # Prepare metadata missing ppe for the next step.
         metadata_missing_ppe = _missing_ppe_from_violation_types(metadata_violation_types)
         device_id = str(
             metadata.get('device_id')
@@ -14823,9 +17414,12 @@ def api_report_local_draft_handoff():
         ).strip() or 'browser_local_draft'
 
         if db_manager is not None:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare existing violation for the next step.
                 existing_violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
                 if isinstance(existing_violation, dict) and existing_violation.get('report_html_key'):
+                    # Return the prepared result to the caller.
                     return jsonify({
                         'success': True,
                         'report_id': report_id,
@@ -14833,8 +17427,10 @@ def api_report_local_draft_handoff():
                         'queued': False,
                     })
             except Exception as lookup_err:
+                # Trigger the side effect required for this stage.
                 logger.debug(f"Local draft handoff existing report lookup skipped for {report_id}: {lookup_err}")
 
+        # Prepare handoff summary for the next step.
         handoff_summary = _handoff_partial_local_report_to_cloud(
             report_id=report_id,
             violation_dir=violation_dir,
@@ -14853,7 +17449,9 @@ def api_report_local_draft_handoff():
             cloud_adopt_after_epoch=time.time(),
         )
 
+        # Choose the correct branch before the workflow continues.
         if not handoff_summary.get('success'):
+            # Return the prepared result to the caller.
             return jsonify({
                 'success': False,
                 'report_id': report_id,
@@ -14862,23 +17460,29 @@ def api_report_local_draft_handoff():
 
         queued = False
         queue_unavailable = False
+        # Prepare already generating for the next step.
         already_generating = False
 
         event = None
         if db_manager is not None:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare event for the next step.
                 event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
                 event_status = str((event or {}).get('status') or '').strip().lower()
                 already_generating = event_status in ('generating', 'processing')
             except Exception:
                 event = None
 
+        # Choose the correct branch before the workflow continues.
         if not already_generating:
             if ensure_queue_worker_running() and violation_queue is not None:
                 if _is_report_queued_or_processing(report_id):
+                    # Prepare queued for the next step.
                     queued = True
                 else:
                     try:
+                        # Prepare metadata violation count int for the next step.
                         metadata_violation_count_int = int(metadata.get('violation_count') or 0)
                     except Exception:
                         metadata_violation_count_int = 0
@@ -14888,6 +17492,7 @@ def api_report_local_draft_handoff():
                         violation_count=max(metadata_violation_count_int, len(metadata_violation_types), 1),
                         violation_summary=metadata.get('violation_summary'),
                     )
+                    # Prepare queue payload for the next step.
                     queue_payload = {
                         'report_id': report_id,
                         'timestamp': timestamp_value,
@@ -14904,6 +17509,7 @@ def api_report_local_draft_handoff():
                         'source': 'browser_local_draft_handoff',
                         'severity': resolved_severity,
                     }
+                    # Prepare queued for the next step.
                     queued = bool(violation_queue.enqueue(
                         violation_data=queue_payload,
                         device_id=device_id,
@@ -14912,9 +17518,12 @@ def api_report_local_draft_handoff():
                         expedite=True,
                     ))
             else:
+                # Prepare queue unavailable for the next step.
                 queue_unavailable = True
 
+        # Choose the correct branch before the workflow continues.
         if queued and db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+            # Protect this step so expected failures can fall back cleanly.
             try:
                 db_manager.update_detection_status(
                     report_id,
@@ -14922,8 +17531,10 @@ def api_report_local_draft_handoff():
                     'Browser local draft queued for cloud report generation',
                 )
             except Exception as status_err:
+                # Trigger the side effect required for this stage.
                 logger.debug(f"Could not mark browser local draft queued for {report_id}: {status_err}")
 
+        # Trigger the side effect required for this stage.
         _invalidate_queue_context_snapshot_cache()
         _invalidate_local_report_state_cache()
         _invalidate_dashboard_snapshot_cache()
@@ -14942,18 +17553,23 @@ def api_report_local_draft_handoff():
         })
 
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Local draft handoff error: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Section: run the api fix stuck reports workflow with clear inputs and outputs.
 @app.route('/api/fix-stuck-reports', methods=['POST'])
 def api_fix_stuck_reports():
     """Manually trigger fixing of stuck reports."""
+    # Choose the correct branch before the workflow continues.
     if db_manager is None:
         return jsonify({'error': 'Database not available'}), 503
 
     try:
+        # Choose the correct branch before the workflow continues.
         if hasattr(db_manager, 'fix_stuck_reports'):
+            # Prepare fixed count for the next step.
             fixed_count = db_manager.fix_stuck_reports()
             return jsonify({
                 'success': True,
@@ -14963,17 +17579,22 @@ def api_fix_stuck_reports():
         else:
             return jsonify({'error': 'Fix method not available'}), 500
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error fixing stuck reports: {e}")
         return jsonify({'error': str(e)}), 500
 
+# Section: run the api pending reports workflow with clear inputs and outputs.
 @app.route('/api/reports/pending')
 def api_pending_reports():
     """Get all reports that are still pending or generating."""
     pending_by_id: Dict[str, Dict[str, Any]] = {}
 
+    # Section: run the normalize pending status workflow with clear inputs and outputs.
     def _normalize_pending_status(status: Any, has_report: bool = False) -> str:
+        # Prepare raw for the next step.
         raw = str(status or '').strip().lower()
         if not raw:
+            # Return the prepared result to the caller.
             return 'completed' if has_report else 'pending'
 
         if raw in ('queued', 'queue', 'waiting', 'enqueued'):
@@ -14982,7 +17603,9 @@ def api_pending_reports():
             return 'generating'
         if raw in ('completed', 'ready', 'done', 'success'):
             return 'completed'
+        # Choose the correct branch before the workflow continues.
         if raw in ('failed', 'error', 'errored'):
+            # Return the prepared result to the caller.
             return 'failed'
         if raw in ('skipped', 'cancelled', 'canceled'):
             return 'skipped'
@@ -14991,16 +17614,20 @@ def api_pending_reports():
 
         if has_report:
             return 'completed'
+        # Return the prepared result to the caller.
         return raw
 
+    # Section: run the pending status priority workflow with clear inputs and outputs.
     def _pending_status_priority(status: Any) -> int:
         normalized = _normalize_pending_status(status)
         if normalized == 'generating':
+            # Return the prepared result to the caller.
             return 30
         if normalized == 'pending':
             return 20
         return 0
 
+    # Section: run the normalize pending source scope workflow with clear inputs and outputs.
     def _normalize_pending_source_scope(
         scope: Any,
         device_id: Any,
@@ -15011,9 +17638,11 @@ def api_pending_reports():
         has_cloud_report_artifact: bool = False,
         report_id: Any = '',
     ) -> str:
+        # Prepare normalized scope for the next step.
         normalized_scope = str(scope or '').strip().lower()
         device_key = str(device_id or '').strip().lower()
         if normalized_scope in ('local', 'cloud', 'shared', 'synced_local'):
+            # Choose the correct branch before the workflow continues.
             if normalized_scope == 'synced_local' and not _has_confirmed_synced_local_evidence(
                 sync_source=str(sync_source or ''),
                 device_id=device_key,
@@ -15022,13 +17651,16 @@ def api_pending_reports():
                 has_cloud_report_artifact=has_cloud_report_artifact,
                 report_id=str(report_id or ''),
             ):
+                # Return the prepared result to the caller.
                 return 'local' if active_profile == 'local' and _is_local_pipeline_origin_marker(
                     source_scope='',
                     sync_source=str(sync_source or ''),
                     device_id=device_key,
                 ) else 'cloud'
+            # Return the prepared result to the caller.
             return normalized_scope
 
+        # Choose the correct branch before the workflow continues.
         if device_key in ('local_cache_sync', 'sync_local_cache') and _has_confirmed_synced_local_evidence(
             sync_source=str(sync_source or ''),
             device_id=device_key,
@@ -15037,7 +17669,9 @@ def api_pending_reports():
             has_cloud_report_artifact=has_cloud_report_artifact,
             report_id=str(report_id or ''),
         ):
+            # Return the prepared result to the caller.
             return 'synced_local'
+        # Choose the correct branch before the workflow continues.
         if (
             device_key in ('local_cache', 'offline_local_cache')
             or device_key.startswith('local_')
@@ -15046,8 +17680,11 @@ def api_pending_reports():
             return 'local'
         return 'cloud'
 
+    # Section: run the source label workflow with clear inputs and outputs.
     def _source_label(scope: str) -> str:
+        # Choose the correct branch before the workflow continues.
         if scope == 'local':
+            # Return the prepared result to the caller.
             return 'Local'
         if scope == 'synced_local':
             return 'Local Synced'
@@ -15056,6 +17693,7 @@ def api_pending_reports():
         return 'Cloud'
 
     # Always include local filesystem state for immediate queue/generation visibility.
+    # Prepare active profile for the next step.
     active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
     # The local artifacts on disk are only the *staging* area for the report
     # pipeline; they exist in both local-mode and cloud-mode runs (cloud runs
@@ -15071,16 +17709,19 @@ def api_pending_reports():
     completed_local_report_ids = set()
     visible_sync_probe_rows: List[Dict[str, Any]] = []
     for row in local_rows:
+        # Prepare report id for the next step.
         report_id = str(row.get('report_id') or '').strip()
         status = _normalize_pending_status(row.get('status'), has_report=bool(row.get('has_report')))
         if not report_id:
             continue
         if _is_visible_local_cache_sync_candidate(row):
+            # Trigger the side effect required for this stage.
             visible_sync_probe_rows.append(row)
         if status == 'completed':
             completed_local_report_ids.add(report_id)
             pending_by_id.pop(report_id, None)
             continue
+        # Choose the correct branch before the workflow continues.
         if status not in ('pending', 'queued', 'processing', 'generating'):
             continue
 
@@ -15093,6 +17734,7 @@ def api_pending_reports():
             has_cloud_report_artifact=bool(row.get('has_report')),
             report_id=report_id,
         )
+        # Prepare row source label for the next step.
         row_source_label = _source_label(row_source_scope)
         pending_by_id[report_id] = {
             'report_id': report_id,
@@ -15119,7 +17761,9 @@ def api_pending_reports():
             'worker_heartbeat_age_seconds': row.get('worker_heartbeat_age_seconds'),
         }
 
+    # Choose the correct branch before the workflow continues.
     if visible_sync_probe_rows and active_profile != 'local':
+        # Trigger the side effect required for this stage.
         _maybe_attempt_visible_local_cache_sync(
             'api_pending_visible_local',
             local_rows=visible_sync_probe_rows,
@@ -15127,7 +17771,9 @@ def api_pending_reports():
 
     if db_manager is not None:
         try:
+            # Choose the correct branch before the workflow continues.
             if hasattr(db_manager, 'get_pending_reports'):
+                # Prepare all items for the next step.
                 all_items = db_manager.get_pending_reports(limit=300)
             elif hasattr(db_manager, 'get_all_violations_with_status'):
                 all_items = db_manager.get_all_violations_with_status(limit=300)
@@ -15136,7 +17782,9 @@ def api_pending_reports():
             else:
                 all_items = []
 
+            # Process each item in this collection using the same rule set.
             for p in all_items:
+                # Prepare report id for the next step.
                 report_id = str((p or {}).get('report_id') or '').strip()
                 if not report_id:
                     continue
@@ -15144,10 +17792,13 @@ def api_pending_reports():
                 has_report = bool((p or {}).get('report_html_key'))
                 raw_detection_data = (p or {}).get('detection_data') or {}
                 if isinstance(raw_detection_data, str):
+                    # Protect this step so expected failures can fall back cleanly.
                     try:
+                        # Prepare raw detection data for the next step.
                         raw_detection_data = json.loads(raw_detection_data)
                     except Exception:
                         raw_detection_data = {}
+                # Prepare detection payload for the next step.
                 detection_payload = raw_detection_data if isinstance(raw_detection_data, dict) else {}
                 has_cloud_artifacts = bool(
                     (p or {}).get('original_image_key')
@@ -15158,6 +17809,7 @@ def api_pending_reports():
                     (p or {}).get('report_html_key')
                     or (p or {}).get('report_pdf_key')
                 )
+                # Prepare source scope value for the next step.
                 source_scope_value = (
                     (p or {}).get('source_scope')
                     or detection_payload.get('source_scope')
@@ -15172,6 +17824,7 @@ def api_pending_reports():
                     or detection_payload.get('origin')
                     or ''
                 )
+                # Prepare sync state value for the next step.
                 sync_state_value = (
                     (p or {}).get('sync_state')
                     or detection_payload.get('sync_state')
@@ -15180,8 +17833,10 @@ def api_pending_reports():
                 )
                 status = _normalize_pending_status((p or {}).get('status'), has_report=has_report)
                 if report_id in completed_local_report_ids and status in ('pending', 'generating'):
+                    # Trigger the side effect required for this stage.
                     pending_by_id.pop(report_id, None)
                     continue
+                # Choose the correct branch before the workflow continues.
                 if status not in ('pending', 'generating'):
                     pending_by_id.pop(report_id, None)
                     continue
@@ -15195,10 +17850,12 @@ def api_pending_reports():
                     has_cloud_report_artifact=has_cloud_report_artifact,
                     report_id=report_id,
                 )
+                # Prepare explicit source scope for the next step.
                 explicit_source_scope = str(source_scope_value or '').strip().lower()
 
                 ts = (p or {}).get('timestamp')
                 if hasattr(ts, 'isoformat'):
+                    # Prepare ts value for the next step.
                     ts_value = ts.isoformat()
                 else:
                     ts_value = str(ts) if ts else None
@@ -15216,6 +17873,7 @@ def api_pending_reports():
                     'source_label': _source_label(source_scope),
                 })
 
+                # Prepare existing status for the next step.
                 existing_status = _normalize_pending_status(
                     merged.get('status'),
                     has_report=bool(merged.get('has_report')),
@@ -15225,6 +17883,7 @@ def api_pending_reports():
                     merged.get('device_id'),
                     report_id=report_id,
                 )
+                # Prepare preserve local scope for the next step.
                 preserve_local_scope = bool(
                     existing_scope == 'local'
                     and source_scope == 'cloud'
@@ -15232,9 +17891,11 @@ def api_pending_reports():
                 )
 
                 if _pending_status_priority(status) >= _pending_status_priority(existing_status):
+                    # Prepare values needed by the next step.
                     merged['status'] = status or existing_status or 'pending'
                 if ts_value:
                     merged['timestamp'] = ts_value
+                # Choose the correct branch before the workflow continues.
                 if (p or {}).get('device_id') and not preserve_local_scope:
                     merged['device_id'] = (p or {}).get('device_id')
                 if (p or {}).get('severity'):
@@ -15245,7 +17906,9 @@ def api_pending_reports():
                     merged.get('source_scope'),
                     merged.get('device_id'),
                 )
+                # Choose the correct branch before the workflow continues.
                 if preserve_local_scope:
+                    # Prepare merged scope for the next step.
                     merged_scope = 'local'
                 elif source_scope == 'synced_local':
                     merged_scope = 'synced_local'
@@ -15255,19 +17918,23 @@ def api_pending_reports():
                     merged_scope = 'cloud'
                 elif source_scope == 'local' and merged_scope == 'cloud':
                     merged_scope = 'local'
+                # Prepare values needed by the next step.
                 merged['source_scope'] = merged_scope
                 merged['source_label'] = _source_label(merged_scope)
 
                 queue_context = _queue_context_for_target_from_snapshot(report_id, queue_snapshot)
                 if queue_context.get('queued') or str(queue_context.get('active_report_id') or '') == report_id:
+                    # Trigger the side effect required for this stage.
                     merged.update(queue_context)
 
                 pending_by_id[report_id] = merged
 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             _activate_local_offline_runtime('api_pending_reports.fetch', e)
             logger.error(f"Error fetching pending reports from database: {e}", exc_info=True)
 
+    # Prepare pending for the next step.
     pending = list(pending_by_id.values())
     pending.sort(
         key=lambda item: str(item.get('timestamp') or ''),
@@ -15276,10 +17943,13 @@ def api_pending_reports():
     return jsonify(pending[:30])
 
 
+# Section: run the api generate report now workflow with clear inputs and outputs.
 @app.route('/api/report/<report_id>/generate-now', methods=['POST'])
 def api_generate_report_now(report_id):
     """Force a report into the processing queue with highest priority."""
+    # Choose the correct branch before the workflow continues.
     if violation_queue is None:
+        # Return the prepared result to the caller.
         return jsonify({'success': False, 'error': 'Queue is not initialized'}), 503
 
     try:
@@ -15289,6 +17959,7 @@ def api_generate_report_now(report_id):
         violation_dir = VIOLATIONS_DIR.absolute() / report_id
         original_path = violation_dir / 'original.jpg'
         annotated_path = violation_dir / 'annotated.jpg'
+        # Prepare report html path for the next step.
         report_html_path = violation_dir / 'report.html'
         local_metadata = _read_local_violation_metadata(violation_dir)
 
@@ -15297,12 +17968,15 @@ def api_generate_report_now(report_id):
         placeholder_reprocess_recovery_used = False
 
         if db_manager is not None:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare event for the next step.
                 event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else None
                 violation = db_manager.get_violation(report_id) if hasattr(db_manager, 'get_violation') else None
 
                 current_status = str((event or {}).get('status') or '').lower()
                 if current_status == 'completed' and not force_reprocess:
+                    # Return the prepared result to the caller.
                     return jsonify({'success': True, 'message': 'Report is already completed', 'already_completed': True})
 
                 if current_status in ('pending', 'queued', 'processing', 'generating') and not force_reprocess:
@@ -15316,19 +17990,25 @@ def api_generate_report_now(report_id):
                         'worker_running': _is_queue_worker_alive()
                     })
 
+                # Choose the correct branch before the workflow continues.
                 if storage_manager is not None and isinstance(violation, dict):
+                    # Protect this step so expected failures can fall back cleanly.
                     try:
+                        # Prepare recovered images for the next step.
                         recovered_images = _recover_reprocess_images_from_storage(
                             report_id,
                             violation_dir,
                             violation,
                         )
                         if recovered_images.get('original_recovered'):
+                            # Trigger the side effect required for this stage.
                             logger.info(f"Recovered original image from Supabase for report {report_id}")
                     except Exception as recover_err:
                         _activate_local_offline_runtime('api_generate_report_now.recover_images', recover_err)
+                        # Trigger the side effect required for this stage.
                         logger.warning(f"Could not recover report images from Supabase for {report_id}: {recover_err}")
             except Exception as db_lookup_err:
+                # Trigger the side effect required for this stage.
                 _activate_local_offline_runtime('api_generate_report_now.db_lookup', db_lookup_err)
                 logger.warning(
                     f"generate-now falling back to local cache for {report_id} after Supabase lookup failure: {db_lookup_err}"
@@ -15336,6 +18016,7 @@ def api_generate_report_now(report_id):
                 event = None
                 violation = None
         else:
+            # Choose the correct branch before the workflow continues.
             if report_html_path.exists() and not force_reprocess:
                 return jsonify({
                     'success': True,
@@ -15345,7 +18026,9 @@ def api_generate_report_now(report_id):
                     'report_id': report_id,
                 })
 
+        # Choose the correct branch before the workflow continues.
         if event is None and not violation_dir.exists():
+            # Return the prepared result to the caller.
             return jsonify({'success': False, 'error': 'Report not found'}), 404
 
         if event is None and report_html_path.exists() and not force_reprocess:
@@ -15357,14 +18040,18 @@ def api_generate_report_now(report_id):
                 'report_id': report_id,
             })
 
+        # Choose the correct branch before the workflow continues.
         if not original_path.exists() and force_reprocess:
+            # Prepare placeholder reason for the next step.
             placeholder_reason = (
                 "Original image missing for forced reprocess; generated synthetic placeholder "
                 "to unblock queue execution"
             )
             if _create_force_reprocess_placeholder_image(report_id, original_path, placeholder_reason):
+                # Prepare placeholder reprocess recovery used for the next step.
                 placeholder_reprocess_recovery_used = True
                 if not annotated_path.exists():
+                    # Trigger the side effect required for this stage.
                     _create_force_reprocess_placeholder_image(
                         report_id,
                         annotated_path,
@@ -15372,6 +18059,7 @@ def api_generate_report_now(report_id):
                     )
                 if db_manager is not None and hasattr(db_manager, 'log_event'):
                     try:
+                        # Trigger the side effect required for this stage.
                         db_manager.log_event(
                             event_type='generate_now_placeholder_recovery',
                             message='Forced reprocess used placeholder image recovery due to missing original',
@@ -15383,9 +18071,12 @@ def api_generate_report_now(report_id):
                             }
                         )
                     except Exception as log_err:
+                        # Trigger the side effect required for this stage.
                         logger.debug(f"Could not log placeholder recovery event for {report_id}: {log_err}")
 
+        # Choose the correct branch before the workflow continues.
         if not original_path.exists():
+            # Return the prepared result to the caller.
             return jsonify({
                 'success': False,
                 'error': 'Original image is missing for this report. Cannot regenerate locally.'
@@ -15395,18 +18086,24 @@ def api_generate_report_now(report_id):
         violation_types = []
         detection_data = {}
 
+        # Prepare raw detection data for the next step.
         raw_detection_data = violation.get('detection_data') if isinstance(violation, dict) else None
         if isinstance(raw_detection_data, dict):
+            # Prepare detection data for the next step.
             detection_data = raw_detection_data
         elif isinstance(raw_detection_data, str):
             try:
+                # Prepare parsed detection data for the next step.
                 parsed_detection_data = json.loads(raw_detection_data)
                 if isinstance(parsed_detection_data, dict):
+                    # Prepare detection data for the next step.
                     detection_data = parsed_detection_data
             except Exception:
                 detection_data = {}
 
+        # Choose the correct branch before the workflow continues.
         if isinstance(detection_data, dict):
+            # Prepare detections for the next step.
             detections = detection_data.get('detections', []) or []
 
         source_scope_marker = str(
@@ -15415,6 +18112,7 @@ def api_generate_report_now(report_id):
             or detection_data.get('report_scope')
             or ''
         ).strip().lower()
+        # Prepare sync source marker for the next step.
         sync_source_marker = str(
             payload.get('sync_source')
             or payload.get('source')
@@ -15424,6 +18122,7 @@ def api_generate_report_now(report_id):
         ).strip().lower()
 
         local_violation_type = str(local_metadata.get('violation_type') or '').strip()
+        # Prepare local violation types for the next step.
         local_violation_types = [local_violation_type] if local_violation_type else []
 
         violation_summary_text = violation.get('violation_summary') if isinstance(violation, dict) else local_violation_type
@@ -15436,7 +18135,9 @@ def api_generate_report_now(report_id):
             violation_summary=violation_summary_text,
             fallback_count=fallback_count,
         )
+        # Choose the correct branch before the workflow continues.
         if not violation_types and local_violation_types:
+            # Prepare violation types for the next step.
             violation_types = local_violation_types
         resolved_severity = _classify_violation_severity(
             violation_types=violation_types,
@@ -15445,16 +18146,22 @@ def api_generate_report_now(report_id):
             violation_summary=violation_summary_text or local_metadata.get('violation_summary'),
         )
 
+        # Choose the correct branch before the workflow continues.
         if not annotated_path.exists():
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare frame for the next step.
                 frame = cv2.imread(str(original_path))
                 if frame is not None:
+                    # Prepare values needed by the next step.
                     _, annotated = predict_image(frame, conf=0.25)
                     cv2.imwrite(str(annotated_path), annotated)
             except Exception as annotate_err:
                 logger.warning(f"Could not regenerate annotated image for {report_id}: {annotate_err}")
 
+        # Choose the correct branch before the workflow continues.
         if not ensure_queue_worker_running():
+            # Return the prepared result to the caller.
             return jsonify({'success': False, 'error': 'Queue worker is not running'}), 503
 
         device_id = (event.get('device_id') if isinstance(event, dict) else None)
@@ -15463,6 +18170,7 @@ def api_generate_report_now(report_id):
                 'manual_regenerate_offline' if db_manager is None else f'manual_regenerate_{report_id}'
             )
 
+        # Prepare active profile for the next step.
         active_profile = _normalize_provider_profile(os.getenv('CASM_ROUTING_PROFILE', ''))
         device_key = str(device_id or '').strip().lower()
         local_origin_marker = _is_local_pipeline_origin_marker(
@@ -15476,6 +18184,7 @@ def api_generate_report_now(report_id):
             or detection_data.get('cloud_sync_state')
             or ''
         ).strip().lower()
+        # Prepare has cloud artifacts for scope for the next step.
         has_cloud_artifacts_for_scope = bool(
             isinstance(violation, dict)
             and (
@@ -15491,6 +18200,7 @@ def api_generate_report_now(report_id):
                 or violation.get('report_pdf_key')
             )
         )
+        # Prepare confirmed synced local for the next step.
         confirmed_synced_local = _has_confirmed_synced_local_evidence(
             sync_source=sync_source_marker,
             device_id=device_key,
@@ -15500,7 +18210,9 @@ def api_generate_report_now(report_id):
             report_id=report_id,
         )
         if source_scope_marker == 'synced_local' and not confirmed_synced_local:
+            # Prepare source scope marker for the next step.
             source_scope_marker = 'cloud' if active_profile == 'cloud' else 'local'
+        # Choose the correct branch before the workflow continues.
         elif not source_scope_marker:
             strict_local_origin_marker = (
                 local_origin_marker
@@ -15509,7 +18221,9 @@ def api_generate_report_now(report_id):
                     or re.match(r'^(local|offline|browser_local|local-cache|offline-cache)[_-]', report_id.lower())
                 )
             )
+            # Prepare source scope marker for the next step.
             source_scope_marker = 'local' if (active_profile == 'local' or strict_local_origin_marker) else 'cloud'
+        # Choose the correct branch before the workflow continues.
         if source_scope_marker == 'cloud' and not payload.get('sync_source') and not payload.get('source'):
             sync_source_marker = ''
         if source_scope_marker == 'cloud' and not confirmed_synced_local:
@@ -15517,6 +18231,7 @@ def api_generate_report_now(report_id):
 
         if db_manager is not None and event is None and hasattr(db_manager, 'insert_detection_event'):
             try:
+                # Trigger the side effect required for this stage.
                 db_manager.insert_detection_event(
                     report_id=report_id,
                     timestamp=_parse_report_id_timestamp(report_id).isoformat(),
@@ -15526,13 +18241,16 @@ def api_generate_report_now(report_id):
                     device_id=device_id,
                     status='pending'
                 )
+                # Prepare event for the next step.
                 event = db_manager.get_detection_event(report_id) if hasattr(db_manager, 'get_detection_event') else event
             except Exception as insert_err:
                 _activate_local_offline_runtime('api_generate_report_now.insert_detection_event', insert_err)
                 logger.warning(f"Could not create pending detection event for {report_id}: {insert_err}")
 
+        # Prepare event ts for the next step.
         event_ts = event.get('timestamp') if isinstance(event, dict) else None
         if event_ts is not None:
+            # Prepare timestamp value for the next step.
             timestamp_value = event_ts.isoformat() if hasattr(event_ts, 'isoformat') else str(event_ts)
         else:
             timestamp_value = _parse_report_id_timestamp(report_id).isoformat()
@@ -15549,6 +18267,7 @@ def api_generate_report_now(report_id):
             'force_reprocess': force_reprocess,
             'severity': resolved_severity,
         }
+        # Prepare reprocess metadata for the next step.
         reprocess_metadata = _build_manual_reprocess_detection_data(
             detection_data,
             source_scope=source_scope_marker,
@@ -15557,9 +18276,11 @@ def api_generate_report_now(report_id):
         )
         violation_data['detection_data'] = reprocess_metadata
         if placeholder_reprocess_recovery_used:
+            # Prepare values needed by the next step.
             violation_data['skip_environment_validation'] = True
             violation_data['allow_placeholder_report'] = True
             violation_data['placeholder_original_used'] = True
+        # Choose the correct branch before the workflow continues.
         if source_scope_marker:
             violation_data['source_scope'] = source_scope_marker
         if sync_source_marker:
@@ -15574,6 +18295,7 @@ def api_generate_report_now(report_id):
             violation=violation,
         )
 
+        # Prepare enqueue device id for the next step.
         enqueue_device_id = (
             f"manual_reprocess_{report_id}_{time.time_ns()}"
             if force_reprocess
@@ -15587,13 +18309,16 @@ def api_generate_report_now(report_id):
             expedite=True,
         )
 
+        # Choose the correct branch before the workflow continues.
         if not enqueued:
+            # Prepare queue stats for the next step.
             queue_stats = violation_queue.get_stats()
             queue_size = int(queue_stats.get('current_size', 0) or 0)
             queue_capacity = int(queue_stats.get('capacity', 0) or 0)
             queue_full = queue_capacity > 0 and queue_size >= queue_capacity
 
             if not queue_full:
+                # Prepare fallback device id for the next step.
                 fallback_device_id = f'manual_reprocess_{report_id}_{time.time_ns()}'
                 enqueued = violation_queue.enqueue(
                     violation_data=violation_data,
@@ -15603,13 +18328,16 @@ def api_generate_report_now(report_id):
                     expedite=True,
                 )
                 if enqueued:
+                    # Prepare enqueue device id for the next step.
                     enqueue_device_id = fallback_device_id
                     logger.info(
                         f"Generate-now enqueue fallback succeeded for {report_id} "
                         f"with device_id={fallback_device_id}"
                     )
 
+        # Choose the correct branch before the workflow continues.
         if not enqueued:
+            # Prepare queue stats for the next step.
             queue_stats = violation_queue.get_stats()
             queue_size = int(queue_stats.get('current_size', 0) or 0)
             queue_capacity = int(queue_stats.get('capacity', 0) or 0)
@@ -15623,15 +18351,19 @@ def api_generate_report_now(report_id):
                 'worker_running': _is_queue_worker_alive()
             }), 409
 
+        # Trigger the side effect required for this stage.
         _invalidate_queue_context_snapshot_cache()
 
         if db_manager is not None and hasattr(db_manager, 'update_detection_status'):
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Trigger the side effect required for this stage.
                 db_manager.update_detection_status(report_id, 'pending')
             except Exception as status_err:
                 _activate_local_offline_runtime('api_generate_report_now.update_detection_status', status_err)
                 logger.warning(f"Could not update pending status for {report_id}: {status_err}")
 
+        # Prepare queue stats for the next step.
         queue_stats = violation_queue.get_stats()
         return jsonify({
             'success': True,
@@ -15654,17 +18386,21 @@ def api_generate_report_now(report_id):
         })
 
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error prioritizing report {report_id}: {e}", exc_info=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Section: run the api logs workflow with clear inputs and outputs.
 @app.route('/api/logs')
 def api_logs():
     """Get recent system event logs."""
+    # Prepare limit for the next step.
     limit = request.args.get('limit', 50, type=int)
     event_type = request.args.get('event_type', None)
 
     if db_manager is None:
+        # Return the prepared result to the caller.
         return jsonify([])  # No logs without Supabase
 
     try:
@@ -15678,6 +18414,7 @@ def api_logs():
             'metadata': log.get('metadata'),
             'created_at': log['created_at'].isoformat() if log.get('created_at') else None
         } for log in logs]
+        # Return the prepared result to the caller.
         return jsonify(formatted)
 
     except Exception as e:
@@ -15685,10 +18422,13 @@ def api_logs():
         return jsonify({'error': 'Failed to fetch logs'}), 500
 
 
+# Section: run the api device stats workflow with clear inputs and outputs.
 @app.route('/api/device/<device_id>/stats')
 def api_device_stats(device_id):
     """Get statistics for a specific device."""
+    # Choose the correct branch before the workflow continues.
     if db_manager is None:
+        # Return the prepared result to the caller.
         return jsonify({'error': 'Supabase not configured'}), 503
 
     try:
@@ -15700,22 +18440,28 @@ def api_device_stats(device_id):
         return jsonify({'error': 'Failed to fetch device stats'}), 500
 
 
+# Section: run the view report workflow with clear inputs and outputs.
 @app.route('/report/<report_id>')
 def view_report(report_id):
     """View a specific violation report from Supabase or local storage."""
+    # Prepare failed view for the next step.
     failed_view = str(request.args.get('failed', '0')).lower() in ('1', 'true', 'yes')
 
     if not failed_view:
+        # Prepare cached rendered for the next step.
         cached_rendered = _get_any_cached_rendered_report_html(report_id)
         if cached_rendered:
+            # Return the prepared result to the caller.
             return _report_html_response(cached_rendered)
 
     local_violation_dir = VIOLATIONS_DIR / report_id
     local_report_html = local_violation_dir / 'report.html'
 
+    # Section: run the try sync visible local report workflow with clear inputs and outputs.
     def _try_sync_visible_local_report(reason: str) -> None:
         if not local_violation_dir.exists():
             return
+        # Prepare probe row for the next step.
         probe_row = _local_artifact_sync_probe_row(report_id, local_violation_dir)
         _maybe_attempt_visible_local_cache_sync(
             reason,
@@ -15723,11 +18469,14 @@ def view_report(report_id):
             max_items=1,
         )
 
+    # Choose the correct branch before the workflow continues.
     if storage_manager is None or db_manager is None:
         # Fallback to local filesystem
+        # Prepare violation dir for the next step.
         violation_dir = local_violation_dir
 
         if not violation_dir.exists():
+            # Trigger the side effect required for this stage.
             abort(404, description="Report not found")
 
         report_html = violation_dir / 'report.html'
@@ -15740,11 +18489,14 @@ def view_report(report_id):
                 source='local_filesystem',
                 failed_view_requested=failed_view,
             )
+            # Return the prepared result to the caller.
             return _read_local_report_with_trace(report_html, trace_payload)
         else:
             abort(404, description="Report HTML not found")
 
+    # Choose the correct branch before the workflow continues.
     if local_report_html.exists() and not failed_view:
+        # Trigger the side effect required for this stage.
         _try_sync_visible_local_report('view_report_fast_cache')
         try:
             trace_payload = _build_traceability_payload(
@@ -15754,6 +18506,7 @@ def view_report(report_id):
                 source='local_filesystem_fast_cache',
                 failed_view_requested=failed_view,
             )
+            # Prepare values needed by the next step.
             local_html, _layer = _render_local_report_html_for_view(local_report_html, trace_payload)
             return _report_html_response(local_html)
         except FallbackReportTemplateError:
@@ -15762,6 +18515,7 @@ def view_report(report_id):
             logger.debug(f"Local fast-cache report read skipped for {report_id}: {local_fast_err}")
 
     # Use Supabase
+    # Protect this step so expected failures can fall back cleanly.
     try:
         event, violation = _get_report_event_and_violation(report_id)
         event_status = str((event or {}).get('status') or '').strip().lower()
@@ -15775,8 +18529,11 @@ def view_report(report_id):
             failed_view_requested=failed_view,
         )
 
+        # Choose the correct branch before the workflow continues.
         if not violation:
+            # Choose the correct branch before the workflow continues.
             if failed_view and event_status in ('failed', 'partial', 'skipped'):
+                # Return the prepared result to the caller.
                 return _render_regenerate_report_page(
                     report_id,
                     f"Report generation failed: {event_error}. Fallback template views are disabled.",
@@ -15791,8 +18548,10 @@ def view_report(report_id):
                     source='local_filesystem_fallback',
                     failed_view_requested=failed_view,
                 )
+                # Return the prepared result to the caller.
                 return _read_local_report_with_trace(local_report_html, trace_payload)
 
+            # Choose the correct branch before the workflow continues.
             if event_status in ('failed', 'partial', 'skipped'):
                 return _render_regenerate_report_page(
                     report_id,
@@ -15801,10 +18560,13 @@ def view_report(report_id):
                 )
             abort(404, description="Report not found")
 
+        # Prepare report html key for the next step.
         report_html_key = violation.get('report_html_key')
 
         if local_report_html.exists() and not failed_view and event_status not in ('failed', 'partial', 'skipped'):
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare trace payload for the next step.
                 trace_payload = _build_traceability_payload(
                     report_id=report_id,
                     violation=violation or {},
@@ -15817,6 +18579,7 @@ def view_report(report_id):
                     trace_payload,
                     cache_key=report_html_key or None,
                 )
+                # Return the prepared result to the caller.
                 return _report_html_response(local_html)
             except FallbackReportTemplateError:
                 logger.warning(f"Local cached report HTML is fallback-template output for {report_id}; checking cloud copy.")
@@ -15824,6 +18587,7 @@ def view_report(report_id):
                 pass
 
         # Get signed URL for report HTML
+        # Choose the correct branch before the workflow continues.
         if not report_html_key:
             if failed_view and event_status in ('failed', 'partial', 'skipped'):
                 return _render_regenerate_report_page(
@@ -15840,8 +18604,10 @@ def view_report(report_id):
                     source='local_filesystem_fallback',
                     failed_view_requested=failed_view,
                 )
+                # Return the prepared result to the caller.
                 return _read_local_report_with_trace(local_report_html, trace_payload)
 
+            # Choose the correct branch before the workflow continues.
             if event_status in ('failed', 'partial', 'skipped'):
                 return _render_regenerate_report_page(
                     report_id,
@@ -15850,9 +18616,12 @@ def view_report(report_id):
                 )
             abort(404, description="Report HTML not found")
 
+        # Choose the correct branch before the workflow continues.
         if not failed_view:
+            # Prepare cached rendered for the next step.
             cached_rendered = _get_cached_rendered_report_html(report_id, report_html_key)
             if cached_rendered:
+                # Return the prepared result to the caller.
                 return _report_html_response(cached_rendered)
 
         # Download the HTML content and render it
@@ -15860,9 +18629,12 @@ def view_report(report_id):
             html_content = _get_cached_report_html_content(report_id, report_html_key)
             if html_content is None:
                 html_content = storage_manager.download_file_content(report_html_key)
+            # Choose the correct branch before the workflow continues.
             if not html_content:
                 blocked = _egress_budget_blocked_response()
+                # Choose the correct branch before the workflow continues.
                 if blocked:
+                    # Return the prepared result to the caller.
                     return blocked
                 if local_report_html.exists() and event_status not in ('failed', 'partial', 'skipped'):
                     trace_payload = _build_traceability_payload(
@@ -15872,8 +18644,10 @@ def view_report(report_id):
                         source='local_filesystem_fallback',
                         failed_view_requested=failed_view,
                     )
+                    # Return the prepared result to the caller.
                     return _read_local_report_with_trace(local_report_html, trace_payload)
 
+                # Choose the correct branch before the workflow continues.
                 if event_status in ('failed', 'partial', 'skipped'):
                     return _render_regenerate_report_page(
                         report_id,
@@ -15882,7 +18656,9 @@ def view_report(report_id):
                     )
                 abort(404, description="Failed to download report HTML")
 
+            # Choose the correct branch before the workflow continues.
             if isinstance(html_content, (bytes, bytearray)):
+                # Prepare html content for the next step.
                 html_content = html_content.decode('utf-8', errors='replace')
             elif not isinstance(html_content, str):
                 html_content = str(html_content)
@@ -15895,6 +18671,7 @@ def view_report(report_id):
                     status_code=409
                 )
 
+            # Trigger the side effect required for this stage.
             _set_cached_report_html_content(report_id, report_html_key, html_content)
             _persist_local_report_html_cache(report_id, html_content)
 
@@ -15906,15 +18683,18 @@ def view_report(report_id):
                 source='supabase_storage',
                 failed_view_requested=failed_view,
             )
+            # Prepare html content for the next step.
             html_content = _repair_report_documentation_block(html_content, report_id)
             html_content = _normalize_report_footer_branding(html_content)
             html_content = _inject_traceability_widget(html_content, trace_payload)
             if not failed_view:
+                # Trigger the side effect required for this stage.
                 _set_cached_rendered_report_html(report_id, report_html_key, html_content)
             return _report_html_response(html_content)
         except HTTPException:
             raise
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.error(f"Error downloading report HTML: {e}")
             if local_report_html.exists() and event_status not in ('failed', 'partial', 'skipped'):
                 trace_payload = _build_traceability_payload(
@@ -15924,8 +18704,10 @@ def view_report(report_id):
                     source='local_filesystem_fallback',
                     failed_view_requested=failed_view,
                 )
+                # Return the prepared result to the caller.
                 return _read_local_report_with_trace(local_report_html, trace_payload)
 
+            # Choose the correct branch before the workflow continues.
             if event_status in ('failed', 'partial', 'skipped'):
                 return _render_regenerate_report_page(
                     report_id,
@@ -15935,10 +18717,12 @@ def view_report(report_id):
             abort(500, description=f"Error loading report: {str(e)}")
 
     except HTTPException:
+        # Surface the failure with enough context for the caller.
         raise
     except Exception as e:
         logger.error(f"Error fetching report from Supabase: {e}")
         if local_report_html.exists() and not failed_view:
+            # Prepare trace payload for the next step.
             trace_payload = _build_traceability_payload(
                 report_id=report_id,
                 violation={},
@@ -15947,22 +18731,28 @@ def view_report(report_id):
                 failed_view_requested=failed_view,
             )
             return _read_local_report_with_trace(local_report_html, trace_payload)
+        # Trigger the side effect required for this stage.
         abort(500, description="Failed to fetch report")
 
 
+# Section: run the safe parse json like workflow with clear inputs and outputs.
 def _safe_parse_json_like(value: Any) -> Dict[str, Any]:
         """Parse JSON-like payloads that may already be dicts or JSON strings."""
         if isinstance(value, dict):
+                # Return the prepared result to the caller.
                 return value
         if isinstance(value, str):
                 try:
+                        # Prepare parsed for the next step.
                         parsed = json.loads(value)
                         return parsed if isinstance(parsed, dict) else {}
                 except Exception:
                         return {}
+        # Return the prepared result to the caller.
         return {}
 
 
+# Section: run the caption placeholder info workflow with clear inputs and outputs.
 def _caption_placeholder_info(caption: str) -> Dict[str, Any]:
         """Identify whether caption text appears to be a fallback/placeholder string."""
         normalized = str(caption or '').strip()
@@ -15980,6 +18770,7 @@ def _caption_placeholder_info(caption: str) -> Dict[str, Any]:
             'detection-only safety summary',
             'detection-only fallback analysis',
         ]
+        # Prepare matched marker for the next step.
         matched_marker = next((m for m in known_markers if m in lowered), None)
         return {
                 'is_placeholder': bool(matched_marker),
@@ -15989,8 +18780,10 @@ def _caption_placeholder_info(caption: str) -> Dict[str, Any]:
         }
 
 
+# Section: run the extract generation model info workflow with clear inputs and outputs.
 def _extract_generation_model_info(detection_data: Dict[str, Any], nlp_analysis: Dict[str, Any]) -> Dict[str, Any]:
         """Resolve best-effort model/provider provenance for caption + report generation."""
+        # Prepare detection data for the next step.
         detection_data = detection_data if isinstance(detection_data, dict) else {}
         nlp_analysis = nlp_analysis if isinstance(nlp_analysis, dict) else {}
 
@@ -16000,42 +18793,54 @@ def _extract_generation_model_info(detection_data: Dict[str, Any], nlp_analysis:
 
         history = detection_data.get('caption_history')
         if isinstance(history, list):
+            # Prepare history entries for the next step.
             history_entries = [entry for entry in history if isinstance(entry, dict)]
             if history_entries:
+                # Prepare latest for the next step.
                 latest = history_entries[-1]
                 model_from_history = latest.get('model')
                 if model_from_history:
+                    # Prepare caption model for the next step.
                     caption_model = str(model_from_history)
                     caption_provider = str(latest.get('provider') or 'historical_record')
                     caption_source = 'detection_data.caption_history[-1]'
 
+        # Choose the correct branch before the workflow continues.
         if caption_model is None:
+            # Process each item in this collection using the same rule set.
             for model_key in ('caption_model', 'vision_model', 'generation_model', 'model_used'):
+                # Prepare value for the next step.
                 value = detection_data.get(model_key)
                 if value:
                     caption_model = str(value)
+                    # Prepare caption source for the next step.
                     caption_source = f'detection_data.{model_key}'
                     break
 
         if caption_provider is None:
             for provider_key in ('caption_provider', 'vision_provider', 'generation_provider', 'provider_used'):
                 value = detection_data.get(provider_key)
+                # Choose the correct branch before the workflow continues.
                 if value:
                     caption_provider = str(value)
                     caption_source = caption_source or f'detection_data.{provider_key}'
                     break
 
+        # Prepare report provider for the next step.
         report_provider = None
         report_model = None
         report_source = None
 
         for provider_key in ('provider', 'generation_provider', 'report_provider', 'model_provider'):
+            # Prepare value for the next step.
             value = nlp_analysis.get(provider_key)
             if value:
+                # Prepare report provider for the next step.
                 report_provider = str(value)
                 report_source = f'nlp_analysis.{provider_key}'
                 break
 
+        # Process each item in this collection using the same rule set.
         for model_key in ('model', 'generation_model', 'report_model', 'model_used'):
             value = nlp_analysis.get(model_key)
             if value:
@@ -16045,10 +18850,13 @@ def _extract_generation_model_info(detection_data: Dict[str, Any], nlp_analysis:
 
         runtime_snapshot = _get_provider_runtime_snapshot()
         nlp_runtime = runtime_snapshot.get('nlp', {}) if isinstance(runtime_snapshot, dict) else {}
+        # Prepare vision runtime for the next step.
         vision_runtime = runtime_snapshot.get('vision', {}) if isinstance(runtime_snapshot, dict) else {}
 
         if report_provider is None and isinstance(nlp_runtime, dict):
+            # Choose the correct branch before the workflow continues.
             if nlp_runtime.get('last_provider'):
+                # Prepare report provider for the next step.
                 report_provider = str(nlp_runtime.get('last_provider'))
                 report_source = 'runtime.nlp.last_provider'
 
@@ -16057,8 +18865,11 @@ def _extract_generation_model_info(detection_data: Dict[str, Any], nlp_analysis:
                 report_model = str(nlp_runtime.get('last_model'))
                 report_source = report_source or 'runtime.nlp.last_model'
 
+        # Choose the correct branch before the workflow continues.
         if caption_provider is None and isinstance(vision_runtime, dict):
+            # Choose the correct branch before the workflow continues.
             if vision_runtime.get('last_provider_used'):
+                # Prepare caption provider for the next step.
                 caption_provider = str(vision_runtime.get('last_provider_used'))
                 caption_source = 'runtime.vision.last_provider_used'
 
@@ -16069,11 +18880,14 @@ def _extract_generation_model_info(detection_data: Dict[str, Any], nlp_analysis:
                 'ollama': vision_runtime.get('ollama_model'),
                 'model_api': vision_runtime.get('vision_api_model'),
             }
+            # Prepare inferred model for the next step.
             inferred_model = provider_to_model.get(provider_key) or vision_runtime.get('vision_api_model')
             if inferred_model:
+                # Prepare caption model for the next step.
                 caption_model = str(inferred_model)
                 caption_source = caption_source or 'runtime.vision.provider_model_map'
 
+        # Return the prepared result to the caller.
         return {
             'caption_generation': {
                 'provider': caption_provider,
@@ -16088,8 +18902,10 @@ def _extract_generation_model_info(detection_data: Dict[str, Any], nlp_analysis:
         }
 
 
+# Section: run the looks like fallback template html workflow with clear inputs and outputs.
 def _looks_like_fallback_template_html(html_content: str) -> bool:
         """Detect legacy fallback report templates that should not be served as final reports."""
+        # Prepare lowered for the next step.
         lowered = str(html_content or '').lower()
         has_fallback_label = (
             'report generator not available' in lowered
@@ -16100,9 +18916,11 @@ def _looks_like_fallback_template_html(html_content: str) -> bool:
             or f'ollama pull {LOCAL_OLLAMA_UNIFIED_MODEL}'.lower() in lowered
             or 'ollama pull llama3' in lowered
         )
+        # Return the prepared result to the caller.
         return has_fallback_label and has_setup_instructions
 
 
+# Section: run the render regenerate report page workflow with clear inputs and outputs.
 def _render_regenerate_report_page(report_id: str, reason: str, status_code: int = 409):
         """Render an actionable page that lets users trigger report regeneration with one click."""
         safe_report_id = html.escape(str(report_id or 'UNKNOWN'))
@@ -16326,28 +19144,35 @@ def _render_regenerate_report_page(report_id: str, reason: str, status_code: int
     </script>
 </body>
 </html>"""
+        # Return the prepared result to the caller.
         return page, status_code, {'Content-Type': 'text/html; charset=utf-8'}
 
 
+# Section: run the load local traceability sidecar workflow with clear inputs and outputs.
 def _load_local_traceability_sidecar(report_id: str) -> Dict[str, Any]:
         """Load `violations/<report_id>/metadata.json` written by the report
         generator. Used as a fallback source for the traceability widget when
         Supabase has no row yet (offline / pre-sync local mode), so we don't
         end up showing nulls for caption_validation / nlp_integrity / counts.
         """
+        # Choose the correct branch before the workflow continues.
         if not report_id:
+                # Return the prepared result to the caller.
                 return {}
         try:
                 sidecar_path = VIOLATIONS_DIR / report_id / 'metadata.json'
                 if not sidecar_path.exists():
+                        # Return the prepared result to the caller.
                         return {}
                 with open(sidecar_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
                 if not isinstance(data, dict):
                         return {}
+                # Choose the correct branch before the workflow continues.
                 if not str(data.get('caption') or '').strip():
                         caption_path = VIOLATIONS_DIR / report_id / 'caption.txt'
                         if caption_path.exists():
+                                # Prepare values needed by the next step.
                                 data['caption'] = caption_path.read_text(encoding='utf-8').strip()
                 return data
         except Exception as e:
@@ -16355,6 +19180,7 @@ def _load_local_traceability_sidecar(report_id: str) -> Dict[str, Any]:
                 return {}
 
 
+# Section: run the build traceability payload workflow with clear inputs and outputs.
 def _build_traceability_payload(
         report_id: str,
         violation: Dict[str, Any],
@@ -16363,6 +19189,7 @@ def _build_traceability_payload(
         failed_view_requested: bool
 ) -> Dict[str, Any]:
         """Build report provenance metadata for in-page traceability widget."""
+        # Prepare violation for the next step.
         violation = violation or {}
         event = event or {}
 
@@ -16372,6 +19199,7 @@ def _build_traceability_payload(
 
         event_status = str(event.get('status') or '').strip().lower() or None
         event_error = event.get('error_message')
+        # Prepare violation status for the next step.
         violation_status = str(violation.get('status') or '').strip().lower() or None
 
         caption_validation = detection_data.get('caption_validation') if isinstance(detection_data, dict) else None
@@ -16387,10 +19215,13 @@ def _build_traceability_payload(
             or not report_model_info.get('model')
         )
 
+        # Prepare detections for the next step.
         detections = []
         if isinstance(detection_data, dict):
+            # Prepare raw detections for the next step.
             raw_detections = detection_data.get('detections')
             if isinstance(raw_detections, list):
+                # Prepare detections for the next step.
                 detections = raw_detections
 
         # Local sidecar fallback: if the Supabase row gave us nothing useful
@@ -16406,10 +19237,14 @@ def _build_traceability_payload(
             or not generation_models
             or generation_model_details_missing
         )
+        # Choose the correct branch before the workflow continues.
         if needs_sidecar:
+            # Prepare sidecar for the next step.
             sidecar = _load_local_traceability_sidecar(report_id)
             if sidecar:
+                # Choose the correct branch before the workflow continues.
                 if not detections and isinstance(sidecar.get('detections'), list):
+                    # Prepare detections for the next step.
                     detections = sidecar['detections']
                 if not caption:
                     caption = str(sidecar.get('caption') or '')
@@ -16418,12 +19253,15 @@ def _build_traceability_payload(
                     caption_validation = sidecar.get('caption_validation')
                 if nlp_integrity is None:
                     nlp_integrity = sidecar.get('nlp_integrity')
+                # Prepare sidecar caption provider for the next step.
                 sidecar_caption_provider = sidecar.get('caption_provider')
                 sidecar_caption_model = sidecar.get('caption_model')
                 sidecar_report_provider = sidecar.get('generation_provider') or sidecar.get('report_provider')
                 sidecar_report_model = sidecar.get('generation_model') or sidecar.get('report_model')
                 if any((sidecar_caption_provider, sidecar_caption_model, sidecar_report_provider, sidecar_report_model)):
+                    # Choose the correct branch before the workflow continues.
                     if not isinstance(generation_models, dict) or not generation_models:
+                        # Prepare generation models for the next step.
                         generation_models = _extract_generation_model_info({}, {})
                     caption_entry = generation_models.setdefault('caption_generation', {})
                     report_entry = generation_models.setdefault('report_generation', {})
@@ -16433,16 +19271,21 @@ def _build_traceability_payload(
                     if sidecar_caption_model and not caption_entry.get('model'):
                         caption_entry['model'] = sidecar_caption_model
                         caption_entry['source'] = caption_entry.get('source') or 'local_sidecar.caption_model'
+                    # Choose the correct branch before the workflow continues.
                     if sidecar_report_provider and not report_entry.get('provider'):
+                        # Prepare values needed by the next step.
                         report_entry['provider'] = sidecar_report_provider
                         report_entry['source'] = 'local_sidecar.generation_provider'
                     if sidecar_report_model and not report_entry.get('model'):
                         report_entry['model'] = sidecar_report_model
                         report_entry['source'] = report_entry.get('source') or 'local_sidecar.generation_model'
 
+        # Section: run the normalized label workflow with clear inputs and outputs.
         def _normalized_label(item: Dict[str, Any]) -> str:
+            # Prepare label for the next step.
             label = item.get('class_name') if isinstance(item, dict) else None
             if label is None and isinstance(item, dict):
+                # Prepare label for the next step.
                 label = item.get('class')
             label = str(label or '').strip().lower()
             label = label.replace('_', '-').replace(' ', '-')
@@ -16452,6 +19295,7 @@ def _build_traceability_payload(
             d for d in detections
             if _normalized_label(d) in {'person', 'worker', 'man', 'woman'}
         ]
+        # Prepare detected violations for the next step.
         detected_violations = [
             d for d in detections
             if _normalized_label(d).startswith('no-')
@@ -16459,10 +19303,12 @@ def _build_traceability_payload(
 
         person_count = len(detected_people) if detections else (event.get('person_count') if isinstance(event, dict) else None)
         if person_count is None:
+            # Prepare person count for the next step.
             person_count = violation.get('person_count')
         if person_count is None and sidecar:
             person_count = sidecar.get('person_count')
 
+        # Prepare violation count for the next step.
         violation_count = len(detected_violations) if detections else (event.get('violation_count') if isinstance(event, dict) else None)
         if violation_count is None:
             violation_count = violation.get('violation_count')
@@ -16497,9 +19343,12 @@ def _build_traceability_payload(
         }
 
 
+# Section: run the inject traceability widget workflow with clear inputs and outputs.
 def _inject_traceability_widget(html_content: str, trace_payload: Dict[str, Any]) -> str:
         """Inject a fixed top toggle widget that reveals traceability metadata on hover/click."""
+        # Choose the correct branch before the workflow continues.
         if not html_content:
+                # Return the prepared result to the caller.
                 return html_content
 
         # Prevent duplicate injection if report already contains the widget.
@@ -16509,6 +19358,7 @@ def _inject_traceability_widget(html_content: str, trace_payload: Dict[str, Any]
         payload_json = json.dumps(trace_payload or {}, ensure_ascii=False)
         payload_json = payload_json.replace('</', '<\\/')
 
+        # Prepare widget html for the next step.
         widget_html = f"""
 <button id=\"report-back-btn\" type=\"button\" class=\"report-back-btn\" title=\"Back to previous page\">BACK</button>
 <div id=\"traceability-widget\" class=\"traceability-widget\" aria-label=\"Report traceability\">
@@ -16722,16 +19572,21 @@ def _inject_traceability_widget(html_content: str, trace_payload: Dict[str, Any]
 </script>
 """
 
+        # Choose the correct branch before the workflow continues.
         if re.search(r'<body[^>]*>', html_content, flags=re.IGNORECASE):
+            # Return the prepared result to the caller.
             return re.sub(r'<body[^>]*>', lambda m: m.group(0) + '\n' + widget_html, html_content, count=1, flags=re.IGNORECASE)
         if re.search(r'</body\s*>', html_content, flags=re.IGNORECASE):
             return re.sub(r'</body\s*>', widget_html + '\n</body>', html_content, count=1, flags=re.IGNORECASE)
         return html_content + widget_html
 
 
+# Section: run the normalize report footer branding workflow with clear inputs and outputs.
 def _normalize_report_footer_branding(html_content: str) -> str:
         """Normalize legacy footer branding text so older generated reports match current UI branding."""
+        # Choose the correct branch before the workflow continues.
         if not html_content:
+            # Return the prepared result to the caller.
             return html_content
 
         replacements = (
@@ -16749,13 +19604,16 @@ def _normalize_report_footer_branding(html_content: str) -> str:
             ),
         )
 
+        # Prepare normalized for the next step.
         normalized = html_content
         for source_text, replacement_text in replacements:
+            # Prepare normalized for the next step.
             normalized = normalized.replace(source_text, replacement_text)
 
         return normalized
 
 
+# Section: run the repair report documentation block workflow with clear inputs and outputs.
 def _repair_report_documentation_block(html_content: str, report_id: str) -> str:
         """Strip the legacy in-report NCR / JKKP-7 button block.
 
@@ -16764,7 +19622,9 @@ def _repair_report_documentation_block(html_content: str, report_id: str) -> str
         retired Batch Docs page; we strip them on the way out so the report
         renders cleanly without dead UI.
         """
+        # Choose the correct branch before the workflow continues.
         if not html_content:
+                # Return the prepared result to the caller.
                 return html_content
 
         # Drop the entire "Generate Official Documentation" callout if present.
@@ -16776,6 +19636,7 @@ def _repair_report_documentation_block(html_content: str, report_id: str) -> str
         )
 
         # Drop the inline generateNCR / generateJKKP7 JS blocks if any remain.
+        # Prepare html content for the next step.
         html_content = re.sub(
                 r'function\s+generateNCR\s*\(\)\s*\{[\s\S]*?\}\s*\}\s*',
                 '',
@@ -16790,19 +19651,24 @@ def _repair_report_documentation_block(html_content: str, report_id: str) -> str
         )
 
         # Strip any orphaned onclick handlers that point at the removed funcs.
+        # Prepare html content for the next step.
         html_content = html_content.replace('onclick="generateNCR()"', '')
         html_content = html_content.replace('onclick="generateJKKP7()"', '')
 
         return html_content
 
 
+# Section: group fallback report template error state and behaviour in one readable unit.
 class FallbackReportTemplateError(Exception):
     """Raised when a stored report HTML is only the disabled fallback template."""
 
 
+# Section: run the inject report summary readability styles workflow with clear inputs and outputs.
 def _inject_report_summary_readability_styles(html_content: str) -> str:
     """Add breathable summary-table styling to generated and legacy reports."""
+    # Choose the correct branch before the workflow continues.
     if not html_content or not isinstance(html_content, str):
+        # Return the prepared result to the caller.
         return html_content
     if 'EXECUTIVE SAFETY SUMMARY' not in html_content and 'AT A GLANCE' not in html_content:
         return html_content
@@ -16816,7 +19682,9 @@ def _inject_report_summary_readability_styles(html_content: str) -> str:
             count=1,
             flags=re.IGNORECASE,
         )
+    # Choose the correct branch before the workflow continues.
     if 'id="casm-summary-layout-normalizer"' in html_content:
+        # Prepare html content for the next step.
         html_content = re.sub(
             r'\s*<script\s+id=["\']casm-summary-layout-normalizer["\'][\s\S]*?</script>\s*',
             '\n',
@@ -16827,6 +19695,7 @@ def _inject_report_summary_readability_styles(html_content: str) -> str:
     if 'class="summary-table"' in html_content and '.summary-table' in html_content:
         return html_content
 
+    # Prepare injection block for the next step.
     injection_block = """
 <style id="casm-summary-readability-overrides">
     .summary-card,
@@ -17135,7 +20004,9 @@ def _inject_report_summary_readability_styles(html_content: str) -> str:
 </script>
 """
 
+    # Choose the correct branch before the workflow continues.
     if re.search(r'</head\s*>', html_content, flags=re.IGNORECASE):
+        # Return the prepared result to the caller.
         return re.sub(
             r'</head\s*>',
             lambda _match: injection_block + '\n</head>',
@@ -17146,7 +20017,9 @@ def _inject_report_summary_readability_styles(html_content: str) -> str:
     return injection_block + html_content
 
 
+# Section: run the report html response workflow with clear inputs and outputs.
 def _report_html_response(html_content: str):
+    # Prepare html content for the next step.
     html_content = _inject_report_summary_readability_styles(html_content)
     return html_content, 200, {
         'Content-Type': 'text/html; charset=utf-8',
@@ -17156,50 +20029,62 @@ def _report_html_response(html_content: str):
     }
 
 
+# Section: run the local report html cache key workflow with clear inputs and outputs.
 def _local_report_html_cache_key(local_report_html: Path) -> str:
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare stat for the next step.
         stat = local_report_html.stat()
         return f"local:{stat.st_mtime_ns}:{stat.st_size}"
     except Exception:
         return f"local:{local_report_html}"
 
 
+# Section: run the render local report html for view workflow with clear inputs and outputs.
 def _render_local_report_html_for_view(
     local_report_html: Path,
     trace_payload: Dict[str, Any],
     cache_key: Optional[str] = None,
     allow_cache: bool = True,
 ) -> Tuple[str, str]:
+    # Prepare report id for the next step.
     report_id = str(trace_payload.get('report_id') or local_report_html.parent.name or '').strip()
     resolved_cache_key = cache_key or _local_report_html_cache_key(local_report_html)
 
     if allow_cache and report_id and resolved_cache_key:
+        # Prepare cached rendered for the next step.
         cached_rendered = _get_cached_rendered_report_html(report_id, resolved_cache_key)
         if cached_rendered:
+            # Return the prepared result to the caller.
             return cached_rendered, 'rendered_cache'
 
     with open(local_report_html, 'r', encoding='utf-8') as f:
         html_content = f.read()
 
+    # Choose the correct branch before the workflow continues.
     if _looks_like_fallback_template_html(html_content):
         raise FallbackReportTemplateError()
 
     if report_id and resolved_cache_key:
+        # Trigger the side effect required for this stage.
         _set_cached_report_html_content(report_id, resolved_cache_key, html_content)
 
     rendered = _repair_report_documentation_block(html_content, report_id or 'UNKNOWN')
     rendered = _normalize_report_footer_branding(rendered)
     rendered = _inject_traceability_widget(rendered, trace_payload)
 
+    # Choose the correct branch before the workflow continues.
     if allow_cache and report_id and resolved_cache_key:
         _set_cached_rendered_report_html(report_id, resolved_cache_key, rendered)
 
     return rendered, 'local_filesystem'
 
 
+# Section: run the read local report with trace workflow with clear inputs and outputs.
 def _read_local_report_with_trace(local_report_html: Path, trace_payload: Dict[str, Any]):
     """Read local report HTML and inject traceability widget before returning response."""
     try:
+        # Prepare values needed by the next step.
         html_content, _layer = _render_local_report_html_for_view(local_report_html, trace_payload)
         return _report_html_response(html_content)
     except FallbackReportTemplateError:
@@ -17210,34 +20095,43 @@ def _read_local_report_with_trace(local_report_html: Path, trace_payload: Dict[s
             status_code=409
         )
     except HTTPException:
+        # Surface the failure with enough context for the caller.
         raise
     except Exception as e:
         logger.warning(f"Could not inject traceability into local report {local_report_html}: {e}")
         return send_from_directory(str(local_report_html.parent), local_report_html.name)
 
 
+# Section: run the get image workflow with clear inputs and outputs.
 @app.route('/image/<report_id>/<filename>')
 def get_image(report_id, filename):
     """Serve violation images with local-first caching to reduce Supabase egress."""
+    # Choose the correct branch before the workflow continues.
     if filename not in ['original.jpg', 'annotated.jpg']:
+        # Trigger the side effect required for this stage.
         abort(400, description="Invalid filename")
 
     violation_dir = VIOLATIONS_DIR / report_id
     image_path = violation_dir / filename
 
+    # Section: run the serve local image workflow with clear inputs and outputs.
     def _serve_local_image(path: Path):
         response = send_from_directory(str(path.parent), path.name)
         # Permit browser reuse of stable /image URLs to lower repeat storage traffic.
         response.headers['Cache-Control'] = 'public, max-age=86400, stale-while-revalidate=600, stale-if-error=604800'
+        # Return the prepared result to the caller.
         return response
 
     # Prefer local file immediately when available (works in offline/local-fallback mode).
     if image_path.exists():
         return _serve_local_image(image_path)
 
+    # Choose the correct branch before the workflow continues.
     if _is_supabase_offline_backoff_active():
         if not violation_dir.exists():
+            # Trigger the side effect required for this stage.
             abort(404, description="Report not found")
+        # Trigger the side effect required for this stage.
         abort(404, description="Image is not cached locally while cloud storage is offline")
 
     if storage_manager is None or db_manager is None:
@@ -17245,9 +20139,12 @@ def get_image(report_id, filename):
             abort(404, description="Report not found")
         abort(404, description="Image not found")
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
         violation = db_manager.get_violation(report_id)
+        # Choose the correct branch before the workflow continues.
         if not violation:
+            # Trigger the side effect required for this stage.
             abort(404, description="Report not found")
 
         storage_key = violation.get('original_image_key') if filename == 'original.jpg' else violation.get('annotated_image_key')
@@ -17257,20 +20154,25 @@ def get_image(report_id, filename):
         blob = storage_manager.download_file_content(storage_key)
         if not blob:
             blocked = _egress_budget_blocked_response()
+            # Choose the correct branch before the workflow continues.
             if blocked:
+                # Return the prepared result to the caller.
                 return blocked
             abort(404, description="Failed to fetch image")
 
+        # Choose the correct branch before the workflow continues.
         if isinstance(blob, str):
             blob = blob.encode('utf-8')
 
         try:
             violation_dir.mkdir(parents=True, exist_ok=True)
+            # Trigger the side effect required for this stage.
             image_path.write_bytes(blob)
             return _serve_local_image(image_path)
         except Exception as cache_err:
             logger.warning(f"Could not persist cached image for {report_id}/{filename}: {cache_err}")
 
+        # Prepare response for the next step.
         response = Response(blob, mimetype='image/jpeg')
         response.headers['Cache-Control'] = 'public, max-age=86400, stale-while-revalidate=600, stale-if-error=604800'
         return response
@@ -17280,7 +20182,9 @@ def get_image(report_id, filename):
     except Exception as e:
         _activate_local_offline_runtime('get_image.fetch', e)
         logger.error(f"Error fetching image from Supabase: {e}")
+        # Choose the correct branch before the workflow continues.
         if image_path.exists():
+            # Return the prepared result to the caller.
             return _serve_local_image(image_path)
         if _is_supabase_connectivity_failure(e):
             abort(404, description="Image unavailable while cloud storage is offline")
@@ -17294,7 +20198,9 @@ def get_image(report_id, filename):
 def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
     """Generate frames from active live source with YOLO detection and violation processing."""
 
+    # Open the managed resource only for the block that needs it.
     with camera_lock:
+        # Choose the correct branch before the workflow continues.
         if not _is_active_live_source_locked():
             # Do NOT auto-start the camera here. The camera must be explicitly started
             # via POST /api/live/start (i.e., the user must click Start). This prevents
@@ -17303,6 +20209,7 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
             return
         source_name = live_source_adapter.current_source
 
+    # Trigger the side effect required for this stage.
     logger.info(f"Starting live frame generation from source: {source_name}")
     logger.info("=" * 80)
     logger.info("INITIALIZING PIPELINE COMPONENTS")
@@ -17320,8 +20227,10 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
         logger.info(f"Caption generator: {caption_generator}")
         logger.info(f"Report generator: {report_generator}")
     else:
+        # Trigger the side effect required for this stage.
         logger.error("FULL_PIPELINE_AVAILABLE is False - components will not initialize")
 
+    # Trigger the side effect required for this stage.
     logger.info("=" * 80)
 
     frame_interval = 1.0 / max(1, int(target_fps))
@@ -17329,15 +20238,19 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
 
     try:
         while True:
+            # Open the managed resource only for the block that needs it.
             with camera_lock:
+                # Choose the correct branch before the workflow continues.
                 if not _is_active_live_source_locked():
                     break
                 ret, frame, error_message = _read_active_frame_locked()
                 if not ret:
+                    # Trigger the side effect required for this stage.
                     logger.warning(error_message or 'Failed to read frame from active source')
                     break
 
             # Run YOLO detection
+            # Protect this step so expected failures can fall back cleanly.
             try:
                 detections, annotated = predict_image(frame, conf=conf)
                 violation_detections = _extract_violation_detections(detections) if detections else []
@@ -17355,6 +20268,7 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                     2,
                     cv2.LINE_AA,
                 )
+                # Trigger the side effect required for this stage.
                 cv2.putText(
                     annotated,
                     f"violations: {len(violation_detections)}",
@@ -17367,6 +20281,7 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                 )
 
                 # Log all detections for debugging
+                # Choose the correct branch before the workflow continues.
                 if detections:
                     detected_classes = [d['class_name'] for d in detections]
                     logger.debug(f"Detected: {detected_classes}")
@@ -17375,6 +20290,7 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                 if detections and FULL_PIPELINE_AVAILABLE:
                     if violation_detections:
                         # Log detected violations
+                        # Prepare violation classes for the next step.
                         violation_classes = [d.get('class_name') for d in violation_detections]
                         logger.info("=" * 80)
                         logger.info(f" PPE VIOLATION DETECTED: {violation_classes}")
@@ -17395,12 +20311,15 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                             trigger_source='live',
                             annotated_frame=annotated.copy(),
                         )
+                        # Choose the correct branch before the workflow continues.
                         if report_id:
+                            # Trigger the side effect required for this stage.
                             logger.info(f" Violation {report_id} queued for processing")
                         else:
                             logger.debug("Violation not queued (cooldown or already processing)")
 
                 # Encode frame as JPEG
+                # Prepare values needed by the next step.
                 ret, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
                 if not ret:
                     continue
@@ -17409,8 +20328,10 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                 now = time.monotonic()
                 wait_s = frame_interval - (now - last_yield_ts)
                 if wait_s > 0:
+                    # Trigger the side effect required for this stage.
                     time.sleep(wait_s)
 
+                # Prepare frame bytes for the next step.
                 frame_bytes = buffer.tobytes()
 
                 # Yield frame in multipart format
@@ -17423,24 +20344,31 @@ def generate_frames(conf=0.25, target_fps=14, jpeg_quality=72):
                 continue
 
     except GeneratorExit:
+        # Trigger the side effect required for this stage.
         logger.info("Client disconnected from stream")
     except Exception as e:
         logger.error(f"Stream error: {e}")
     finally:
         logger.info("Frame generation stopped  releasing camera")
         with camera_lock:
+            # Trigger the side effect required for this stage.
             _stop_live_source_locked()
 
 
+# Section: run the live stream workflow with clear inputs and outputs.
 @app.route('/api/live/stream')
 def live_stream():
     """Live webcam stream with YOLO detection."""
+    # Prepare startup gate for the next step.
     startup_gate = _startup_gate_response()
     if startup_gate is not None:
+        # Return the prepared result to the caller.
         return startup_gate
 
+    # Section: run the to float workflow with clear inputs and outputs.
     def _to_float(value, default):
         try:
+            # Return the prepared result to the caller.
             return float(value)
         except (TypeError, ValueError):
             return float(default)
@@ -17449,17 +20377,21 @@ def live_stream():
     target_fps = int(max(5, min(30, _to_float(request.args.get('fps', 14), 14))))
     jpeg_quality = int(max(45, min(90, _to_float(request.args.get('quality', 72), 72))))
 
+    # Return the prepared result to the caller.
     return Response(
         generate_frames(conf=conf, target_fps=target_fps, jpeg_quality=jpeg_quality),
         mimetype='multipart/x-mixed-replace; boundary=frame'
     )
 
 
+# Section: run the live prepare workflow with clear inputs and outputs.
 @app.route('/api/live/prepare', methods=['POST'])
 def live_prepare():
     """Warm the live/report runtime so first-use cloud sessions feel responsive."""
+    # Prepare startup gate for the next step.
     startup_gate = _startup_gate_response()
     if startup_gate is not None:
+        # Return the prepared result to the caller.
         return startup_gate
 
     payload = request.get_json(silent=True) or {}
@@ -17467,6 +20399,7 @@ def live_prepare():
     refresh_cloud_clients = str(payload.get('refresh_cloud_clients', 'true')).strip().lower() in (
         '1', 'true', 'yes', 'on'
     )
+    # Prepare prepare result for the next step.
     prepare_result = _prepare_live_runtime(
         reason=reason,
         warmup_yolo_runtime=not is_model_ready(),
@@ -17478,11 +20411,14 @@ def live_prepare():
     }), (200 if prepare_result.get('success') else 202)
 
 
+# Section: run the start live workflow with clear inputs and outputs.
 @app.route('/api/live/start', methods=['POST'])
 def start_live():
     """Start live monitoring."""
+    # Prepare startup gate for the next step.
     startup_gate = _startup_gate_response()
     if startup_gate is not None:
+        # Return the prepared result to the caller.
         return startup_gate
 
     prepare_result = _prepare_live_runtime(
@@ -17491,19 +20427,24 @@ def start_live():
         refresh_cloud_clients=True,
     )
 
+    # Prepare payload for the next step.
     payload = request.get_json(silent=True) or {}
     requested_source = str(payload.get('source', _get_default_live_source()))
     requested_camera_index = payload.get('camera_index')
     if requested_camera_index is not None:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare requested camera index for the next step.
             requested_camera_index = int(requested_camera_index)
         except (TypeError, ValueError):
             requested_camera_index = None
 
+    # Open the managed resource only for the block that needs it.
     with camera_lock:
         result = _start_live_source_locked(requested_source, requested_camera_index)
 
     if not result.get('success'):
+        # Return the prepared result to the caller.
         return jsonify({'success': False, 'error': result.get('message', 'Failed to start live monitoring')}), 500
 
     response = {
@@ -17515,6 +20456,7 @@ def start_live():
         'runtime_prepared': prepare_result,
     }
 
+    # Prepare state payload for the next step.
     state_payload = _build_live_state_payload()
     response['realsense_available'] = state_payload.get('realsense_available', False)
     response['realsense_device_name'] = state_payload.get('realsense_device_name')
@@ -17524,27 +20466,35 @@ def start_live():
     response['edge_realsense_age_ms'] = state_payload.get('edge_realsense_age_ms')
     response['edge_realsense_capabilities'] = state_payload.get('edge_realsense_capabilities', {})
 
+    # Choose the correct branch before the workflow continues.
     if response['source'] == 'webcam':
+        # Prepare values needed by the next step.
         response['webcam_devices'] = state_payload.get('webcam_devices', [])
 
     return jsonify(response)
 
 
+# Section: run the stop live workflow with clear inputs and outputs.
 @app.route('/api/live/stop', methods=['POST'])
 def stop_live():
     """Stop live monitoring."""
+    # Open the managed resource only for the block that needs it.
     with camera_lock:
+        # Trigger the side effect required for this stage.
         _stop_live_source_locked()
 
     return jsonify({'success': True, 'message': 'Live monitoring stopped'})
 
 
+# Section: run the live status workflow with clear inputs and outputs.
 @app.route('/api/live/status')
 def live_status():
     """Get live monitoring status."""
+    # Return the prepared result to the caller.
     return jsonify(_build_live_state_payload())
 
 
+# Section: run the live devices workflow with clear inputs and outputs.
 @app.route('/api/live/devices')
 def live_devices():
     """Return available live capture sources and default source selection."""
@@ -17552,22 +20502,28 @@ def live_devices():
     return jsonify(_build_live_state_payload(force_webcam_refresh=refresh_requested))
 
 
+# Section: run the live depth status workflow with clear inputs and outputs.
 @app.route('/api/live/depth/status')
 def live_depth_status():
     """Return RealSense depth telemetry and capability details."""
+    # Prepare payload for the next step.
     payload = _build_live_state_payload()
 
     with camera_lock:
+        # Prepare depth telemetry for the next step.
         depth_telemetry = live_source_adapter.get_depth_telemetry_locked()
 
     payload['depth_telemetry'] = depth_telemetry
     return jsonify(payload)
 
 
+# Section: run the live depth preview workflow with clear inputs and outputs.
 @app.route('/api/live/depth/preview')
 def live_depth_preview():
     """Return RealSense depth preview image if available."""
+    # Open the managed resource only for the block that needs it.
     with camera_lock:
+        # Prepare preview for the next step.
         preview = live_source_adapter.get_depth_preview_locked()
 
     if not preview:
@@ -17576,10 +20532,13 @@ def live_depth_preview():
     return Response(preview, mimetype='image/jpeg')
 
 
+# Section: run the ingest edge realsense frame workflow with clear inputs and outputs.
 @app.route('/api/live/edge/realsense/frame', methods=['POST'])
 def ingest_edge_realsense_frame():
     """Ingest a local-machine RealSense frame/depth payload for hosted live streaming."""
+    # Choose the correct branch before the workflow continues.
     if not _is_edge_ingest_authorized():
+        # Return the prepared result to the caller.
         return jsonify({'success': False, 'error': 'Unauthorized edge ingest token'}), 401
 
     frame_file = request.files.get('frame') or request.files.get('image')
@@ -17589,34 +20548,45 @@ def ingest_edge_realsense_frame():
     try:
         raw_bytes = frame_file.read()
         nparr = np.frombuffer(raw_bytes, np.uint8)
+        # Prepare frame for the next step.
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     except Exception as exc:
         return jsonify({'success': False, 'error': f'Invalid frame payload: {exc}'}), 400
 
+    # Choose the correct branch before the workflow continues.
     if frame is None:
         return jsonify({'success': False, 'error': 'Invalid frame image format'}), 400
 
+    # Section: run the parse json field workflow with clear inputs and outputs.
     def _parse_json_field(field_name: str):
         raw_value = request.form.get(field_name)
+        # Choose the correct branch before the workflow continues.
         if not raw_value:
+            # Return the prepared result to the caller.
             return None
 
         raw_text = str(raw_value).strip()
         try:
             parsed = json.loads(raw_text)
             if isinstance(parsed, dict):
+                # Return the prepared result to the caller.
                 return parsed
         except Exception:
             # Some shell form uploads escape quotes (e.g. {\"key\":\"value\"}).
+            # Protect this step so expected failures can fall back cleanly.
             try:
                 unescaped = raw_text.encode('utf-8').decode('unicode_escape')
                 parsed = json.loads(unescaped)
                 if isinstance(parsed, dict):
+                    # Return the prepared result to the caller.
                     return parsed
             except Exception:
+                # Return the prepared result to the caller.
                 return None
+        # Return the prepared result to the caller.
         return None
 
+    # Prepare device name for the next step.
     device_name = (request.form.get('device_name') or 'Intel RealSense (Edge Relay)').strip()
     depth_telemetry = _parse_json_field('depth_telemetry')
     capabilities = _parse_json_field('capabilities')
@@ -17624,11 +20594,14 @@ def ingest_edge_realsense_frame():
     depth_preview_file = request.files.get('depth_preview')
     depth_preview_bytes = None
     if depth_preview_file is not None:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare depth preview bytes for the next step.
             depth_preview_bytes = depth_preview_file.read()
         except Exception:
             depth_preview_bytes = None
 
+    # Open the managed resource only for the block that needs it.
     with camera_lock:
         edge_snapshot = live_source_adapter.ingest_edge_realsense_locked(
             frame,
@@ -17638,9 +20611,11 @@ def ingest_edge_realsense_frame():
             capabilities=capabilities,
         )
 
+    # Return the prepared result to the caller.
     return jsonify({'success': True, **edge_snapshot})
 
 
+# Section: run the edge realsense status workflow with clear inputs and outputs.
 @app.route('/api/live/edge/realsense/status')
 def edge_realsense_status():
     """Return current edge RealSense relay status for UI/source selection."""
@@ -17664,8 +20639,10 @@ def edge_realsense_status():
 @app.route('/api/inference/upload', methods=['POST'])
 def upload_inference():
     """Run inference on uploaded image and generate report if violations detected."""
+    # Prepare startup gate for the next step.
     startup_gate = _startup_gate_response()
     if startup_gate is not None:
+        # Return the prepared result to the caller.
         return startup_gate
 
     if not is_model_ready():
@@ -17675,7 +20652,9 @@ def upload_inference():
             refresh_cloud_clients=False,
         )
 
+    # Choose the correct branch before the workflow continues.
     if 'image' not in request.files:
+        # Return the prepared result to the caller.
         return jsonify({'error': 'No image provided'}), 400
 
     file = request.files['image']
@@ -17685,16 +20664,19 @@ def upload_inference():
     try:
         # Read image
         img_bytes = file.read()
+        # Prepare nparr for the next step.
         nparr = np.frombuffer(img_bytes, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if frame is None:
+            # Return the prepared result to the caller.
             return jsonify({'error': 'Invalid image format'}), 400
 
         # Get confidence threshold
         conf = float(request.form.get('conf', 0.10))
 
         # Run inference
+        # Prepare values needed by the next step.
         detections, annotated = predict_image(frame, conf=conf)
 
         # Check for violations
@@ -17704,6 +20686,7 @@ def upload_inference():
         queued_report_id = None
 
         # If violations detected, use queue system (consistent with live camera)
+        # Choose the correct branch before the workflow continues.
         if violation_detections and FULL_PIPELINE_AVAILABLE:
             violation_types = [d['class_name'] for d in violation_detections]
             logger.info(f" Uploaded image violation detected: {violation_types}")
@@ -17717,12 +20700,15 @@ def upload_inference():
                 trigger_source='upload',
                 annotated_frame=annotated.copy(),
             )
+            # Prepare report queued for the next step.
             report_queued = queued_report_id is not None
             if report_queued:
+                # Trigger the side effect required for this stage.
                 logger.info(f" Violation queued for processing: {queued_report_id}")
             else:
                 report_queue_reason = 'cooldown_or_already_processing'
                 logger.info(" Violation not queued (cooldown or already processing)")
+        # Choose the correct branch before the workflow continues.
         elif violation_detections and not FULL_PIPELINE_AVAILABLE:
             report_queue_reason = 'pipeline_components_unavailable'
 
@@ -17732,6 +20718,7 @@ def upload_inference():
         response_source_scope = 'local' if _is_local_pipeline_runtime_active() else 'cloud'
         response_source_label = 'Local' if response_source_scope == 'local' else 'Cloud'
 
+        # Return the prepared result to the caller.
         return jsonify({
             'success': True,
             'detections': detections,
@@ -17748,15 +20735,19 @@ def upload_inference():
         })
 
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Inference error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
+# Section: run the live frame inference workflow with clear inputs and outputs.
 @app.route('/api/inference/live-frame', methods=['POST'])
 def live_frame_inference():
     """Low-latency near-edge inference path for browser-owned live camera frames (phone/web)."""
+    # Prepare startup gate for the next step.
     startup_gate = _startup_gate_response()
     if startup_gate is not None:
+        # Return the prepared result to the caller.
         return startup_gate
 
     if not is_model_ready():
@@ -17766,7 +20757,9 @@ def live_frame_inference():
             refresh_cloud_clients=False,
         )
 
+    # Choose the correct branch before the workflow continues.
     if 'image' not in request.files:
+        # Return the prepared result to the caller.
         return jsonify({'error': 'No image provided'}), 400
 
     file = request.files['image']
@@ -17776,20 +20769,24 @@ def live_frame_inference():
     try:
         img_bytes = file.read()
         nparr = np.frombuffer(img_bytes, np.uint8)
+        # Prepare frame for the next step.
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
         if frame is None:
+            # Return the prepared result to the caller.
             return jsonify({'error': 'Invalid image format'}), 400
 
         conf = float(request.form.get('conf', 0.10))
         detections, _annotated = predict_image(frame, conf=conf)
 
         violation_detections = _extract_violation_detections(detections)
+        # Prepare report queued for the next step.
         report_queued = False
         report_queue_reason = None
         queued_report_id = None
 
         if violation_detections and FULL_PIPELINE_AVAILABLE:
+            # Prepare frame copy for the next step.
             frame_copy = frame.copy()
             detections_copy = detections.copy()
             # Treat browser-submitted live frames as live source so dedup logic applies.
@@ -17799,6 +20796,7 @@ def live_frame_inference():
                 trigger_source='live',
                 annotated_frame=_annotated.copy(),
             )
+            # Prepare report queued for the next step.
             report_queued = queued_report_id is not None
             # NOTE: when enqueue_violation returns None it is almost always because
             # the live cooldown / dedup window suppressed a redundant frame from a
@@ -17810,6 +20808,7 @@ def live_frame_inference():
             if not report_queued:
                 report_queue_reason = None  # benign: dedup / cooldown / already_processing
         elif violation_detections and not FULL_PIPELINE_AVAILABLE:
+            # Prepare report queue reason for the next step.
             report_queue_reason = 'pipeline_components_unavailable'
 
         response_source_scope = 'local' if _is_local_pipeline_runtime_active() else 'cloud'
@@ -17830,10 +20829,12 @@ def live_frame_inference():
         })
 
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Live-frame inference error: {e}")
         return jsonify({'error': str(e)}), 500
 
 
+# Section: run the api live dedup probe workflow with clear inputs and outputs.
 @app.route('/api/testing/live-dedup/probe', methods=['POST'])
 def api_live_dedup_probe():
     """
@@ -17844,8 +20845,10 @@ def api_live_dedup_probe():
       - first trigger queues a report
       - subsequent identical triggers are blocked by live dedup
     """
+    # Prepare startup gate for the next step.
     startup_gate = _startup_gate_response()
     if startup_gate is not None:
+        # Return the prepared result to the caller.
         return startup_gate
 
     # Safety default: keep synthetic testing endpoints disabled unless explicitly enabled.
@@ -17856,7 +20859,9 @@ def api_live_dedup_probe():
             'hint': 'Set ENABLE_TESTING_ENDPOINTS=true only in non-production environments.'
         }), 403
 
+    # Choose the correct branch before the workflow continues.
     if not FULL_PIPELINE_AVAILABLE:
+        # Return the prepared result to the caller.
         return jsonify({'success': False, 'error': 'pipeline_components_unavailable'}), 503
 
     try:
@@ -17866,9 +20871,11 @@ def api_live_dedup_probe():
 
         bbox = payload.get('bbox') or [120, 90, 310, 430]
         if not isinstance(bbox, list) or len(bbox) != 4:
+            # Prepare bbox for the next step.
             bbox = [120, 90, 310, 430]
 
         # Reset recent signatures for deterministic probe behavior.
+        # Open the managed resource only for the block that needs it.
         with recent_live_violation_lock:
             recent_live_violation_signatures.clear()
 
@@ -17891,10 +20898,14 @@ def api_live_dedup_probe():
             'bbox': bbox
         }]
 
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Process each item in this collection using the same rule set.
             for _ in range(repeats):
+                # Prepare rid for the next step.
                 rid = enqueue_violation(frame.copy(), detections.copy(), trigger_source='live')
                 if rid:
+                    # Trigger the side effect required for this stage.
                     accepted_report_ids.append(str(rid))
                 else:
                     blocked_count += 1
@@ -17902,6 +20913,7 @@ def api_live_dedup_probe():
             VIOLATION_COOLDOWN = previous_cooldown
             last_violation_time = previous_last_violation_time
 
+        # Return the prepared result to the caller.
         return jsonify({
             'success': True,
             'repeats': repeats,
@@ -17911,17 +20923,21 @@ def api_live_dedup_probe():
             'dedup_window_seconds': LIVE_VIOLATION_DEDUP_WINDOW_SECONDS,
         })
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Live dedup probe error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Section: run the api report progress workflow with clear inputs and outputs.
 @app.route('/api/report-progress', methods=['GET'])
 def api_report_progress():
     """Get current report generation progress."""
+    # Protect this step so expected failures can fall back cleanly.
     try:
         progress = get_report_progress()
 
         # Add queue size if available
+        # Choose the correct branch before the workflow continues.
         if violation_queue:
             progress['queue_size'] = violation_queue.get_queue_size()
         else:
@@ -17931,17 +20947,22 @@ def api_report_progress():
 
     except Exception as e:
         logger.error(f"Error getting progress: {e}")
+        # Return the prepared result to the caller.
         return jsonify({'error': str(e)}), 500
 
 
+# Section: run the api failed reports workflow with clear inputs and outputs.
 @app.route('/api/failed-reports', methods=['GET'])
 def api_failed_reports():
     """Get detailed information about failed reports for debugging."""
+    # Protect this step so expected failures can fall back cleanly.
     try:
         if not db_manager:
+            # Return the prepared result to the caller.
             return jsonify({'error': 'Database not available'}), 503
 
         # Get all failed reports with error messages
+        # Open the managed resource only for the block that needs it.
         with db_manager.conn.cursor() as cur:
             cur.execute("""
                 SELECT
@@ -17958,8 +20979,10 @@ def api_failed_reports():
                 ORDER BY timestamp DESC
                 LIMIT 50
             """)
+            # Prepare failed reports for the next step.
             failed_reports = cur.fetchall()
 
+        # Return the prepared result to the caller.
         return jsonify({
             'count': len(failed_reports),
             'reports': failed_reports
@@ -17970,6 +20993,7 @@ def api_failed_reports():
         return jsonify({'error': str(e)}), 500
 
 
+# Section: run the api reliability stats workflow with clear inputs and outputs.
 @app.route('/api/reliability/stats', methods=['GET'])
 def api_reliability_stats():
     """
@@ -17978,8 +21002,11 @@ def api_reliability_stats():
     Query params:
       - window: number of most recent detection events to analyze (default 100, max 1000)
     """
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare window for the next step.
             window = int(request.args.get('window', 100))
         except Exception:
             window = 100
@@ -17989,6 +21016,7 @@ def api_reliability_stats():
         using_db_source = bool(db_manager is not None and getattr(db_manager, 'conn', None) is not None)
         if using_db_source:
             with db_manager.conn.cursor() as cur:
+                # Trigger the side effect required for this stage.
                 cur.execute("""
                     SELECT
                         de.report_id,
@@ -18001,8 +21029,10 @@ def api_reliability_stats():
                     ORDER BY de.timestamp DESC
                     LIMIT %s
                 """, (window,))
+                # Prepare rows for the next step.
                 rows = cur.fetchall()
         else:
+            # Process each item in this collection using the same rule set.
             for violation_dir in sorted(VIOLATIONS_DIR.iterdir(), reverse=True) if VIOLATIONS_DIR.exists() else []:
                 if not violation_dir.is_dir():
                     continue
@@ -18010,20 +21040,25 @@ def api_reliability_stats():
                 report_id = violation_dir.name
                 report_html_path = violation_dir / 'report.html'
                 failure_path = violation_dir / 'generation_failure.txt'
+                # Prepare skipped path for the next step.
                 skipped_path = violation_dir / 'SKIPPED_NOT_WORK_ENVIRONMENT.txt'
 
                 status = 'pending'
                 error_message = ''
                 if failure_path.exists():
+                    # Prepare status for the next step.
                     status = 'failed'
                     try:
+                        # Prepare error message for the next step.
                         error_message = failure_path.read_text(encoding='utf-8', errors='ignore')[:500]
                     except Exception:
                         error_message = 'local_generation_failure'
+                # Choose the correct branch before the workflow continues.
                 elif skipped_path.exists():
                     status = 'skipped'
                     error_message = 'Skipped by environment validation'
                 elif report_html_path.exists():
+                    # Prepare status for the next step.
                     status = 'completed'
                 elif (violation_dir / 'caption.txt').exists():
                     status = 'generating'
@@ -18036,25 +21071,32 @@ def api_reliability_stats():
                     'report_html_key': None,
                 })
 
+                # Choose the correct branch before the workflow continues.
                 if len(rows) >= window:
                     break
 
+        # Prepare fallback markers for the next step.
         fallback_markers = (
             'report generator not available',
             'fallback report',
             'explicit failed-report fallback'
         )
 
+        # Section: run the is fallback content workflow with clear inputs and outputs.
         def _is_fallback_content(report_id: str) -> bool:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare local path for the next step.
                 local_path = VIOLATIONS_DIR / report_id / 'report.html'
                 if not local_path.exists():
+                    # Return the prepared result to the caller.
                     return False
                 content = local_path.read_text(encoding='utf-8', errors='ignore')[:4000].lower()
                 return any(marker in content for marker in fallback_markers)
             except Exception:
                 return False
 
+        # Prepare totals for the next step.
         totals = {
             'considered': 0,
             'real_success': 0,
@@ -18065,7 +21107,9 @@ def api_reliability_stats():
         }
         failure_causes = {}
 
+        # Process each item in this collection using the same rule set.
         for row in rows:
+            # Prepare report id for the next step.
             report_id = row.get('report_id')
             status = str(row.get('status') or '').strip().lower()
             error_message = (row.get('error_message') or '').strip()
@@ -18076,6 +21120,7 @@ def api_reliability_stats():
 
             totals['considered'] += 1
 
+            # Prepare is real success for the next step.
             is_real_success = status == 'completed' and has_report and not fallback_content
             is_fallback_needed = (
                 status in ('failed', 'partial', 'skipped')
@@ -18085,6 +21130,7 @@ def api_reliability_stats():
 
             if is_real_success:
                 totals['real_success'] += 1
+            # Choose the correct branch before the workflow continues.
             elif is_fallback_needed:
                 totals['fallback_needed'] += 1
             elif status in ('pending', 'generating', 'queued', 'processing'):
@@ -18094,9 +21140,11 @@ def api_reliability_stats():
 
             if status in ('failed', 'partial', 'skipped'):
                 totals['hard_failed'] += 1
+                # Prepare cause key for the next step.
                 cause_key = 'unknown'
                 upper = error_message.upper()
                 if 'RESOURCE_EXHAUSTED' in upper or 'QUOTA' in upper or '429' in upper:
+                    # Prepare cause key for the next step.
                     cause_key = 'quota_or_rate_limit'
                 elif 'JSON' in upper or 'PARSE' in upper:
                     cause_key = 'response_parse_error'
@@ -18104,10 +21152,12 @@ def api_reliability_stats():
                     cause_key = 'timeout'
                 elif "STRFTIME" in upper:
                     cause_key = 'timestamp_format_bug'
+                # Choose the correct branch before the workflow continues.
                 elif error_message:
                     cause_key = 'other_error'
                 failure_causes[cause_key] = failure_causes.get(cause_key, 0) + 1
 
+        # Prepare considered for the next step.
         considered = totals['considered']
         real_success_rate = (totals['real_success'] / considered) if considered else 0.0
         fallback_needed_rate = (totals['fallback_needed'] / considered) if considered else 0.0
@@ -18129,6 +21179,7 @@ def api_reliability_stats():
         })
 
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error computing reliability stats: {e}", exc_info=True)
         return jsonify({'error': 'Failed to compute reliability stats'}), 500
 
@@ -18142,7 +21193,9 @@ def system_info():
     """Get system information."""
     import torch
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare resolved model path for the next step.
         resolved_model_path = resolve_model_path()
         model_exists = True
     except Exception:
@@ -18159,25 +21212,32 @@ def system_info():
         'model_exists': model_exists
     }
 
+    # Return the prepared result to the caller.
     return jsonify(info)
 
 
+# Section: run the api system egress workflow with clear inputs and outputs.
 @app.route('/api/system/egress', methods=['GET'])
 def api_system_egress():
     """Get Supabase storage egress usage and budget status."""
     if storage_manager is None:
+        # Return the prepared result to the caller.
         return jsonify({
             'available': False,
             'message': 'Supabase storage not configured',
         }), 503
 
+    # Prepare usage for the next step.
     usage = storage_manager.get_egress_usage()
     budget_bytes = usage.get('budget_bytes') or 0
     downloaded_bytes = usage.get('bytes_downloaded') or 0
     remaining_bytes = usage.get('remaining_bytes')
 
+    # Section: run the bytes to gb workflow with clear inputs and outputs.
     def _bytes_to_gb(value):
+        # Choose the correct branch before the workflow continues.
         if value is None:
+            # Return the prepared result to the caller.
             return None
         return round(float(value) / (1024 ** 3), 3)
 
@@ -18193,9 +21253,11 @@ def api_system_egress():
         'blocked': bool(usage.get('blocked')),
         'blocked_reason': usage.get('blocked_reason'),
     }
+    # Return the prepared result to the caller.
     return jsonify(payload), 200
 
 
+# Section: run the api llm ping workflow with clear inputs and outputs.
 @app.route('/api/llm/ping', methods=['GET', 'POST'])
 def api_llm_ping():
     """
@@ -18216,6 +21278,7 @@ def api_llm_ping():
         "error": null|string
       }
     """
+    # Prepare diag for the next step.
     diag = _get_local_mode_diagnostics()
     base_url = diag.get('ollama_base_url') or 'http://localhost:11434'
     model = diag.get('ollama_model') or LOCAL_OLLAMA_UNIFIED_MODEL
@@ -18231,7 +21294,9 @@ def api_llm_ping():
         'error': None,
     }
 
+    # Choose the correct branch before the workflow continues.
     if not diag.get('ollama_running'):
+        # Prepare values needed by the next step.
         payload['error'] = 'Ollama service is not reachable at ' + base_url
         return jsonify(payload), 503
 
@@ -18240,7 +21305,9 @@ def api_llm_ping():
         return jsonify(payload), 503
 
     ping_body = request.get_json(silent=True) if request.method == 'POST' else {}
+    # Choose the correct branch before the workflow continues.
     if not isinstance(ping_body, dict):
+        # Prepare ping body for the next step.
         ping_body = {}
     prompt = ping_body.get('prompt') if request.method == 'POST' else None
     prompt = (prompt or 'Reply with the single word: PONG').strip()
@@ -18250,8 +21317,10 @@ def api_llm_ping():
         max_tokens = 4
     max_tokens = max(1, min(max_tokens, 8))
 
+    # Prepare start for the next step.
     start = time.monotonic()
     try:
+        # Prepare resp for the next step.
         resp = requests.post(
             f"{base_url.rstrip('/')}/api/generate",
             json={
@@ -18263,15 +21332,18 @@ def api_llm_ping():
             },
             timeout=20,
         )
+        # Prepare latency ms for the next step.
         latency_ms = int((time.monotonic() - start) * 1000)
         payload['latency_ms'] = latency_ms
 
         if not resp.ok:
+            # Prepare values needed by the next step.
             payload['error'] = f"LLM HTTP {resp.status_code}: {resp.text[:200]}"
             return jsonify(payload), 502
 
         body = resp.json() if resp.content else {}
         text = str(body.get('response') or '').strip()
+        # Prepare values needed by the next step.
         payload['response_preview'] = text[:200]
         payload['ok'] = True
         return jsonify(payload), 200
@@ -18281,10 +21353,12 @@ def api_llm_ping():
         return jsonify(payload), 504
     except Exception as exc:
         payload['latency_ms'] = int((time.monotonic() - start) * 1000)
+        # Prepare values needed by the next step.
         payload['error'] = str(exc)
         return jsonify(payload), 500
 
 
+# Section: run the api system local mode snapshot workflow with clear inputs and outputs.
 @app.route('/api/system/local-mode-snapshot', methods=['GET'])
 def api_system_local_mode_snapshot():
     """
@@ -18295,6 +21369,7 @@ def api_system_local_mode_snapshot():
     mock-report mode is active. Intended as a single endpoint to answer
     "is my local install actually independent from Supabase?".
     """
+    # Prepare routing profile for the next step.
     routing_profile = str(os.getenv('CASM_ROUTING_PROFILE', 'cloud') or 'cloud').strip().lower()
     allow_offline = ALLOW_OFFLINE_LOCAL_MODE
     has_creds = _local_mode_has_supabase_credentials()
@@ -18302,6 +21377,7 @@ def api_system_local_mode_snapshot():
     mock_env = str(os.getenv('CASM_MOCK_REPORTS', '') or '').strip().lower() in ('1', 'true', 'yes', 'on')
 
     try:
+        # Prepare local reports dir for the next step.
         local_reports_dir = Path(__file__).resolve().parent / 'pipeline' / 'reports'
         local_report_count = (
             sum(1 for child in local_reports_dir.iterdir() if child.is_dir())
@@ -18312,6 +21388,7 @@ def api_system_local_mode_snapshot():
         local_reports_path = None
         local_report_count = 0
 
+    # Prepare snapshot for the next step.
     snapshot = {
         'routing_profile': routing_profile,
         'is_strict_local': routing_profile == 'local',
@@ -18323,13 +21400,16 @@ def api_system_local_mode_snapshot():
         'local_reports_dir': local_reports_path,
         'local_report_count': local_report_count,
     }
+    # Return the prepared result to the caller.
     return jsonify(snapshot), 200
 
 
+# Section: run the api health summary workflow with clear inputs and outputs.
 @app.route('/api/health/summary')
 def api_health_summary():
     """Return a compact operational health snapshot for the full pipeline."""
     try:
+        # Prepare queue data for the next step.
         queue_data = {
             'available': violation_queue is not None,
             'worker_running': _is_queue_worker_alive(),
@@ -18339,7 +21419,9 @@ def api_health_summary():
             'capacity': None,
         }
         if violation_queue is not None:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare qstats for the next step.
                 qstats = violation_queue.get_stats()
                 queue_data.update({
                     'queue_size': qstats.get('current_size', 0),
@@ -18349,8 +21431,10 @@ def api_health_summary():
                     'total_rate_limited': qstats.get('total_rate_limited', 0),
                 })
             except Exception as qerr:
+                # Prepare values needed by the next step.
                 queue_data['error'] = str(qerr)
 
+        # Prepare rag file for the next step.
         rag_file = Path(RAG_CONFIG.get('integration_file', '')) if isinstance(RAG_CONFIG, dict) else None
         rag_file_exists = bool(rag_file and str(rag_file) and rag_file.exists())
 
@@ -18361,8 +21445,10 @@ def api_health_summary():
             'nlp_provider_order': (MODEL_API_CONFIG or {}).get('nlp_provider_order', []),
         }
 
+        # Prepare warnings for the next step.
         warnings = []
         if not rag_file_exists:
+            # Trigger the side effect required for this stage.
             warnings.append('RAG integration file missing; regulation enrichment may be reduced')
         if queue_data.get('available') and not queue_data.get('worker_running'):
             warnings.append('Queue available but worker thread is not running')
@@ -18375,8 +21461,10 @@ def api_health_summary():
             and float(queue_data.get('worker_heartbeat_age_seconds') or 0.0)
             >= QUEUE_WORKER_HEARTBEAT_STALE_SECONDS
         ):
+            # Trigger the side effect required for this stage.
             warnings.append('Queue worker heartbeat is stale; watchdog auto-recovery may be in progress')
 
+        # Return the prepared result to the caller.
         return jsonify({
             'timestamp_utc': datetime.utcnow().replace(microsecond=0).isoformat() + 'Z',
             'status': 'ok',
@@ -18392,6 +21480,7 @@ def api_health_summary():
             'warnings': warnings,
         })
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error building health summary: {e}", exc_info=True)
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
@@ -18403,16 +21492,20 @@ def api_health_summary():
 @app.errorhandler(404)
 def not_found(e):
     """Handle 404 errors."""
+    # Choose the correct branch before the workflow continues.
     if request.path.startswith('/api/'):
+        # Return the prepared result to the caller.
         return jsonify({'error': 'Not found'}), 404
     if not SERVE_FRONTEND:
         return jsonify({'error': 'Not found'}), 404
     return send_from_directory('frontend', 'index.html')
 
 
+# Section: run the server error workflow with clear inputs and outputs.
 @app.errorhandler(500)
 def server_error(e):
     """Handle 500 errors."""
+    # Trigger the side effect required for this stage.
     logger.error(f"Server error: {e}")
     return jsonify({'error': 'Internal server error'}), 500
 
@@ -18423,7 +21516,9 @@ def server_error(e):
 
 def cleanup():
     """Cleanup resources on shutdown."""
+    # Open the managed resource only for the block that needs it.
     with camera_lock:
+        # Trigger the side effect required for this stage.
         _stop_live_source_locked()
 
     try:
@@ -18446,6 +21541,7 @@ PROVISIONING_FILE_STATE_DIR = (
     if str(os.getenv('CASM_STATE_DIR') or '').strip()
     else APP_DIR
 )
+# Prepare pending devices file for the next step.
 PENDING_DEVICES_FILE = PROVISIONING_FILE_STATE_DIR / 'pending_devices.json'
 BOOTSTRAP_TOKEN_STATE_FILE = PROVISIONING_FILE_STATE_DIR / 'bootstrap_tokens.json'
 LOCAL_MODE_HEARTBEAT_FILE = PROVISIONING_FILE_STATE_DIR / 'local_mode_heartbeats.json'
@@ -18454,9 +21550,12 @@ BOOTSTRAP_TOKEN_STATE_LOCK = Lock()
 LOCAL_MODE_HEARTBEAT_LOCK = Lock()
 
 
+# Section: run the resolve provisioning state backend workflow with clear inputs and outputs.
 def _resolve_provisioning_state_backend() -> bool:
+    # Prepare raw mode for the next step.
     raw_mode = str(os.getenv('PROVISIONING_STATE_USE_SUPABASE', 'auto')).strip().lower()
     if raw_mode in {'1', 'true', 'yes', 'on'}:
+        # Return the prepared result to the caller.
         return True
     if raw_mode in {'0', 'false', 'no', 'off'}:
         return False
@@ -18465,15 +21564,20 @@ def _resolve_provisioning_state_backend() -> bool:
     db_url = str(os.getenv('SUPABASE_DB_URL', '')).strip().lower()
     if not db_url:
         return False
+    # Choose the correct branch before the workflow continues.
     if 'localhost' in db_url or '127.0.0.1' in db_url:
+        # Return the prepared result to the caller.
         return False
     return True
 
 
+# Prepare provisioning state use supabase for the next step.
 PROVISIONING_STATE_USE_SUPABASE = _resolve_provisioning_state_backend()
 
 
+# Section: run the env truthy workflow with clear inputs and outputs.
 def _env_truthy(name: str, default: bool = False) -> bool:
+    # Prepare raw for the next step.
     raw = str(os.getenv(name, '1' if default else '0')).strip().lower()
     return raw in {'1', 'true', 'yes', 'on'}
 
@@ -18482,6 +21586,7 @@ PROVISIONING_STATE_ALLOW_FILE_FALLBACK = _env_truthy(
     'PROVISIONING_STATE_ALLOW_FILE_FALLBACK',
     default=False,
 )
+# Prepare provisioning state require shared db for the next step.
 PROVISIONING_STATE_REQUIRE_SHARED_DB = (
     PROVISIONING_STATE_USE_SUPABASE
     and _is_hosted_runtime_environment()
@@ -18492,6 +21597,7 @@ PROVISIONING_STATE_SCHEMA_READY = False
 
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', '')
 # ADMIN_USERNAME  when non-empty, Basic-Auth username is also validated on all admin endpoints.
+# Prepare admin username for the next step.
 ADMIN_USERNAME = os.getenv('ADMIN_USERNAME', '')
 # When False (default), /api/provision/request requires an X-Admin-Token header matching ADMIN_PASSWORD.
 # Set to '1'/'true'/'yes' only in isolated trusted networks where unauthenticated self-registration is acceptable.
@@ -18502,18 +21608,23 @@ BOOTSTRAP_JTI_RETENTION_SECONDS = int(os.getenv('BOOTSTRAP_JTI_RETENTION_SECONDS
 DEFAULT_INSTALLER_REPO_ZIP_URL = (
     'https://github.com/FrankieLingIsHere/FYPA_AI_Model_Development-Integration/archive/refs/heads/main.zip'
 )
+# Prepare default installer source root for the next step.
 DEFAULT_INSTALLER_SOURCE_ROOT = 'FYPA_AI_Model_Development-Integration-main'
 
 
+# Section: run the safe int env workflow with clear inputs and outputs.
 def _safe_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
     """Read an integer env var with bounds and fallback."""
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare value for the next step.
         value = int(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         value = default
     return max(minimum, min(value, maximum))
 
 
+# Prepare provision exchange token ttl seconds for the next step.
 PROVISION_EXCHANGE_TOKEN_TTL_SECONDS = _safe_int_env(
     'PROVISION_EXCHANGE_TOKEN_TTL_SECONDS',
     PROVISION_EXCHANGE_TOKEN_TTL_SECONDS,
@@ -18526,6 +21637,7 @@ INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS = _safe_int_env(
     30,
     3600,
 )
+# Prepare bootstrap jti retention seconds for the next step.
 BOOTSTRAP_JTI_RETENTION_SECONDS = _safe_int_env(
     'BOOTSTRAP_JTI_RETENTION_SECONDS',
     BOOTSTRAP_JTI_RETENTION_SECONDS,
@@ -18538,6 +21650,7 @@ PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS = _safe_int_env(
     0,
     24 * 3600,
 )
+# Prepare provisioning state query timeout ms for the next step.
 PROVISIONING_STATE_QUERY_TIMEOUT_MS = _safe_int_env(
     'PROVISIONING_STATE_QUERY_TIMEOUT_MS',
     3000,
@@ -18552,9 +21665,12 @@ PROVISIONING_STATE_ADMIN_MAX_ROWS = _safe_int_env(
 )
 
 
+# Section: run the normalize pending device record workflow with clear inputs and outputs.
 def _normalize_pending_device_record(raw_record: Any) -> Dict[str, Any]:
     """Ensure expected keys exist for backward-compatible pending-device records."""
+    # Choose the correct branch before the workflow continues.
     if not isinstance(raw_record, dict):
+        # Return the prepared result to the caller.
         return {
             'status': 'pending',
             'requested_at': datetime.now(timezone.utc).isoformat(),
@@ -18564,6 +21680,7 @@ def _normalize_pending_device_record(raw_record: Any) -> Dict[str, Any]:
             'provisioned_at': None,
         }
 
+    # Prepare normalized for the next step.
     normalized = dict(raw_record)
     normalized.setdefault('status', 'pending')
     normalized.setdefault('requested_at', datetime.now(timezone.utc).isoformat())
@@ -18574,11 +21691,15 @@ def _normalize_pending_device_record(raw_record: Any) -> Dict[str, Any]:
     return normalized
 
 
+# Section: run the maybe iso datetime workflow with clear inputs and outputs.
 def _maybe_iso_datetime(value: Any) -> Optional[str]:
+    # Choose the correct branch before the workflow continues.
     if value is None:
+        # Return the prepared result to the caller.
         return None
     if hasattr(value, 'isoformat'):
         try:
+            # Return the prepared result to the caller.
             return value.isoformat()
         except Exception:
             return None
@@ -18586,10 +21707,13 @@ def _maybe_iso_datetime(value: Any) -> Optional[str]:
     return text or None
 
 
+# Section: run the parse iso epoch workflow with clear inputs and outputs.
 def _parse_iso_epoch(value: Any) -> Optional[float]:
     """Parse an ISO datetime string into epoch seconds."""
+    # Prepare text for the next step.
     text = str(value or '').strip()
     if not text:
+        # Return the prepared result to the caller.
         return None
 
     normalized = text
@@ -18599,8 +21723,10 @@ def _parse_iso_epoch(value: Any) -> Optional[float]:
     try:
         dt = datetime.fromisoformat(normalized)
     except Exception:
+        # Return the prepared result to the caller.
         return None
 
+    # Choose the correct branch before the workflow continues.
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
 
@@ -18610,12 +21736,15 @@ def _parse_iso_epoch(value: Any) -> Optional[float]:
         return None
 
 
+# Section: run the normalize local mode heartbeat record workflow with clear inputs and outputs.
 def _normalize_local_mode_heartbeat_record(machine_id: str, raw_record: Any) -> Dict[str, Any]:
+    # Prepare normalized machine id for the next step.
     normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
     record = raw_record if isinstance(raw_record, dict) else {}
 
     last_seen_at = str(record.get('last_seen_at') or '').strip()
     if not last_seen_at:
+        # Prepare last seen at for the next step.
         last_seen_at = datetime.now(timezone.utc).isoformat()
 
     return {
@@ -18632,12 +21761,15 @@ def _normalize_local_mode_heartbeat_record(machine_id: str, raw_record: Any) -> 
     }
 
 
+# Section: run the prune local mode heartbeats workflow with clear inputs and outputs.
 def _prune_local_mode_heartbeats(data: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    # Prepare now epoch for the next step.
     now_epoch = time.time()
     cutoff_epoch = now_epoch - int(LOCAL_MODE_HEARTBEAT_RETENTION_SECONDS)
     kept: Dict[str, Dict[str, Any]] = {}
 
     for machine_id, record in (data or {}).items():
+        # Prepare normalized machine id for the next step.
         normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
         if not normalized_machine_id:
             continue
@@ -18647,11 +21779,14 @@ def _prune_local_mode_heartbeats(data: Dict[str, Dict[str, Any]]) -> Dict[str, D
             continue
         if seen_epoch < cutoff_epoch:
             continue
+        # Prepare values needed by the next step.
         kept[normalized_machine_id] = normalized_record
 
+    # Return the prepared result to the caller.
     return kept
 
 
+# Section: run the is missing relation error workflow with clear inputs and outputs.
 def _is_missing_relation_error(exc: Exception) -> bool:
     pg_code = str(getattr(exc, 'pgcode', '') or '').strip()
     if pg_code == '42P01':
@@ -18660,8 +21795,11 @@ def _is_missing_relation_error(exc: Exception) -> bool:
     return 'does not exist' in message and 'relation' in message
 
 
+# Section: run the get provisioning db connection workflow with clear inputs and outputs.
 def _get_provisioning_db_connection() -> Optional[Any]:
+    # Choose the correct branch before the workflow continues.
     if not PROVISIONING_STATE_USE_SUPABASE:
+        # Return the prepared result to the caller.
         return None
 
     manager = db_manager
@@ -18672,15 +21810,19 @@ def _get_provisioning_db_connection() -> Optional[Any]:
         manager._ensure_connection()
         return getattr(manager, 'conn', None)
     except Exception as db_err:
+        # Trigger the side effect required for this stage.
         logger.debug(f"Provisioning DB backend unavailable; falling back to file storage: {db_err}")
         return None
 
 
+# Section: run the apply provisioning query timeouts workflow with clear inputs and outputs.
 def _apply_provisioning_query_timeouts(cur: Any) -> None:
     """Keep provisioning UI/status checks from hanging on slow shared-state queries."""
+    # Prepare timeout ms for the next step.
     timeout_ms = max(500, int(PROVISIONING_STATE_QUERY_TIMEOUT_MS or 3000))
     try:
         cur.execute("SET LOCAL statement_timeout = %s", (timeout_ms,))
+        # Trigger the side effect required for this stage.
         cur.execute("SET LOCAL lock_timeout = %s", (min(timeout_ms, 2000),))
     except Exception:
         # Older drivers or transaction states may reject SET LOCAL; the main
@@ -18688,8 +21830,11 @@ def _apply_provisioning_query_timeouts(cur: Any) -> None:
         pass
 
 
+# Section: run the ensure provisioning state schema workflow with clear inputs and outputs.
 def _ensure_provisioning_state_schema(conn: Optional[Any] = None) -> bool:
+    # Choose the correct branch before the workflow continues.
     if not PROVISIONING_STATE_USE_SUPABASE:
+        # Return the prepared result to the caller.
         return False
 
     global PROVISIONING_STATE_SCHEMA_READY
@@ -18699,14 +21844,17 @@ def _ensure_provisioning_state_schema(conn: Optional[Any] = None) -> bool:
 
     with PROVISIONING_STATE_SCHEMA_LOCK:
         if PROVISIONING_STATE_SCHEMA_READY:
+            # Return the prepared result to the caller.
             return True
 
+        # Prepare active conn for the next step.
         active_conn = conn or _get_provisioning_db_connection()
         if active_conn is None:
             return False
 
         try:
             with active_conn.cursor() as cur:
+                # Trigger the side effect required for this stage.
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS public.provisioning_devices (
@@ -18722,6 +21870,7 @@ def _ensure_provisioning_state_schema(conn: Optional[Any] = None) -> bool:
                     )
                     """
                 )
+                # Trigger the side effect required for this stage.
                 cur.execute(
                     """
                     CREATE INDEX IF NOT EXISTS idx_provisioning_devices_status
@@ -18734,6 +21883,7 @@ def _ensure_provisioning_state_schema(conn: Optional[Any] = None) -> bool:
                     ON public.provisioning_devices (requested_at DESC)
                     """
                 )
+                # Trigger the side effect required for this stage.
                 cur.execute(
                     """
                     CREATE TABLE IF NOT EXISTS public.provisioning_bootstrap_jti (
@@ -18743,64 +21893,82 @@ def _ensure_provisioning_state_schema(conn: Optional[Any] = None) -> bool:
                     )
                     """
                 )
+                # Trigger the side effect required for this stage.
                 cur.execute(
                     """
                     CREATE INDEX IF NOT EXISTS idx_provisioning_bootstrap_jti_used_at
                     ON public.provisioning_bootstrap_jti (used_at DESC)
                     """
                 )
+            # Trigger the side effect required for this stage.
             active_conn.commit()
             PROVISIONING_STATE_SCHEMA_READY = True
             logger.info('Provisioning state schema verified in Supabase')
             return True
         except Exception as schema_err:
             try:
+                # Trigger the side effect required for this stage.
                 active_conn.rollback()
             except Exception:
                 pass
+            # Trigger the side effect required for this stage.
             logger.warning(f"Failed to initialize provisioning state schema in Supabase: {schema_err}")
             return False
 
 
+# Section: run the json backup path workflow with clear inputs and outputs.
 def _json_backup_path(path: Path) -> Path:
+    # Return the prepared result to the caller.
     return path.with_name(f"{path.name}.bak")
 
 
+# Section: run the atomic write json workflow with clear inputs and outputs.
 def _atomic_write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     backup_path = _json_backup_path(path)
     tmp_path = path.with_name(f"{path.name}.tmp.{uuid.uuid4().hex}")
 
     if path.exists():
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Trigger the side effect required for this stage.
             shutil.copy2(path, backup_path)
         except Exception as backup_err:
             logger.debug(f"Could not update JSON backup for {path.name}: {backup_err}")
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(payload, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
+        # Trigger the side effect required for this stage.
         os.replace(tmp_path, path)
     finally:
         if tmp_path.exists():
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Trigger the side effect required for this stage.
                 tmp_path.unlink()
             except Exception:
                 pass
 
 
+# Section: run the load local mode heartbeats from file workflow with clear inputs and outputs.
 def _load_local_mode_heartbeats_from_file() -> Dict[str, Dict[str, Any]]:
+    # Prepare candidate paths for the next step.
     candidate_paths = [LOCAL_MODE_HEARTBEAT_FILE]
     if LOCAL_MODE_HEARTBEAT_FILE.exists():
+        # Trigger the side effect required for this stage.
         candidate_paths.append(_json_backup_path(LOCAL_MODE_HEARTBEAT_FILE))
 
     for path in candidate_paths:
         if not path.exists():
             continue
         try:
+            # Open the managed resource only for the block that needs it.
             with open(path, 'r', encoding='utf-8') as f:
+                # Prepare payload for the next step.
                 payload = json.load(f)
             if not isinstance(payload, dict):
                 logger.warning(f"Ignoring non-dict local heartbeat payload in {path.name}")
@@ -18811,35 +21979,46 @@ def _load_local_mode_heartbeats_from_file() -> Dict[str, Dict[str, Any]]:
                 normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
                 if not normalized_machine_id:
                     continue
+                # Prepare values needed by the next step.
                 normalized[normalized_machine_id] = _normalize_local_mode_heartbeat_record(
                     normalized_machine_id,
                     record,
                 )
+            # Return the prepared result to the caller.
             return _prune_local_mode_heartbeats(normalized)
         except Exception as e:
             logger.warning(f"Failed to load local heartbeat records from {path.name}: {e}")
 
+    # Return the prepared result to the caller.
     return {}
 
 
+# Section: run the save local mode heartbeats to file workflow with clear inputs and outputs.
 def _save_local_mode_heartbeats_to_file(data: Dict[str, Dict[str, Any]]) -> None:
     _atomic_write_json(LOCAL_MODE_HEARTBEAT_FILE, data)
 
 
+# Section: run the load local mode heartbeats workflow with clear inputs and outputs.
 def _load_local_mode_heartbeats() -> Dict[str, Dict[str, Any]]:
     with LOCAL_MODE_HEARTBEAT_LOCK:
+        # Prepare records for the next step.
         records = _load_local_mode_heartbeats_from_file()
         pruned = _prune_local_mode_heartbeats(records)
         if pruned != records:
+            # Trigger the side effect required for this stage.
             _save_local_mode_heartbeats_to_file(pruned)
         return pruned
 
 
+# Section: run the save local mode heartbeats workflow with clear inputs and outputs.
 def _save_local_mode_heartbeats(data: Dict[str, Dict[str, Any]]) -> None:
+    # Open the managed resource only for the block that needs it.
     with LOCAL_MODE_HEARTBEAT_LOCK:
         normalized: Dict[str, Dict[str, Any]] = {}
+        # Process each item in this collection using the same rule set.
         for machine_id, record in (data or {}).items():
             normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
+            # Choose the correct branch before the workflow continues.
             if not normalized_machine_id:
                 continue
             normalized[normalized_machine_id] = _normalize_local_mode_heartbeat_record(
@@ -18847,39 +22026,50 @@ def _save_local_mode_heartbeats(data: Dict[str, Dict[str, Any]]) -> None:
                 record,
             )
 
+        # Prepare pruned for the next step.
         pruned = _prune_local_mode_heartbeats(normalized)
         _save_local_mode_heartbeats_to_file(pruned)
 
 
+# Section: run the upsert local mode heartbeat workflow with clear inputs and outputs.
 def _upsert_local_mode_heartbeat(machine_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    # Prepare normalized machine id for the next step.
     normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
     if not normalized_machine_id:
         return {}
 
     with LOCAL_MODE_HEARTBEAT_LOCK:
+        # Prepare records for the next step.
         records = _load_local_mode_heartbeats_from_file()
         existing = records.get(normalized_machine_id)
         if isinstance(existing, dict):
+            # Prepare record for the next step.
             record = {**existing, **(record or {})}
         records[normalized_machine_id] = _normalize_local_mode_heartbeat_record(
             normalized_machine_id,
             record,
         )
         pruned = _prune_local_mode_heartbeats(records)
+        # Trigger the side effect required for this stage.
         _save_local_mode_heartbeats_to_file(pruned)
         return dict(pruned.get(normalized_machine_id) or {})
 
 
+# Section: run the load pending devices from file workflow with clear inputs and outputs.
 def _load_pending_devices_from_file() -> Dict[str, Dict[str, Any]]:
+    # Prepare candidate paths for the next step.
     candidate_paths = [PENDING_DEVICES_FILE]
     if PENDING_DEVICES_FILE.exists():
         candidate_paths.append(_json_backup_path(PENDING_DEVICES_FILE))
 
     for path in candidate_paths:
+        # Choose the correct branch before the workflow continues.
         if not path.exists():
             continue
         try:
+            # Open the managed resource only for the block that needs it.
             with open(path, 'r', encoding='utf-8') as f:
+                # Prepare data for the next step.
                 data = json.load(f)
             if not isinstance(data, dict):
                 logger.warning(f"Ignoring non-dict pending device payload in {path.name}")
@@ -18889,26 +22079,34 @@ def _load_pending_devices_from_file() -> Dict[str, Dict[str, Any]]:
                 for machine_id, record in data.items()
             }
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.warning(f"Failed to load pending devices from {path.name}: {e}")
 
+    # Return the prepared result to the caller.
     return {}
 
 
+# Section: run the save pending devices to file workflow with clear inputs and outputs.
 def _save_pending_devices_to_file(data: Dict[str, Dict[str, Any]]) -> None:
     _atomic_write_json(PENDING_DEVICES_FILE, data)
 
 
+# Section: run the clear pending devices file workflow with clear inputs and outputs.
 def _clear_pending_devices_file() -> int:
     devices = _load_pending_devices_from_file()
+    # Trigger the side effect required for this stage.
     _save_pending_devices_to_file({})
     return len(devices)
 
 
+# Section: run the delete pending device file workflow with clear inputs and outputs.
 def _delete_pending_device_file(machine_id: str) -> bool:
     machine_id = str(machine_id or '').strip()
     if not machine_id:
+        # Return the prepared result to the caller.
         return False
     devices = _load_pending_devices_from_file()
+    # Choose the correct branch before the workflow continues.
     if machine_id not in devices:
         return False
     devices.pop(machine_id, None)
@@ -18916,15 +22114,19 @@ def _delete_pending_device_file(machine_id: str) -> bool:
     return True
 
 
+# Section: run the load pending devices from db workflow with clear inputs and outputs.
 def _load_pending_devices_from_db(
     _retry_on_missing_relation: bool = True,
 ) -> Optional[Dict[str, Dict[str, Any]]]:
+    # Prepare conn for the next step.
     conn = _get_provisioning_db_connection()
     if conn is None:
+        # Return the prepared result to the caller.
         return None
 
     try:
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             _apply_provisioning_query_timeouts(cur)
             cur.execute(
                 """
@@ -18933,21 +22135,26 @@ def _load_pending_devices_from_db(
                 """
             )
             rows = cur.fetchall() or []
+        # Trigger the side effect required for this stage.
         conn.commit()
     except Exception as e:
         try:
+            # Trigger the side effect required for this stage.
             conn.rollback()
         except Exception:
             pass
         if _is_missing_relation_error(e):
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _load_pending_devices_from_db(_retry_on_missing_relation=False)
             logger.info('Supabase provisioning_devices table not found; using local file storage')
         else:
             logger.warning(f"Failed to load pending devices from Supabase; using file fallback: {e}")
+        # Return the prepared result to the caller.
         return None
 
     records: Dict[str, Dict[str, Any]] = {}
+    # Process each item in this collection using the same rule set.
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -18955,6 +22162,7 @@ def _load_pending_devices_from_db(
         if not machine_id:
             continue
 
+        # Prepare values needed by the next step.
         records[machine_id] = _normalize_pending_device_record({
             'status': str(row.get('status') or 'pending').strip().lower(),
             'requested_at': _maybe_iso_datetime(row.get('requested_at')),
@@ -18964,11 +22172,14 @@ def _load_pending_devices_from_db(
             'provisioned_at': _maybe_iso_datetime(row.get('provisioned_at')),
         })
 
+    # Return the prepared result to the caller.
     return records
 
 
+# Section: run the row to pending device record workflow with clear inputs and outputs.
 def _row_to_pending_device_record(row: Any) -> Dict[str, Any]:
     if not isinstance(row, dict):
+        # Return the prepared result to the caller.
         return {}
     return _normalize_pending_device_record({
         'status': str(row.get('status') or 'pending').strip().lower(),
@@ -18980,12 +22191,15 @@ def _row_to_pending_device_record(row: Any) -> Dict[str, Any]:
     })
 
 
+# Section: run the load pending device from db workflow with clear inputs and outputs.
 def _load_pending_device_from_db(
     machine_id: str,
     _retry_on_missing_relation: bool = True,
 ) -> Optional[Dict[str, Any]]:
+    # Prepare conn for the next step.
     conn = _get_provisioning_db_connection()
     if conn is None:
+        # Return the prepared result to the caller.
         return None
 
     normalized_machine_id = str(machine_id or '').strip()
@@ -18994,6 +22208,7 @@ def _load_pending_device_from_db(
 
     try:
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             _apply_provisioning_query_timeouts(cur)
             cur.execute(
                 """
@@ -19004,7 +22219,9 @@ def _load_pending_device_from_db(
                 """,
                 (normalized_machine_id,),
             )
+            # Prepare row for the next step.
             row = cur.fetchone()
+        # Trigger the side effect required for this stage.
         conn.commit()
     except Exception as e:
         try:
@@ -19013,27 +22230,35 @@ def _load_pending_device_from_db(
             pass
         if _is_missing_relation_error(e):
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _load_pending_device_from_db(normalized_machine_id, _retry_on_missing_relation=False)
+            # Trigger the side effect required for this stage.
             logger.info('Supabase provisioning_devices table not found; using local file storage')
         else:
             logger.warning(f"Failed to load pending device from Supabase; using file fallback: {e}")
+        # Return the prepared result to the caller.
         return None
 
+    # Choose the correct branch before the workflow continues.
     if not row:
         return {}
     return _row_to_pending_device_record(row)
 
 
+# Section: run the load pending devices for admin from db workflow with clear inputs and outputs.
 def _load_pending_devices_for_admin_from_db(
     limit: int = PROVISIONING_STATE_ADMIN_MAX_ROWS,
     _retry_on_missing_relation: bool = True,
 ) -> Optional[Dict[str, Dict[str, Any]]]:
+    # Prepare conn for the next step.
     conn = _get_provisioning_db_connection()
     if conn is None:
+        # Return the prepared result to the caller.
         return None
 
     try:
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             _apply_provisioning_query_timeouts(cur)
             cur.execute(
                 """
@@ -19052,7 +22277,9 @@ def _load_pending_devices_for_admin_from_db(
                 """,
                 (max(20, min(int(limit or PROVISIONING_STATE_ADMIN_MAX_ROWS), 2000)),),
             )
+            # Prepare rows for the next step.
             rows = cur.fetchall() or []
+        # Trigger the side effect required for this stage.
         conn.commit()
     except Exception as e:
         try:
@@ -19061,38 +22288,48 @@ def _load_pending_devices_for_admin_from_db(
             pass
         if _is_missing_relation_error(e):
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _load_pending_devices_for_admin_from_db(
                     limit=limit,
                     _retry_on_missing_relation=False,
                 )
+            # Trigger the side effect required for this stage.
             logger.info('Supabase provisioning_devices table not found; using local file storage')
         else:
             logger.warning(f"Failed to load admin pending-device list from Supabase; using file fallback: {e}")
+        # Return the prepared result to the caller.
         return None
 
     records: Dict[str, Dict[str, Any]] = {}
+    # Process each item in this collection using the same rule set.
     for row in rows:
         if not isinstance(row, dict):
             continue
         row_machine_id = str(row.get('machine_id') or '').strip()
         if not row_machine_id:
             continue
+        # Prepare values needed by the next step.
         records[row_machine_id] = _row_to_pending_device_record(row)
     return records
 
 
+# Section: run the save pending devices to db workflow with clear inputs and outputs.
 def _save_pending_devices_to_db(
     data: Dict[str, Dict[str, Any]],
     _retry_on_missing_relation: bool = True,
 ) -> Optional[bool]:
+    # Prepare conn for the next step.
     conn = _get_provisioning_db_connection()
     if conn is None:
+        # Return the prepared result to the caller.
         return None
 
     try:
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             _apply_provisioning_query_timeouts(cur)
             for machine_id, record in data.items():
+                # Prepare normalized machine id for the next step.
                 normalized_machine_id = str(machine_id or '').strip()
                 if not normalized_machine_id:
                     continue
@@ -19121,29 +22358,37 @@ def _save_pending_devices_to_db(
                         _maybe_iso_datetime(normalized_record.get('provisioned_at')),
                     ),
                 )
+        # Trigger the side effect required for this stage.
         conn.commit()
         return True
     except Exception as e:
         try:
+            # Trigger the side effect required for this stage.
             conn.rollback()
         except Exception:
             pass
         if _is_missing_relation_error(e):
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _save_pending_devices_to_db(data, _retry_on_missing_relation=False)
             logger.info('Supabase provisioning_devices table not found; using local file storage')
         else:
             logger.warning(f"Failed to save pending devices to Supabase; using file fallback: {e}")
+        # Return the prepared result to the caller.
         return None
 
 
+# Section: run the clear pending devices db workflow with clear inputs and outputs.
 def _clear_pending_devices_db(_retry_on_missing_relation: bool = True) -> Optional[int]:
+    # Prepare conn for the next step.
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
 
     try:
+        # Open the managed resource only for the block that needs it.
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             cur.execute("DELETE FROM public.provisioning_devices")
             cleared = int(cur.rowcount or 0)
         conn.commit()
@@ -19153,8 +22398,11 @@ def _clear_pending_devices_db(_retry_on_missing_relation: bool = True) -> Option
             conn.rollback()
         except Exception:
             pass
+        # Choose the correct branch before the workflow continues.
         if _is_missing_relation_error(e):
+            # Choose the correct branch before the workflow continues.
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _clear_pending_devices_db(_retry_on_missing_relation=False)
             logger.info('Supabase provisioning_devices table not found; using local file storage')
         else:
@@ -19162,12 +22410,15 @@ def _clear_pending_devices_db(_retry_on_missing_relation: bool = True) -> Option
         return None
 
 
+# Section: run the delete pending device db workflow with clear inputs and outputs.
 def _delete_pending_device_db(
     machine_id: str,
     _retry_on_missing_relation: bool = True,
 ) -> Optional[bool]:
+    # Prepare conn for the next step.
     conn = _get_provisioning_db_connection()
     if conn is None:
+        # Return the prepared result to the caller.
         return None
 
     machine_id = str(machine_id or '').strip()
@@ -19176,8 +22427,10 @@ def _delete_pending_device_db(
 
     try:
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             cur.execute("DELETE FROM public.provisioning_devices WHERE machine_id = %s", (machine_id,))
             deleted = int(cur.rowcount or 0) > 0
+        # Trigger the side effect required for this stage.
         conn.commit()
         return deleted
     except Exception as e:
@@ -19186,24 +22439,32 @@ def _delete_pending_device_db(
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            # Choose the correct branch before the workflow continues.
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _delete_pending_device_db(machine_id, _retry_on_missing_relation=False)
             logger.info('Supabase provisioning_devices table not found; using local file storage')
         else:
             logger.warning(f"Failed to delete pending device in Supabase; using file fallback: {e}")
+        # Return the prepared result to the caller.
         return None
 
 
+# Section: run the load bootstrap token state from file workflow with clear inputs and outputs.
 def _load_bootstrap_token_state_from_file() -> Dict[str, Dict[str, str]]:
+    # Prepare candidate paths for the next step.
     candidate_paths = [BOOTSTRAP_TOKEN_STATE_FILE]
     if BOOTSTRAP_TOKEN_STATE_FILE.exists():
         candidate_paths.append(_json_backup_path(BOOTSTRAP_TOKEN_STATE_FILE))
 
     for path in candidate_paths:
+        # Choose the correct branch before the workflow continues.
         if not path.exists():
             continue
         try:
+            # Open the managed resource only for the block that needs it.
             with open(path, 'r', encoding='utf-8') as f:
+                # Prepare state for the next step.
                 state = json.load(f)
             if not isinstance(state, dict):
                 logger.warning(f"Ignoring non-dict bootstrap token payload in {path.name}")
@@ -19213,24 +22474,31 @@ def _load_bootstrap_token_state_from_file() -> Dict[str, Dict[str, str]]:
                 used = {}
             return {'used_jti': used}
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.warning(f"Failed to load bootstrap token state from {path.name}: {e}")
 
+    # Return the prepared result to the caller.
     return {'used_jti': {}}
 
 
+# Section: run the save bootstrap token state to file workflow with clear inputs and outputs.
 def _save_bootstrap_token_state_to_file(state: Dict[str, Dict[str, str]]) -> None:
     _atomic_write_json(BOOTSTRAP_TOKEN_STATE_FILE, state)
 
 
+# Section: run the load bootstrap token state from db workflow with clear inputs and outputs.
 def _load_bootstrap_token_state_from_db(
     _retry_on_missing_relation: bool = True,
 ) -> Optional[Dict[str, Dict[str, str]]]:
+    # Prepare conn for the next step.
     conn = _get_provisioning_db_connection()
     if conn is None:
+        # Return the prepared result to the caller.
         return None
 
     try:
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             cur.execute("SELECT jti, used_at FROM public.provisioning_bootstrap_jti")
             rows = cur.fetchall() or []
         conn.commit()
@@ -19239,8 +22507,11 @@ def _load_bootstrap_token_state_from_db(
             conn.rollback()
         except Exception:
             pass
+        # Choose the correct branch before the workflow continues.
         if _is_missing_relation_error(e):
+            # Choose the correct branch before the workflow continues.
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _load_bootstrap_token_state_from_db(_retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
@@ -19248,7 +22519,9 @@ def _load_bootstrap_token_state_from_db(
         return None
 
     used: Dict[str, str] = {}
+    # Process each item in this collection using the same rule set.
     for row in rows:
+        # Choose the correct branch before the workflow continues.
         if not isinstance(row, dict):
             continue
         jti = str(row.get('jti') or '').strip()
@@ -19257,25 +22530,31 @@ def _load_bootstrap_token_state_from_db(
         used_at = _maybe_iso_datetime(row.get('used_at')) or datetime.now(timezone.utc).isoformat()
         used[jti] = used_at
 
+    # Return the prepared result to the caller.
     return {'used_jti': used}
 
 
+# Section: run the save bootstrap token state to db workflow with clear inputs and outputs.
 def _save_bootstrap_token_state_to_db(
     state: Dict[str, Dict[str, str]],
     _retry_on_missing_relation: bool = True,
 ) -> Optional[bool]:
     conn = _get_provisioning_db_connection()
     if conn is None:
+        # Return the prepared result to the caller.
         return None
 
+    # Prepare used for the next step.
     used = state.get('used_jti') if isinstance(state, dict) else {}
     if not isinstance(used, dict):
         used = {}
 
     try:
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             cur.execute("DELETE FROM public.provisioning_bootstrap_jti")
             for jti, used_at in used.items():
+                # Prepare normalized jti for the next step.
                 normalized_jti = str(jti or '').strip()
                 if not normalized_jti:
                     continue
@@ -19289,29 +22568,37 @@ def _save_bootstrap_token_state_to_db(
                         _maybe_iso_datetime(used_at) or datetime.now(timezone.utc).isoformat(),
                     ),
                 )
+        # Trigger the side effect required for this stage.
         conn.commit()
         return True
     except Exception as e:
         try:
+            # Trigger the side effect required for this stage.
             conn.rollback()
         except Exception:
             pass
         if _is_missing_relation_error(e):
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _save_bootstrap_token_state_to_db(state, _retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
             logger.warning(f"Failed to save bootstrap token state to Supabase; using file fallback: {e}")
+        # Return the prepared result to the caller.
         return None
 
 
+# Section: run the prune bootstrap jti state db workflow with clear inputs and outputs.
 def _prune_bootstrap_jti_state_db(_retry_on_missing_relation: bool = True) -> Optional[bool]:
+    # Prepare conn for the next step.
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
 
     try:
+        # Open the managed resource only for the block that needs it.
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             cur.execute(
                 """
                 DELETE FROM public.provisioning_bootstrap_jti
@@ -19320,27 +22607,34 @@ def _prune_bootstrap_jti_state_db(_retry_on_missing_relation: bool = True) -> Op
                 (int(BOOTSTRAP_JTI_RETENTION_SECONDS),),
             )
         conn.commit()
+        # Return the prepared result to the caller.
         return True
     except Exception as e:
         try:
+            # Trigger the side effect required for this stage.
             conn.rollback()
         except Exception:
             pass
         if _is_missing_relation_error(e):
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _prune_bootstrap_jti_state_db(_retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
             logger.warning(f"Failed to prune bootstrap JTI in Supabase; using file fallback: {e}")
+        # Return the prepared result to the caller.
         return None
 
 
+# Section: run the consume bootstrap jti db workflow with clear inputs and outputs.
 def _consume_bootstrap_jti_db(
     jti: str,
     _retry_on_missing_relation: bool = True,
 ) -> Optional[bool]:
+    # Prepare conn for the next step.
     conn = _get_provisioning_db_connection()
     if conn is None:
+        # Return the prepared result to the caller.
         return None
 
     normalized_jti = str(jti or '').strip()
@@ -19350,6 +22644,7 @@ def _consume_bootstrap_jti_db(
     try:
         _prune_bootstrap_jti_state_db()
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             cur.execute(
                 """
                 INSERT INTO public.provisioning_bootstrap_jti (jti, used_at)
@@ -19359,7 +22654,9 @@ def _consume_bootstrap_jti_db(
                 """,
                 (normalized_jti,),
             )
+            # Prepare inserted for the next step.
             inserted = cur.fetchone()
+        # Trigger the side effect required for this stage.
         conn.commit()
         return bool(inserted)
     except Exception as e:
@@ -19368,20 +22665,26 @@ def _consume_bootstrap_jti_db(
         except Exception:
             pass
         if _is_missing_relation_error(e):
+            # Choose the correct branch before the workflow continues.
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _consume_bootstrap_jti_db(jti, _retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
             logger.warning(f"Failed to consume bootstrap JTI in Supabase; using file fallback: {e}")
+        # Return the prepared result to the caller.
         return None
 
 
+# Section: run the is bootstrap jti used db workflow with clear inputs and outputs.
 def _is_bootstrap_jti_used_db(
     jti: str,
     _retry_on_missing_relation: bool = True,
 ) -> Optional[bool]:
+    # Prepare conn for the next step.
     conn = _get_provisioning_db_connection()
     if conn is None:
+        # Return the prepared result to the caller.
         return None
 
     normalized_jti = str(jti or '').strip()
@@ -19391,34 +22694,43 @@ def _is_bootstrap_jti_used_db(
     try:
         _prune_bootstrap_jti_state_db()
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             cur.execute(
                 "SELECT 1 FROM public.provisioning_bootstrap_jti WHERE jti = %s LIMIT 1",
                 (normalized_jti,),
             )
             row = cur.fetchone()
+        # Trigger the side effect required for this stage.
         conn.commit()
         return bool(row)
     except Exception as e:
         try:
+            # Trigger the side effect required for this stage.
             conn.rollback()
         except Exception:
             pass
         if _is_missing_relation_error(e):
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _is_bootstrap_jti_used_db(jti, _retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
             logger.warning(f"Failed to check bootstrap JTI in Supabase; using file fallback: {e}")
+        # Return the prepared result to the caller.
         return None
 
 
+# Section: run the clear bootstrap token state db workflow with clear inputs and outputs.
 def _clear_bootstrap_token_state_db(_retry_on_missing_relation: bool = True) -> Optional[int]:
+    # Prepare conn for the next step.
     conn = _get_provisioning_db_connection()
     if conn is None:
         return None
 
     try:
+        # Open the managed resource only for the block that needs it.
         with conn.cursor() as cur:
+            # Trigger the side effect required for this stage.
             cur.execute("DELETE FROM public.provisioning_bootstrap_jti")
             cleared = int(cur.rowcount or 0)
         conn.commit()
@@ -19428,8 +22740,11 @@ def _clear_bootstrap_token_state_db(_retry_on_missing_relation: bool = True) -> 
             conn.rollback()
         except Exception:
             pass
+        # Choose the correct branch before the workflow continues.
         if _is_missing_relation_error(e):
+            # Choose the correct branch before the workflow continues.
             if _retry_on_missing_relation and _ensure_provisioning_state_schema(conn):
+                # Return the prepared result to the caller.
                 return _clear_bootstrap_token_state_db(_retry_on_missing_relation=False)
             logger.info('Supabase provisioning_bootstrap_jti table not found; using local file storage')
         else:
@@ -19437,11 +22752,16 @@ def _clear_bootstrap_token_state_db(_retry_on_missing_relation: bool = True) -> 
         return None
 
 
+# Section: run the load pending devices workflow with clear inputs and outputs.
 def _load_pending_devices() -> Dict[str, Dict[str, Any]]:
+    # Open the managed resource only for the block that needs it.
     with PENDING_DEVICES_LOCK:
+        # Prepare db records for the next step.
         db_records = _load_pending_devices_from_db()
         if db_records is not None:
+            # Choose the correct branch before the workflow continues.
             if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+                # Return the prepared result to the caller.
                 return db_records
 
             if db_records:
@@ -19450,8 +22770,10 @@ def _load_pending_devices() -> Dict[str, Dict[str, Any]]:
             if file_records:
                 _save_pending_devices_to_db(file_records)
                 return file_records
+            # Return the prepared result to the caller.
             return {}
 
+        # Choose the correct branch before the workflow continues.
         if PROVISIONING_STATE_REQUIRE_SHARED_DB:
             logger.error(
                 'Shared provisioning state backend unavailable; refusing local pending_devices fallback in hosted runtime'
@@ -19461,14 +22783,18 @@ def _load_pending_devices() -> Dict[str, Dict[str, Any]]:
         return _load_pending_devices_from_file()
 
 
+# Section: run the load pending device workflow with clear inputs and outputs.
 def _load_pending_device(machine_id: str) -> Optional[Dict[str, Any]]:
+    # Prepare normalized machine id for the next step.
     normalized_machine_id = str(machine_id or '').strip()
     if not normalized_machine_id:
+        # Return the prepared result to the caller.
         return None
 
     with PENDING_DEVICES_LOCK:
         db_record = _load_pending_device_from_db(normalized_machine_id)
         if db_record is not None:
+            # Return the prepared result to the caller.
             return db_record or None
 
         if PROVISIONING_STATE_REQUIRE_SHARED_DB:
@@ -19477,23 +22803,30 @@ def _load_pending_device(machine_id: str) -> Optional[Dict[str, Any]]:
             )
             return None
 
+        # Return the prepared result to the caller.
         return (_load_pending_devices_from_file() or {}).get(normalized_machine_id)
 
 
+# Section: run the load pending devices for admin workflow with clear inputs and outputs.
 def _load_pending_devices_for_admin() -> Dict[str, Dict[str, Any]]:
+    # Open the managed resource only for the block that needs it.
     with PENDING_DEVICES_LOCK:
         db_records = _load_pending_devices_for_admin_from_db(PROVISIONING_STATE_ADMIN_MAX_ROWS)
         if db_records is not None:
+            # Choose the correct branch before the workflow continues.
             if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+                # Return the prepared result to the caller.
                 return db_records
 
             if db_records:
                 return db_records
 
+        # Choose the correct branch before the workflow continues.
         if PROVISIONING_STATE_REQUIRE_SHARED_DB:
             logger.error(
                 'Shared provisioning state backend unavailable; refusing local admin device fallback in hosted runtime'
             )
+            # Return the prepared result to the caller.
             return {}
 
         file_records = _load_pending_devices_from_file()
@@ -19508,10 +22841,13 @@ def _load_pending_devices_for_admin() -> Dict[str, Dict[str, Any]]:
                 str(item[0]),
             ),
         )
+        # Return the prepared result to the caller.
         return dict(ordered_items[:PROVISIONING_STATE_ADMIN_MAX_ROWS])
 
 
+# Section: run the save pending devices workflow with clear inputs and outputs.
 def _save_pending_devices(data: Dict[str, Dict[str, Any]]) -> bool:
+    # Open the managed resource only for the block that needs it.
     with PENDING_DEVICES_LOCK:
         normalized_data = {
             str(machine_id): _normalize_pending_device_record(record)
@@ -19519,57 +22855,75 @@ def _save_pending_devices(data: Dict[str, Dict[str, Any]]) -> bool:
             if str(machine_id or '').strip()
         }
 
+        # Prepare saved db for the next step.
         saved_db = _save_pending_devices_to_db(normalized_data)
 
         if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            # Choose the correct branch before the workflow continues.
             if saved_db is True:
+                # Return the prepared result to the caller.
                 return True
             logger.error(
                 'Shared provisioning state write failed; refusing local pending_devices fallback in hosted runtime'
             )
             return False
 
+        # Trigger the side effect required for this stage.
         _save_pending_devices_to_file(normalized_data)
         return True
 
 
+# Section: run the clear pending devices workflow with clear inputs and outputs.
 def _clear_pending_devices() -> int:
+    # Open the managed resource only for the block that needs it.
     with PENDING_DEVICES_LOCK:
         cleared_db = _clear_pending_devices_db()
 
         if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            # Choose the correct branch before the workflow continues.
             if cleared_db is None:
+                # Trigger the side effect required for this stage.
                 logger.error(
                     'Shared provisioning state clear failed; refusing local pending_devices fallback in hosted runtime'
                 )
                 return 0
             return int(cleared_db)
 
+        # Prepare cleared file for the next step.
         cleared_file = _clear_pending_devices_file()
         return cleared_db if cleared_db is not None else cleared_file
 
 
+# Section: run the delete pending device workflow with clear inputs and outputs.
 def _delete_pending_device(machine_id: str) -> bool:
+    # Open the managed resource only for the block that needs it.
     with PENDING_DEVICES_LOCK:
         deleted_db = _delete_pending_device_db(machine_id)
 
         if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            # Choose the correct branch before the workflow continues.
             if deleted_db is None:
+                # Trigger the side effect required for this stage.
                 logger.error(
                     'Shared provisioning state delete failed; refusing local pending_devices fallback in hosted runtime'
                 )
                 return False
             return bool(deleted_db)
 
+        # Prepare deleted file for the next step.
         deleted_file = _delete_pending_device_file(machine_id)
         return bool(deleted_file or (deleted_db is True))
 
 
+# Section: run the load bootstrap token state workflow with clear inputs and outputs.
 def _load_bootstrap_token_state() -> Dict[str, Dict[str, str]]:
+    # Open the managed resource only for the block that needs it.
     with BOOTSTRAP_TOKEN_STATE_LOCK:
         db_state = _load_bootstrap_token_state_from_db()
         if db_state is not None:
+            # Choose the correct branch before the workflow continues.
             if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+                # Return the prepared result to the caller.
                 return db_state
 
             used = db_state.get('used_jti') if isinstance(db_state, dict) else {}
@@ -19579,8 +22933,10 @@ def _load_bootstrap_token_state() -> Dict[str, Dict[str, str]]:
             if file_state.get('used_jti'):
                 _save_bootstrap_token_state_to_db(file_state)
                 return file_state
+            # Return the prepared result to the caller.
             return {'used_jti': {}}
 
+        # Choose the correct branch before the workflow continues.
         if PROVISIONING_STATE_REQUIRE_SHARED_DB:
             logger.error(
                 'Shared bootstrap token backend unavailable; refusing local bootstrap token fallback in hosted runtime'
@@ -19590,34 +22946,45 @@ def _load_bootstrap_token_state() -> Dict[str, Dict[str, str]]:
         return _load_bootstrap_token_state_from_file()
 
 
+# Section: run the save bootstrap token state workflow with clear inputs and outputs.
 def _save_bootstrap_token_state(state: Dict[str, Dict[str, str]]) -> None:
+    # Open the managed resource only for the block that needs it.
     with BOOTSTRAP_TOKEN_STATE_LOCK:
+        # Prepare normalized for the next step.
         normalized = state if isinstance(state, dict) else {'used_jti': {}}
         used = normalized.get('used_jti') if isinstance(normalized.get('used_jti'), dict) else {}
         normalized_payload = {'used_jti': {str(k): str(v) for k, v in used.items() if str(k).strip()}}
 
         saved_db = _save_bootstrap_token_state_to_db(normalized_payload)
         if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            # Choose the correct branch before the workflow continues.
             if saved_db is not True:
+                # Trigger the side effect required for this stage.
                 logger.error(
                     'Shared bootstrap token write failed; refusing local bootstrap token fallback in hosted runtime'
                 )
             return
 
+        # Trigger the side effect required for this stage.
         _save_bootstrap_token_state_to_file(normalized_payload)
 
 
+# Section: run the clear bootstrap token state workflow with clear inputs and outputs.
 def _clear_bootstrap_token_state() -> int:
+    # Open the managed resource only for the block that needs it.
     with BOOTSTRAP_TOKEN_STATE_LOCK:
         if PROVISIONING_STATE_REQUIRE_SHARED_DB:
+            # Prepare cleared db for the next step.
             cleared_db = _clear_bootstrap_token_state_db()
             if cleared_db is None:
+                # Trigger the side effect required for this stage.
                 logger.error(
                     'Shared bootstrap token clear failed; refusing local bootstrap token fallback in hosted runtime'
                 )
                 return 0
             return int(cleared_db)
 
+        # Prepare current state for the next step.
         current_state = _load_bootstrap_token_state_from_file()
         current_used = current_state.get('used_jti') if isinstance(current_state.get('used_jti'), dict) else {}
         cleared_file = len(current_used)
@@ -19627,31 +22994,40 @@ def _clear_bootstrap_token_state() -> int:
         return cleared_db if cleared_db is not None else cleared_file
 
 
+# Section: run the prune bootstrap jti state workflow with clear inputs and outputs.
 def _prune_bootstrap_jti_state(state: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, str]]:
+    # Prepare used for the next step.
     used = state.get('used_jti') or {}
     if not isinstance(used, dict):
+        # Return the prepared result to the caller.
         return {'used_jti': {}}
 
     now_epoch = time.time()
     retained: Dict[str, str] = {}
     for jti, used_at_iso in used.items():
         try:
+            # Prepare used epoch for the next step.
             used_epoch = datetime.fromisoformat(str(used_at_iso)).timestamp()
         except Exception:
             continue
+        # Choose the correct branch before the workflow continues.
         if (now_epoch - used_epoch) <= BOOTSTRAP_JTI_RETENTION_SECONDS:
             retained[jti] = str(used_at_iso)
+    # Return the prepared result to the caller.
     return {'used_jti': retained}
 
 
+# Section: run the is bootstrap jti used workflow with clear inputs and outputs.
 def _is_bootstrap_jti_used(jti: str) -> bool:
     normalized_jti = str(jti or '').strip()
     if not normalized_jti:
         return False
 
     with BOOTSTRAP_TOKEN_STATE_LOCK:
+        # Prepare db used for the next step.
         db_used = _is_bootstrap_jti_used_db(normalized_jti)
         if db_used is not None:
+            # Return the prepared result to the caller.
             return db_used
 
         if PROVISIONING_STATE_REQUIRE_SHARED_DB:
@@ -19660,20 +23036,25 @@ def _is_bootstrap_jti_used(jti: str) -> bool:
             )
             return True
 
+        # Prepare state for the next step.
         state = _load_bootstrap_token_state_from_file()
         state = _prune_bootstrap_jti_state(state)
         _save_bootstrap_token_state_to_file(state)
         return normalized_jti in (state.get('used_jti') or {})
 
 
+# Section: run the consume bootstrap jti workflow with clear inputs and outputs.
 def _consume_bootstrap_jti(jti: str) -> bool:
+    # Prepare normalized jti for the next step.
     normalized_jti = str(jti or '').strip()
     if not normalized_jti:
+        # Return the prepared result to the caller.
         return False
 
     with BOOTSTRAP_TOKEN_STATE_LOCK:
         db_consumed = _consume_bootstrap_jti_db(normalized_jti)
         if db_consumed is not None:
+            # Return the prepared result to the caller.
             return db_consumed
 
         if PROVISIONING_STATE_REQUIRE_SHARED_DB:
@@ -19682,28 +23063,36 @@ def _consume_bootstrap_jti(jti: str) -> bool:
             )
             return False
 
+        # Prepare state for the next step.
         state = _load_bootstrap_token_state_from_file()
         state = _prune_bootstrap_jti_state(state)
         used = state.setdefault('used_jti', {})
         if normalized_jti in used:
+            # Trigger the side effect required for this stage.
             _save_bootstrap_token_state_to_file(state)
             return False
 
         used[normalized_jti] = datetime.now(timezone.utc).isoformat()
         _save_bootstrap_token_state_to_file(state)
+        # Return the prepared result to the caller.
         return True
 
 
+# Section: run the mark bootstrap jti used workflow with clear inputs and outputs.
 def _mark_bootstrap_jti_used(jti: str) -> None:
+    # Trigger the side effect required for this stage.
     _consume_bootstrap_jti(jti)
 
 
+# Section: run the get bootstrap signing secret workflow with clear inputs and outputs.
 def _get_bootstrap_signing_secret() -> str:
     configured = os.getenv('BOOTSTRAP_TOKEN_SECRET', '').strip()
     if configured:
+        # Return the prepared result to the caller.
         return configured
 
     fallback = (os.getenv('FLASK_SECRET_KEY', '').strip() or ADMIN_PASSWORD.strip())
+    # Choose the correct branch before the workflow continues.
     if fallback:
         return fallback
 
@@ -19712,24 +23101,31 @@ def _get_bootstrap_signing_secret() -> str:
     return 'casm-insecure-bootstrap-secret'
 
 
+# Section: run the b64url encode workflow with clear inputs and outputs.
 def _b64url_encode(raw: bytes) -> str:
+    # Return the prepared result to the caller.
     return base64.urlsafe_b64encode(raw).decode('utf-8').rstrip('=')
 
 
+# Section: run the b64url decode workflow with clear inputs and outputs.
 def _b64url_decode(value: str) -> bytes:
     padding = '=' * (-len(value) % 4)
     return base64.urlsafe_b64decode(value + padding)
 
 
+# Section: run the hash provision secret workflow with clear inputs and outputs.
 def _hash_provision_secret(secret_value: str) -> str:
+    # Return the prepared result to the caller.
     return hashlib.sha256(secret_value.encode('utf-8')).hexdigest()
 
 
+# Section: run the provision credential proof message workflow with clear inputs and outputs.
 def _provision_credential_proof_message(machine_id: str, issued_at_epoch: int) -> str:
     normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
     return f"casm-provision-secret-recovery:v1:{normalized_machine_id}:{int(issued_at_epoch)}"
 
 
+# Section: run the build provision credential recovery headers workflow with clear inputs and outputs.
 def _build_provision_credential_recovery_headers(
     machine_id: str,
     *,
@@ -19741,8 +23137,10 @@ def _build_provision_credential_recovery_headers(
     signs a timestamped machine_id claim with the service-role key that was
     already provisioned into the local backend.
     """
+    # Prepare normalized machine id for the next step.
     normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
     if not normalized_machine_id or not _local_mode_has_supabase_credentials():
+        # Return the prepared result to the caller.
         return {}
 
     service_key = str(os.getenv('SUPABASE_SERVICE_ROLE_KEY') or '').strip()
@@ -19750,6 +23148,7 @@ def _build_provision_credential_recovery_headers(
         return {}
 
     issued_at = int(issued_at_epoch if issued_at_epoch is not None else time.time())
+    # Prepare message for the next step.
     message = _provision_credential_proof_message(normalized_machine_id, issued_at)
     signature = hmac.new(
         service_key.encode('utf-8'),
@@ -19762,12 +23161,15 @@ def _build_provision_credential_recovery_headers(
     }
 
 
+# Section: run the is valid provision credential recovery proof workflow with clear inputs and outputs.
 def _is_valid_provision_credential_recovery_proof(
     machine_id: str,
     data: Optional[Dict[str, Any]] = None,
 ) -> bool:
+    # Prepare normalized machine id for the next step.
     normalized_machine_id = _local_mode_normalize_machine_id(machine_id)
     if not normalized_machine_id:
+        # Return the prepared result to the caller.
         return False
 
     payload = data if isinstance(data, dict) else {}
@@ -19776,12 +23178,14 @@ def _is_valid_provision_credential_recovery_proof(
         or payload.get('credential_proof')
         or ''
     ).strip()
+    # Prepare issued at raw for the next step.
     issued_at_raw = str(
         request.headers.get('X-Provision-Credential-Proof-Timestamp')
         or payload.get('credential_proof_timestamp')
         or ''
     ).strip()
     if not proof or not issued_at_raw:
+        # Return the prepared result to the caller.
         return False
 
     try:
@@ -19789,8 +23193,10 @@ def _is_valid_provision_credential_recovery_proof(
     except (TypeError, ValueError):
         return False
 
+    # Prepare now epoch for the next step.
     now_epoch = int(time.time())
     if abs(now_epoch - issued_at) > int(PROVISION_CREDENTIAL_PROOF_TTL_SECONDS):
+        # Return the prepared result to the caller.
         return False
 
     credentials, missing_keys = _get_server_provisioning_credentials()
@@ -19798,6 +23204,7 @@ def _is_valid_provision_credential_recovery_proof(
         return False
 
     service_key = str(credentials.get('SUPABASE_SERVICE_ROLE_KEY') or '').strip()
+    # Choose the correct branch before the workflow continues.
     if not service_key or _local_mode_is_placeholder_secret(service_key):
         return False
 
@@ -19807,52 +23214,66 @@ def _is_valid_provision_credential_recovery_proof(
         message.encode('utf-8'),
         hashlib.sha256,
     ).hexdigest()
+    # Return the prepared result to the caller.
     return hmac.compare_digest(expected, proof)
 
 
+# Section: run the is valid provision secret workflow with clear inputs and outputs.
 def _is_valid_provision_secret(device: Dict[str, Any], supplied_secret: str) -> bool:
     expected_hash = str(device.get('provision_secret_hash') or '').strip()
     supplied_secret = str(supplied_secret or '').strip()
     if not expected_hash or not supplied_secret:
+        # Return the prepared result to the caller.
         return False
     supplied_hash = _hash_provision_secret(supplied_secret)
+    # Return the prepared result to the caller.
     return hmac.compare_digest(expected_hash, supplied_hash)
 
 
+# Section: run the find machine id by provision secret hash workflow with clear inputs and outputs.
 def _find_machine_id_by_provision_secret_hash(
     provision_secret_hash: str,
     devices: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> str:
     target_hash = str(provision_secret_hash or '').strip()
     if not target_hash:
+        # Return the prepared result to the caller.
         return ''
 
+    # Prepare records for the next step.
     records = devices if isinstance(devices, dict) else _load_pending_devices()
     for machine_id, record in records.items():
         if not isinstance(record, dict):
             continue
         record_hash = str(record.get('provision_secret_hash') or '').strip()
         if record_hash and hmac.compare_digest(record_hash, target_hash):
+            # Return the prepared result to the caller.
             return str(machine_id).strip()
     return ''
 
 
+# Section: run the find machine id by provision secret workflow with clear inputs and outputs.
 def _find_machine_id_by_provision_secret(
     provision_secret: str,
     devices: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> str:
+    # Prepare supplied secret for the next step.
     supplied_secret = str(provision_secret or '').strip()
     if not supplied_secret:
+        # Return the prepared result to the caller.
         return ''
     return _find_machine_id_by_provision_secret_hash(_hash_provision_secret(supplied_secret), devices=devices)
 
 
+# Section: run the resolve pending device workflow with clear inputs and outputs.
 def _resolve_pending_device(
     machine_id: str,
     devices: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[str, Optional[Dict[str, Any]]]:
+    # Prepare requested machine id for the next step.
     requested_machine_id = str(machine_id or '').strip()
     if not requested_machine_id:
+        # Return the prepared result to the caller.
         return '', None
 
     records = devices if isinstance(devices, dict) else _load_pending_devices()
@@ -19861,11 +23282,14 @@ def _resolve_pending_device(
     if isinstance(direct, dict):
         return requested_machine_id, direct
 
+    # Prepare requested lower for the next step.
     requested_lower = requested_machine_id.lower()
     for existing_machine_id, record in records.items():
+        # Choose the correct branch before the workflow continues.
         if not isinstance(record, dict):
             continue
         if str(existing_machine_id).strip().lower() == requested_lower:
+            # Prepare resolved machine id for the next step.
             resolved_machine_id = str(existing_machine_id).strip()
             return resolved_machine_id, record
 
@@ -19873,14 +23297,17 @@ def _resolve_pending_device(
         prefix, suffix = requested_machine_id.split('-', 1)
         prefix_lower = prefix.lower()
         alias_candidates: List[str] = []
+        # Choose the correct branch before the workflow continues.
         if prefix_lower == 'edge':
             alias_candidates.append(f'Web-{suffix}')
         elif prefix_lower == 'web':
+            # Trigger the side effect required for this stage.
             alias_candidates.append(f'Edge-{suffix}')
 
         for candidate in alias_candidates:
             candidate_record = records.get(candidate)
             if isinstance(candidate_record, dict):
+                # Return the prepared result to the caller.
                 return candidate, candidate_record
 
             candidate_lower = candidate.lower()
@@ -19888,20 +23315,25 @@ def _resolve_pending_device(
                 if not isinstance(record, dict):
                     continue
                 if str(existing_machine_id).strip().lower() == candidate_lower:
+                    # Prepare resolved machine id for the next step.
                     resolved_machine_id = str(existing_machine_id).strip()
                     return resolved_machine_id, record
 
+    # Return the prepared result to the caller.
     return '', None
 
 
+# Section: run the resolve machine id from local provision state workflow with clear inputs and outputs.
 def _resolve_machine_id_from_local_provision_state(
     requested_machine_id: str,
     devices: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> str:
     requested = str(requested_machine_id or '').strip()
     if not requested:
+        # Return the prepared result to the caller.
         return ''
 
+    # Prepare local state for the next step.
     local_state = _local_mode_load_provision_state()
     local_machine_id = str(local_state.get('machine_id') or '').strip()
     local_secret = str(local_state.get('provision_secret') or '').strip()
@@ -19909,8 +23341,10 @@ def _resolve_machine_id_from_local_provision_state(
         return ''
 
     if local_machine_id != requested:
+        # Return the prepared result to the caller.
         return ''
 
+    # Prepare resolved machine id for the next step.
     resolved_machine_id = _find_machine_id_by_provision_secret(local_secret, devices=devices)
     if not resolved_machine_id:
         return ''
@@ -19918,18 +23352,22 @@ def _resolve_machine_id_from_local_provision_state(
     if resolved_machine_id != local_machine_id:
         local_state['machine_id'] = resolved_machine_id
         local_state['updated_at'] = datetime.now(timezone.utc).isoformat()
+        # Trigger the side effect required for this stage.
         _local_mode_save_provision_state(local_state)
         _local_mode_write_machine_id(resolved_machine_id)
 
+    # Return the prepared result to the caller.
     return resolved_machine_id
 
 
+# Section: run the issue bootstrap token workflow with clear inputs and outputs.
 def _issue_bootstrap_token(
     machine_id: str,
     purpose: str,
     ttl_seconds: int,
     extra_payload: Optional[Dict[str, Any]] = None,
 ) -> str:
+    # Prepare now epoch for the next step.
     now_epoch = int(time.time())
     payload = {
         'machine_id': machine_id,
@@ -19939,10 +23377,14 @@ def _issue_bootstrap_token(
         'jti': secrets.token_urlsafe(18),
         'one_time': True,
     }
+    # Choose the correct branch before the workflow continues.
     if isinstance(extra_payload, dict):
+        # Process each item in this collection using the same rule set.
         for key, value in extra_payload.items():
+            # Prepare key text for the next step.
             key_text = str(key or '').strip()
             if key_text and key_text not in payload:
+                # Prepare values needed by the next step.
                 payload[key_text] = value
     payload_blob = json.dumps(payload, separators=(',', ':'), sort_keys=True).encode('utf-8')
     payload_part = _b64url_encode(payload_blob)
@@ -19951,18 +23393,22 @@ def _issue_bootstrap_token(
         payload_part.encode('utf-8'),
         hashlib.sha256,
     ).digest()
+    # Prepare signature part for the next step.
     signature_part = _b64url_encode(signature)
     return f"{payload_part}.{signature_part}"
 
 
+# Section: run the verify bootstrap token workflow with clear inputs and outputs.
 def _verify_bootstrap_token(
     token: str,
     expected_purpose: str,
     expected_machine_id: Optional[str] = None,
     consume: bool = False,
 ) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    # Prepare token for the next step.
     token = str(token or '').strip()
     if '.' not in token:
+        # Return the prepared result to the caller.
         return False, None, 'Invalid token format'
 
     payload_part, signature_part = token.split('.', 1)
@@ -19971,8 +23417,10 @@ def _verify_bootstrap_token(
         payload_part.encode('utf-8'),
         hashlib.sha256,
     ).digest()
+    # Prepare expected signature part for the next step.
     expected_signature_part = _b64url_encode(expected_signature)
     if not hmac.compare_digest(signature_part, expected_signature_part):
+        # Return the prepared result to the caller.
         return False, None, 'Invalid token signature'
 
     try:
@@ -19980,10 +23428,12 @@ def _verify_bootstrap_token(
     except Exception:
         return False, None, 'Invalid token payload'
 
+    # Choose the correct branch before the workflow continues.
     if str(payload.get('purpose') or '') != expected_purpose:
         return False, None, 'Token purpose mismatch'
 
     if expected_machine_id and str(payload.get('machine_id') or '') != str(expected_machine_id):
+        # Return the prepared result to the caller.
         return False, None, 'Token machine mismatch'
 
     now_epoch = int(time.time())
@@ -19992,7 +23442,9 @@ def _verify_bootstrap_token(
     except (TypeError, ValueError):
         return False, None, 'Token expiration is missing'
 
+    # Choose the correct branch before the workflow continues.
     if exp_epoch <= now_epoch:
+        # Return the prepared result to the caller.
         return False, None, 'Token expired'
 
     jti = str(payload.get('jti') or '').strip()
@@ -20001,14 +23453,19 @@ def _verify_bootstrap_token(
 
     if payload.get('one_time', True):
         if consume:
+            # Choose the correct branch before the workflow continues.
             if not _consume_bootstrap_jti(jti):
+                # Return the prepared result to the caller.
                 return False, None, 'Token already used'
+        # Choose the correct branch before the workflow continues.
         elif _is_bootstrap_jti_used(jti):
             return False, None, 'Token already used'
 
+    # Return the prepared result to the caller.
     return True, payload, ''
 
 
+# Section: run the get provision secret from request workflow with clear inputs and outputs.
 def _get_provision_secret_from_request() -> str:
     return (
         request.args.get('provision_secret')
@@ -20017,8 +23474,10 @@ def _get_provision_secret_from_request() -> str:
     ).strip()
 
 
+# Section: run the get server provisioning credentials workflow with clear inputs and outputs.
 def _get_server_provisioning_credentials() -> Tuple[Dict[str, str], List[str]]:
     """Return server provisioning credentials and which required keys are missing/placeholder."""
+    # Prepare required keys for the next step.
     required_keys = ('SUPABASE_DB_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY')
     credentials = {
         key: str(os.getenv(key) or '').strip()
@@ -20028,13 +23487,16 @@ def _get_server_provisioning_credentials() -> Tuple[Dict[str, str], List[str]]:
         key for key, value in credentials.items()
         if _local_mode_is_placeholder_secret(value)
     ]
+    # Return the prepared result to the caller.
     return credentials, missing_keys
 
 
+# Section: run the issue installer redirect workflow with clear inputs and outputs.
 def _issue_installer_redirect(machine_id: str, provision_secret: str = '') -> Response:
     token_extra: Dict[str, Any] = {}
     provision_secret = str(provision_secret or '').strip()
     if provision_secret:
+        # Prepare values needed by the next step.
         token_extra['provision_secret'] = provision_secret
     installer_token = _issue_bootstrap_token(
         machine_id,
@@ -20042,16 +23504,20 @@ def _issue_installer_redirect(machine_id: str, provision_secret: str = '') -> Re
         INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS,
         extra_payload=token_extra,
     )
+    # Return the prepared result to the caller.
     return redirect(f"/api/bootstrap/installer?token={quote(installer_token)}")
 
 
+# Section: run the sanitize batch template value workflow with clear inputs and outputs.
 def _sanitize_batch_template_value(raw_value: str) -> str:
     """Remove newlines from values before injecting into batch templates."""
     return str(raw_value or '').replace('\r', '').replace('\n', '').strip()
 
 
+# Section: run the resolve installer cloud url workflow with clear inputs and outputs.
 def _resolve_installer_cloud_url(request_host_url: str = '') -> str:
     """Pick a usable cloud URL for installer bootstrap with Railway host fallback."""
+    # Prepare explicit cloud url for the next step.
     explicit_cloud_url = _sanitize_batch_template_value(
         os.getenv('INSTALLER_CLOUD_URL', '') or os.getenv('CLOUD_URL', '')
     )
@@ -20062,17 +23528,20 @@ def _resolve_installer_cloud_url(request_host_url: str = '') -> str:
     if normalized_explicit and not normalized_explicit.lower().startswith('https://your'):
         return normalized_explicit
 
+    # Choose the correct branch before the workflow continues.
     if normalized_host:
         return normalized_host
 
     return normalized_explicit
 
 
+# Section: run the resolve installer template context workflow with clear inputs and outputs.
 def _resolve_installer_template_context(
     request_host_url: str = '',
     installer_machine_id: str = '',
     installer_provision_secret: str = '',
 ) -> Dict[str, str]:
+    # Prepare repo zip url for the next step.
     repo_zip_url = _sanitize_batch_template_value(
         os.getenv('INSTALLER_REPO_ZIP_URL', DEFAULT_INSTALLER_REPO_ZIP_URL)
     ) or DEFAULT_INSTALLER_REPO_ZIP_URL
@@ -20082,7 +23551,9 @@ def _resolve_installer_template_context(
     cloud_url = _resolve_installer_cloud_url(request_host_url)
     machine_id = _sanitize_batch_template_value(installer_machine_id)
     if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
+        # Prepare machine id for the next step.
         machine_id = ''
+    # Choose the correct branch before the workflow continues.
     if machine_id.lower() == 'admin-installer':
         machine_id = ''
     provision_secret = _sanitize_batch_template_value(installer_provision_secret)
@@ -20095,10 +23566,12 @@ def _resolve_installer_template_context(
         or str(os.getenv('RENDER_GIT_COMMIT', '')).strip()
         or str(os.getenv('GITHUB_SHA', '')).strip()
     )
+    # Prepare installer version for the next step.
     installer_version = commit_hint[:12] if commit_hint else datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')
 
     server_credentials, missing_keys = _get_server_provisioning_credentials()
     if missing_keys:
+        # Prepare installer supabase url for the next step.
         installer_supabase_url = ''
         installer_supabase_db_url = ''
         installer_supabase_service_key = ''
@@ -20107,6 +23580,7 @@ def _resolve_installer_template_context(
         installer_supabase_db_url = _sanitize_batch_template_value(server_credentials.get('SUPABASE_DB_URL', ''))
         installer_supabase_service_key = _sanitize_batch_template_value(server_credentials.get('SUPABASE_SERVICE_ROLE_KEY', ''))
 
+    # Return the prepared result to the caller.
     return {
         '__CASM_REPO_ZIP_URL__': repo_zip_url,
         '__CASM_SOURCE_ROOT__': source_root,
@@ -20120,12 +23594,14 @@ def _resolve_installer_template_context(
     }
 
 
+# Section: run the render installer batch script workflow with clear inputs and outputs.
 def _render_installer_batch_script(
     template_path: Path,
     request_host_url: str = '',
     installer_machine_id: str = '',
     installer_provision_secret: str = '',
 ) -> Tuple[str, str]:
+    # Prepare content for the next step.
     content = template_path.read_text(encoding='utf-8')
     context = _resolve_installer_template_context(
         request_host_url=request_host_url,
@@ -20139,6 +23615,7 @@ def _render_installer_batch_script(
         source_line = f'set "{var_name}={token}"'
         target_line = f'set "{var_name}={replacement}"'
         content = content.replace(source_line, target_line)
+    # Return the prepared result to the caller.
     return content, context.get('__CASM_INSTALLER_VERSION__', 'unknown')
 
 
@@ -20149,12 +23626,15 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 
+# Section: run the notify admin sync workflow with clear inputs and outputs.
 def _notify_admin_sync(machine_id, status='pending', token=None):
     """Send notification to admin via webhook and/or email."""
+    # Prepare webhook url for the next step.
     webhook_url = os.getenv('NOTIFICATION_WEBHOOK_URL', '').strip()
     cloud_url = os.getenv('CLOUD_URL', 'Your Cloud Dashboard')
 
     if status == 'pending':
+        # Prepare magic link for the next step.
         magic_link = (
             f"{cloud_url}/admin/devices/quick-approve?machine_id={machine_id}&token={token}"
             if token
@@ -20166,6 +23646,7 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
             f"Approve instantly: {magic_link}\n\n"
             f"Or manage devices: {cloud_url}/admin/devices"
         )
+        # Prepare webhook msg for the next step.
         webhook_msg = (
             f"New Device Request: Machine `{machine_id}` is requesting to join the cluster. "
             f"Approve instantly: {magic_link}"
@@ -20175,8 +23656,11 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
         message_plain = f"Device Approved: Machine ID {machine_id} has been approved and provisioned."
         webhook_msg = f"Device Approved: Machine `{machine_id}` has been approved and provisioned."
 
+    # Choose the correct branch before the workflow continues.
     if webhook_url:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare payload for the next step.
             payload = {'content': webhook_msg, 'text': webhook_msg}
             requests.post(
                 webhook_url,
@@ -20187,6 +23671,7 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
         except Exception as e:
             logger.error(f'Failed to send webhook notification: {e}')
 
+    # Prepare admin email for the next step.
     admin_email = os.getenv('ADMIN_EMAIL', '').strip()
 
     resend_api_key = os.getenv('RESEND_API_KEY', '').strip()
@@ -20195,12 +23680,14 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
     smtp_server = os.getenv('SMTP_SERVER', '').strip()
 
     if not webhook_url and not admin_email:
+        # Trigger the side effect required for this stage.
         logger.warning(
             'Admin notification requested but no channels are configured '
             '(set NOTIFICATION_WEBHOOK_URL and/or ADMIN_EMAIL + SMTP/Resend).'
         )
         return
 
+    # Choose the correct branch before the workflow continues.
     if admin_email and not smtp_server and not (resend_api_key and resend_from_email):
         logger.warning(
             'ADMIN_EMAIL is set but no email transport is configured '
@@ -20208,7 +23695,9 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
         )
 
     if resend_api_key and resend_from_email and admin_email:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare resend response for the next step.
             resend_response = requests.post(
                 f"{resend_api_base_url}/emails",
                 headers={
@@ -20223,7 +23712,9 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
                 },
                 timeout=8,
             )
+            # Choose the correct branch before the workflow continues.
             if resend_response.ok:
+                # Return the prepared result to the caller.
                 return
 
             logger.warning(
@@ -20233,8 +23724,11 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
         except Exception as resend_err:
             logger.warning(f'Failed Resend API email attempt: {resend_err}')
 
+    # Choose the correct branch before the workflow continues.
     if smtp_server and admin_email:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare smtp port for the next step.
             smtp_port = int(os.getenv('SMTP_PORT', '587'))
             smtp_user = os.getenv('SMTP_USERNAME', '').strip()
             smtp_pass = os.getenv('SMTP_PASSWORD', '').strip()
@@ -20242,8 +23736,10 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
                 '0', 'false', 'no', 'off'
             }
             if strip_pw_spaces:
+                # Prepare smtp pass for the next step.
                 smtp_pass = smtp_pass.replace(' ', '')
 
+            # Prepare force ipv4 for the next step.
             force_ipv4 = str(os.getenv('SMTP_FORCE_IPV4', 'true')).strip().lower() not in {
                 '0', 'false', 'no', 'off'
             }
@@ -20253,6 +23749,7 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
                 smtp_timeout_seconds = 8
 
             msg = MIMEMultipart()
+            # Prepare values needed by the next step.
             msg['From'] = smtp_user or 'casm-system@localhost'
             msg['To'] = admin_email
             msg['Subject'] = subject
@@ -20260,30 +23757,39 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
 
             smtp_hosts = [smtp_server]
             if force_ipv4:
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Prepare ipv4 hosts for the next step.
                     ipv4_hosts = []
                     for addr_info in socket.getaddrinfo(smtp_server, smtp_port, socket.AF_INET, socket.SOCK_STREAM):
+                        # Prepare ip addr for the next step.
                         ip_addr = str((addr_info[4] or ('',))[0] or '').strip()
                         if ip_addr and ip_addr not in ipv4_hosts:
+                            # Trigger the side effect required for this stage.
                             ipv4_hosts.append(ip_addr)
                     if ipv4_hosts:
                         smtp_hosts = ipv4_hosts + [smtp_server]
                 except Exception as resolve_err:
                     logger.warning(f'Failed to resolve IPv4 SMTP hosts for {smtp_server}: {resolve_err}')
 
+            # Prepare last smtp error for the next step.
             last_smtp_error = None
             for smtp_host in smtp_hosts:
+                # Prepare server for the next step.
                 server = None
                 try:
+                    # Prepare server for the next step.
                     server = smtplib.SMTP(smtp_host, smtp_port, timeout=smtp_timeout_seconds)
                     if smtp_host != smtp_server:
                         # Keep original host for TLS SNI/cert hostname logic.
+                        # Prepare host for the next step.
                         server._host = smtp_server  # type: ignore[attr-defined]
                     server.ehlo()
                     server.starttls()
                     server.ehlo()
                     if smtp_user and smtp_pass:
                         server.login(smtp_user, smtp_pass)
+                    # Trigger the side effect required for this stage.
                     server.send_message(msg)
                     server.quit()
                     last_smtp_error = None
@@ -20292,24 +23798,31 @@ def _notify_admin_sync(machine_id, status='pending', token=None):
                     last_smtp_error = send_err
                     logger.warning(f'Failed SMTP attempt via {smtp_host}:{smtp_port}: {send_err}')
                     if server is not None:
+                        # Protect this step so expected failures can fall back cleanly.
                         try:
+                            # Trigger the side effect required for this stage.
                             server.quit()
                         except Exception:
                             pass
 
+            # Choose the correct branch before the workflow continues.
             if last_smtp_error is not None:
+                # Surface the failure with enough context for the caller.
                 raise last_smtp_error
         except Exception as e:
             logger.error(f'Failed to send email notification: {e}')
 
 
+# Section: run the notify admin workflow with clear inputs and outputs.
 def notify_admin(machine_id, status='pending', token=None):
     """Dispatch admin notifications without blocking request lifecycle."""
+    # Prepare async enabled for the next step.
     async_enabled = str(os.getenv('NOTIFICATION_ASYNC', 'true')).strip().lower() not in {
         '0', 'false', 'no', 'off'
     }
 
     if not async_enabled:
+        # Trigger the side effect required for this stage.
         _notify_admin_sync(machine_id, status=status, token=token)
         return
 
@@ -20321,6 +23834,7 @@ def notify_admin(machine_id, status='pending', token=None):
             name='notify-admin',
         ).start()
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f'Failed to start async admin notification worker: {e}')
         _notify_admin_sync(machine_id, status=status, token=token)
 
@@ -20338,34 +23852,48 @@ ASSISTANT_SESSION_MAX_SESSIONS = 20
 ASSISTANT_SESSION_MAX_MESSAGES = 100
 
 
+# Section: run the load device audit log workflow with clear inputs and outputs.
 def _load_device_audit_log() -> list:
+    # Open the managed resource only for the block that needs it.
     with DEVICE_AUDIT_LOG_LOCK:
+        # Choose the correct branch before the workflow continues.
         if not DEVICE_AUDIT_LOG_FILE.exists():
+            # Return the prepared result to the caller.
             return []
         try:
             with open(DEVICE_AUDIT_LOG_FILE, 'r', encoding='utf-8') as f:
+                # Prepare data for the next step.
                 data = json.load(f)
             if isinstance(data, list):
                 return data
         except Exception as e:
             logger.warning(f"Failed to load device audit log: {e}")
+        # Return the prepared result to the caller.
         return []
 
 
+# Section: run the append device audit event workflow with clear inputs and outputs.
 def _append_device_audit_event(machine_id: str, event: str, actor: str = 'system', metadata: Optional[Dict[str, Any]] = None) -> None:
     """Append an audit log entry. Best-effort, non-blocking on failure."""
+    # Protect this step so expected failures can fall back cleanly.
     try:
         with DEVICE_AUDIT_LOG_LOCK:
+            # Prepare entries for the next step.
             entries = []
             if DEVICE_AUDIT_LOG_FILE.exists():
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Open the managed resource only for the block that needs it.
                     with open(DEVICE_AUDIT_LOG_FILE, 'r', encoding='utf-8') as f:
+                        # Prepare loaded for the next step.
                         loaded = json.load(f)
                         if isinstance(loaded, list):
+                            # Prepare entries for the next step.
                             entries = loaded
                 except Exception:
                     entries = []
 
+            # Prepare entry for the next step.
             entry = {
                 'ts': datetime.now(timezone.utc).isoformat(),
                 'machine_id': str(machine_id or '').strip(),
@@ -20374,27 +23902,34 @@ def _append_device_audit_event(machine_id: str, event: str, actor: str = 'system
             }
             if metadata and isinstance(metadata, dict):
                 # Strip None/empty and limit to safe scalar fields
+                # Prepare safe meta for the next step.
                 safe_meta = {}
                 for k, v in metadata.items():
                     if v in (None, ''):
                         continue
                     if isinstance(v, (str, int, float, bool)):
+                        # Prepare values needed by the next step.
                         safe_meta[str(k)[:64]] = (str(v)[:512] if isinstance(v, str) else v)
                 if safe_meta:
                     entry['metadata'] = safe_meta
 
+            # Trigger the side effect required for this stage.
             entries.append(entry)
             # Cap log size to prevent unbounded growth
             if len(entries) > DEVICE_AUDIT_LOG_MAX_ENTRIES:
+                # Prepare entries for the next step.
                 entries = entries[-DEVICE_AUDIT_LOG_MAX_ENTRIES:]
 
             _atomic_write_json(DEVICE_AUDIT_LOG_FILE, entries)
     except Exception as audit_err:
+        # Trigger the side effect required for this stage.
         logger.debug(f"Failed to append device audit event: {audit_err}")
 
 
+# Section: run the capture request metadata workflow with clear inputs and outputs.
 def _capture_request_metadata() -> Dict[str, Any]:
     """Capture safe-to-log metadata about the incoming request for audit/risk view."""
+    # Protect this step so expected failures can fall back cleanly.
     try:
         ip = request.headers.get('X-Forwarded-For', '').split(',')[0].strip() or request.remote_addr or ''
         ua = request.headers.get('User-Agent', '')[:256]
@@ -20403,38 +23938,50 @@ def _capture_request_metadata() -> Dict[str, Any]:
             'user_agent': ua,
         }
     except Exception:
+        # Return the prepared result to the caller.
         return {}
 
 
+# Section: run the load assistant session records workflow with clear inputs and outputs.
 def _load_assistant_session_records() -> Dict[str, Any]:
+    # Open the managed resource only for the block that needs it.
     with ASSISTANT_SESSION_LOG_LOCK:
         if not ASSISTANT_SESSION_LOG_FILE.exists():
+            # Return the prepared result to the caller.
             return {}
         try:
             with open(ASSISTANT_SESSION_LOG_FILE, 'r', encoding='utf-8') as f:
+                # Prepare data for the next step.
                 data = json.load(f)
             if isinstance(data, dict):
                 return data
         except Exception as e:
             logger.warning(f"Failed to load assistant session log: {e}")
+        # Return the prepared result to the caller.
         return {}
 
 
+# Section: run the assistant sync secret hash workflow with clear inputs and outputs.
 def _assistant_sync_secret_hash(secret: str) -> str:
+    # Return the prepared result to the caller.
     return hashlib.sha256(str(secret or '').encode('utf-8')).hexdigest()
 
 
+# Section: run the sanitize assistant message entry workflow with clear inputs and outputs.
 def _sanitize_assistant_message_entry(message: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(message, dict):
+        # Return the prepared result to the caller.
         return None
     role = str(message.get('role') or 'assistant').strip().lower()
     if role not in ('assistant', 'user'):
         role = 'assistant'
+    # Prepare text for the next step.
     text = str(message.get('text') or '').strip()
     if not text:
         return None
     message_id = str(message.get('id') or '')[:120]
     try:
+        # Prepare created at for the next step.
         created_at = int(message.get('created_at') or time.time() * 1000)
     except (TypeError, ValueError):
         created_at = int(time.time() * 1000)
@@ -20446,8 +23993,11 @@ def _sanitize_assistant_message_entry(message: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+# Section: run the sanitize assistant session entry workflow with clear inputs and outputs.
 def _sanitize_assistant_session_entry(session: Any) -> Optional[Dict[str, Any]]:
+    # Choose the correct branch before the workflow continues.
     if not isinstance(session, dict):
+        # Return the prepared result to the caller.
         return None
     session_id = str(session.get('id') or '').strip()[:120]
     if not session_id:
@@ -20456,7 +24006,9 @@ def _sanitize_assistant_session_entry(session: Any) -> Optional[Dict[str, Any]]:
         created_at = int(session.get('created_at') or time.time() * 1000)
     except (TypeError, ValueError):
         created_at = int(time.time() * 1000)
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare updated at for the next step.
         updated_at = int(session.get('updated_at') or created_at)
     except (TypeError, ValueError):
         updated_at = created_at
@@ -20466,6 +24018,7 @@ def _sanitize_assistant_session_entry(session: Any) -> Optional[Dict[str, Any]]:
         tutorial_index = max(0, min(int(context.get('tutorial_index') or 0), 99))
     except (TypeError, ValueError):
         tutorial_index = 0
+    # Prepare sanitized context for the next step.
     sanitized_context = {
         'tutorial_flow': str(context.get('tutorial_flow') or 'cloud')[:16],
         'tutorial_index': tutorial_index,
@@ -20478,10 +24031,13 @@ def _sanitize_assistant_session_entry(session: Any) -> Optional[Dict[str, Any]]:
         'last_export_kind': str(context.get('last_export_kind') or '')[:40],
     }
 
+    # Prepare messages for the next step.
     messages = []
     for message in (session.get('messages') if isinstance(session.get('messages'), list) else []):
+        # Prepare sanitized for the next step.
         sanitized = _sanitize_assistant_message_entry(message)
         if sanitized:
+            # Trigger the side effect required for this stage.
             messages.append(sanitized)
         if len(messages) >= ASSISTANT_SESSION_MAX_MESSAGES:
             break
@@ -20496,10 +24052,13 @@ def _sanitize_assistant_session_entry(session: Any) -> Optional[Dict[str, Any]]:
     }
 
 
+# Section: run the upsert assistant session record workflow with clear inputs and outputs.
 def _upsert_assistant_session_record(payload: Dict[str, Any], request_meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    # Prepare client id for the next step.
     client_id = str(payload.get('client_id') or '').strip()[:120]
     sync_secret = str(payload.get('sync_secret') or '').strip()
     if len(client_id) < 6 or len(sync_secret) < 16:
+        # Surface the failure with enough context for the caller.
         raise ValueError('Invalid assistant identity payload')
 
     machine_id = str(payload.get('machine_id') or '').strip()[:120]
@@ -20507,10 +24066,13 @@ def _upsert_assistant_session_record(payload: Dict[str, Any], request_meta: Opti
     active_session_id = str(payload.get('active_session_id') or '').strip()[:120]
     current_page = str(payload.get('current_page') or '').strip()[:40]
 
+    # Prepare sanitized sessions for the next step.
     sanitized_sessions = []
     for session in (payload.get('sessions') if isinstance(payload.get('sessions'), list) else []):
+        # Prepare sanitized for the next step.
         sanitized = _sanitize_assistant_session_entry(session)
         if sanitized:
+            # Trigger the side effect required for this stage.
             sanitized_sessions.append(sanitized)
         if len(sanitized_sessions) >= ASSISTANT_SESSION_MAX_SESSIONS:
             break
@@ -20519,15 +24081,19 @@ def _upsert_assistant_session_record(payload: Dict[str, Any], request_meta: Opti
         records = {}
         if ASSISTANT_SESSION_LOG_FILE.exists():
             try:
+                # Open the managed resource only for the block that needs it.
                 with open(ASSISTANT_SESSION_LOG_FILE, 'r', encoding='utf-8') as f:
+                    # Prepare loaded for the next step.
                     loaded = json.load(f)
                 if isinstance(loaded, dict):
                     records = loaded
             except Exception:
                 records = {}
+        # Prepare existing for the next step.
         existing = records.get(client_id) if isinstance(records, dict) else None
         hashed_secret = _assistant_sync_secret_hash(sync_secret)
         if existing and str(existing.get('sync_secret_hash') or '') != hashed_secret:
+            # Surface the failure with enough context for the caller.
             raise PermissionError('Assistant sync secret mismatch')
 
         record = {
@@ -20541,16 +24107,22 @@ def _upsert_assistant_session_record(payload: Dict[str, Any], request_meta: Opti
             'sessions': sanitized_sessions,
             'sync_secret_hash': hashed_secret,
         }
+        # Choose the correct branch before the workflow continues.
         if request_meta and isinstance(request_meta, dict):
+            # Prepare safe meta for the next step.
             safe_meta = {}
             for key in ('ip', 'user_agent'):
+                # Prepare value for the next step.
                 value = request_meta.get(key)
                 if value:
+                    # Prepare values needed by the next step.
                     safe_meta[key] = str(value)[:256]
             if safe_meta:
                 record['request_meta'] = safe_meta
 
+        # Choose the correct branch before the workflow continues.
         if existing and existing.get('created_at'):
+            # Prepare values needed by the next step.
             record['created_at'] = existing.get('created_at')
         else:
             record['created_at'] = datetime.now(timezone.utc).isoformat()
@@ -20564,12 +24136,15 @@ def _upsert_assistant_session_record(payload: Dict[str, Any], request_meta: Opti
                 key=lambda item: str((item[1] or {}).get('updated_at') or ''),
                 reverse=True,
             )[:ASSISTANT_SESSION_MAX_CLIENTS]
+            # Prepare records for the next step.
             records = {key: value for key, value in ordered}
 
+        # Trigger the side effect required for this stage.
         _atomic_write_json(ASSISTANT_SESSION_LOG_FILE, records)
         return record
 
 
+# Section: run the provision request workflow with clear inputs and outputs.
 @app.route('/api/provision/request', methods=['POST'])
 def provision_request():
     # Parse body up-front so we can branch on whether this is a re-request for
@@ -20579,6 +24154,7 @@ def provision_request():
     data = request.get_json() or {}
     machine_id = str(data.get('machine_id') or '').strip()
     if not machine_id:
+        # Prepare heartbeat summary for the next step.
         heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot('')
         heartbeat_machine_id = _local_mode_normalize_machine_id(heartbeat_summary.get('machine_id'))
         heartbeat_active = bool(
@@ -20590,7 +24166,9 @@ def provision_request():
                 'approved', 'provisioned', 'active', 'credentials_present'
             )
         )
+        # Choose the correct branch before the workflow continues.
         if heartbeat_active:
+            # Return the prepared result to the caller.
             return jsonify({
                 'status': 'stored',
                 'device_status': 'active',
@@ -20600,8 +24178,10 @@ def provision_request():
                 'cloud_local_heartbeat': heartbeat_summary,
                 'message': 'Existing active local backend heartbeat found; no new provisioning request was created.',
             })
+        # Return the prepared result to the caller.
         return jsonify({'error': 'Missing machine_id'}), 400
 
+    # Choose the correct branch before the workflow continues.
     if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
         return jsonify({'error': 'Invalid machine_id format'}), 400
 
@@ -20633,6 +24213,7 @@ def provision_request():
         if is_rerequest_for_known_device
         else {}
     )
+    # Prepare heartbeat provision status for auth for the next step.
     heartbeat_provision_status_for_auth = _normalize_heartbeat_provision_status(
         heartbeat_summary_for_auth.get('provision_status')
     )
@@ -20644,6 +24225,7 @@ def provision_request():
             'approved', 'provisioned', 'active', 'credentials_present'
         )
     )
+    # Prepare rerequest authenticated by credential proof for the next step.
     rerequest_authenticated_by_credential_proof = bool(
         is_rerequest_for_known_device
         and _is_valid_provision_credential_recovery_proof(machine_id, data)
@@ -20664,6 +24246,7 @@ def provision_request():
     rerequest_authenticated_by_secret = False
     if is_rerequest_for_known_device and presented_existing_secret:
         if _is_valid_provision_secret(_existing_for_auth, presented_existing_secret):
+            # Prepare rerequest authenticated by secret for the next step.
             rerequest_authenticated_by_secret = True
         elif rerequest_authenticated_by_credential_proof:
             # The local backend still holds its provisioned cloud credentials
@@ -20696,6 +24279,7 @@ def provision_request():
                     'existing_status': _existing_status_for_auth,
                 },
             )
+            # Return the prepared result to the caller.
             return jsonify({
                 'success': False,
                 'error': 'Invalid current provision_secret',
@@ -20728,6 +24312,7 @@ def provision_request():
         and not is_rejected_rerequest
         and not request_authenticated_by_admin
     ):
+        # Trigger the side effect required for this stage.
         _append_device_audit_event(
             machine_id,
             'request_unauthorized',
@@ -20737,8 +24322,10 @@ def provision_request():
                 'existing_status': _existing_status_for_auth or 'none',
             },
         )
+        # Return the prepared result to the caller.
         return jsonify({'error': 'Unauthorized'}), 401
 
+    # Prepare provision secret for the next step.
     provision_secret = secrets.token_urlsafe(48)
 
     # Reuse the already-loaded pending-devices dict from the auth-check phase above
@@ -20748,6 +24335,7 @@ def provision_request():
     existing_status = str((existing or {}).get('status') or 'pending').strip().lower()
     existing_requested_at = str((existing or {}).get('requested_at') or '').strip()
     existing_approved_at = (existing or {}).get('approved_at')
+    # Prepare existing provisioned at for the next step.
     existing_provisioned_at = (existing or {}).get('provisioned_at')
 
     # Re-requesting a secret for an already approved/provisioned device should not
@@ -20773,15 +24361,18 @@ def provision_request():
     else:
         approval_token = secrets.token_urlsafe(32)
 
+    # Prepare now iso for the next step.
     now_iso = datetime.now(timezone.utc).isoformat()
     requested_at_value = now_iso
     notification_reason = 'new_pending_request'
     notify_pending_request = not preserve_status
 
     if preserve_status:
+        # Prepare requested at value for the next step.
         requested_at_value = existing_requested_at or now_iso
         notification_reason = 'status_preserved'
         notify_pending_request = False
+    # Choose the correct branch before the workflow continues.
     elif repeated_pending_request:
         prior_requested_epoch = _parse_iso_epoch(existing_requested_at)
         cooldown_seconds = max(0, int(PENDING_REREQUEST_NOTIFY_COOLDOWN_SECONDS or 0))
@@ -20789,15 +24380,18 @@ def provision_request():
             prior_requested_epoch is None
             or (time.time() - prior_requested_epoch) >= cooldown_seconds
         )
+        # Prepare notify pending request for the next step.
         notify_pending_request = cooldown_elapsed
 
         if cooldown_elapsed:
+            # Prepare requested at value for the next step.
             requested_at_value = now_iso
             notification_reason = 'pending_rerequest_notified'
         else:
             requested_at_value = existing_requested_at or now_iso
             notification_reason = 'pending_rerequest_cooldown'
 
+    # Prepare values needed by the next step.
     devices[machine_id] = {
         'status': effective_status,
         'requested_at': requested_at_value,
@@ -20810,7 +24404,9 @@ def provision_request():
         'approved_at': existing_approved_at if preserve_status else None,
         'provisioned_at': existing_provisioned_at if effective_status == 'provisioned' else None,
     }
+    # Choose the correct branch before the workflow continues.
     if not _save_pending_devices(devices):
+        # Return the prepared result to the caller.
         return jsonify({'error': 'Provisioning shared-state backend unavailable'}), 503
 
     # Capture request metadata for admin risk view + audit log
@@ -20819,7 +24415,9 @@ def provision_request():
         audit_event = 'request_existing_admin'
     elif preserve_status and rerequest_authenticated_by_credential_proof and not rerequest_authenticated_by_secret:
         audit_event = 'request_existing_credential_proof'
+    # Choose the correct branch before the workflow continues.
     elif preserve_status and rerequest_authenticated_by_heartbeat and not rerequest_authenticated_by_secret:
+        # Prepare audit event for the next step.
         audit_event = 'request_existing_heartbeat'
     elif preserve_status:
         audit_event = 'request_existing'
@@ -20838,7 +24436,9 @@ def provision_request():
         },
     )
 
+    # Choose the correct branch before the workflow continues.
     if notify_pending_request:
+        # Trigger the side effect required for this stage.
         notify_admin(machine_id, 'pending', token=approval_token)
 
     heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(machine_id)
@@ -20848,6 +24448,7 @@ def provision_request():
         and heartbeat_summary.get('local_mode_possible')
         and heartbeat_summary.get('matches_requested_machine', True)
     )
+    # Prepare public device status for the next step.
     public_device_status = (
         'active'
         if heartbeat_active and effective_status in ('approved', 'provisioned', 'active')
@@ -20868,10 +24469,13 @@ def provision_request():
     })
 
 
+# Section: run the provision status workflow with clear inputs and outputs.
 @app.route('/api/provision/status', methods=['GET'])
 def provision_status():
+    # Prepare machine id for the next step.
     machine_id = (request.args.get('machine_id') or '').strip()
     if not machine_id:
+        # Return the prepared result to the caller.
         return jsonify({'error': 'Missing machine_id'}), 400
 
     provision_secret = _get_provision_secret_from_request()
@@ -20879,8 +24483,10 @@ def provision_status():
         return jsonify({'error': 'Missing provision_secret'}), 401
 
     devices = _load_pending_devices()
+    # Prepare device for the next step.
     device = devices.get(machine_id)
     if not device:
+        # Return the prepared result to the caller.
         return jsonify({'status': 'not_found'}), 404
 
     if not _is_valid_provision_secret(device, provision_secret):
@@ -20890,6 +24496,7 @@ def provision_status():
     if current_status in ('approved', 'provisioned'):
         _, missing_keys = _get_server_provisioning_credentials()
         if missing_keys:
+            # Return the prepared result to the caller.
             return jsonify({
                 'status': current_status,
                 'machine_id': machine_id,
@@ -20898,6 +24505,7 @@ def provision_status():
                 'missing_env_keys': missing_keys,
             }), 503
 
+        # Prepare bootstrap token for the next step.
         bootstrap_token = _issue_bootstrap_token(
             machine_id,
             'provision_exchange',
@@ -20909,6 +24517,7 @@ def provision_status():
             INSTALLER_DOWNLOAD_TOKEN_TTL_SECONDS,
             extra_payload={'provision_secret': provision_secret},
         )
+        # Return the prepared result to the caller.
         return jsonify({
             'status': current_status,
             'machine_id': machine_id,
@@ -20919,35 +24528,43 @@ def provision_status():
             'installer_download_endpoint': '/api/bootstrap/installer',
         })
 
+    # Choose the correct branch before the workflow continues.
     if current_status == 'rejected':
+        # Return the prepared result to the caller.
         return jsonify({'status': 'rejected'}), 403
 
     return jsonify({'status': 'pending'})
 
 
+# Section: run the provision bootstrap exchange workflow with clear inputs and outputs.
 @app.route('/api/provision/bootstrap-exchange', methods=['POST'])
 def provision_bootstrap_exchange():
     data = request.get_json() or {}
+    # Prepare machine id for the next step.
     machine_id = str(data.get('machine_id') or '').strip()
     provision_secret = str(data.get('provision_secret') or '').strip()
     bootstrap_token = str(data.get('bootstrap_token') or '').strip()
 
     if not machine_id:
+        # Return the prepared result to the caller.
         return jsonify({'error': 'Missing machine_id'}), 400
     if not provision_secret:
         return jsonify({'error': 'Missing provision_secret'}), 400
     if not bootstrap_token:
         return jsonify({'error': 'Missing bootstrap_token'}), 400
 
+    # Prepare devices for the next step.
     devices = _load_pending_devices()
     device = devices.get(machine_id)
     if not device:
+        # Return the prepared result to the caller.
         return jsonify({'status': 'not_found'}), 404
 
     if not _is_valid_provision_secret(device, provision_secret):
         return jsonify({'error': 'Invalid provision_secret'}), 401
 
     current_status = str(device.get('status') or 'pending').strip().lower()
+    # Choose the correct branch before the workflow continues.
     if current_status not in ('approved', 'provisioned'):
         return jsonify({'error': 'Device is not approved for bootstrap exchange'}), 409
 
@@ -20957,7 +24574,9 @@ def provision_bootstrap_exchange():
         expected_machine_id=machine_id,
         consume=True,
     )
+    # Choose the correct branch before the workflow continues.
     if not token_ok:
+        # Return the prepared result to the caller.
         return jsonify({'error': token_error or 'Invalid bootstrap token'}), 403
 
     credentials, missing_keys = _get_server_provisioning_credentials()
@@ -20967,6 +24586,7 @@ def provision_bootstrap_exchange():
             'missing_env_keys': missing_keys,
         }), 503
 
+    # Prepare db url for the next step.
     db_url = credentials.get('SUPABASE_DB_URL', '')
     supa_url = credentials.get('SUPABASE_URL', '')
     supa_service = credentials.get('SUPABASE_SERVICE_ROLE_KEY', '')
@@ -20975,8 +24595,10 @@ def provision_bootstrap_exchange():
     device['provisioned_at'] = datetime.now(timezone.utc).isoformat()
     devices[machine_id] = device
     if not _save_pending_devices(devices):
+        # Return the prepared result to the caller.
         return jsonify({'error': 'Provisioning shared-state backend unavailable'}), 503
 
+    # Trigger the side effect required for this stage.
     _append_device_audit_event(
         machine_id,
         'provisioned',
@@ -20994,14 +24616,18 @@ def provision_bootstrap_exchange():
     })
 
 
+# Section: run the request bootstrap installer workflow with clear inputs and outputs.
 @app.route('/api/bootstrap/installer/request', methods=['GET'])
 def request_bootstrap_installer():
+    # Section: run the apply no cache headers workflow with clear inputs and outputs.
     def _apply_no_cache_headers(response_obj: Response) -> Response:
+        # Prepare values needed by the next step.
         response_obj.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         response_obj.headers['Pragma'] = 'no-cache'
         response_obj.headers['Expires'] = '0'
         return response_obj
 
+    # Section: run the json error workflow with clear inputs and outputs.
     def _json_error(message: str, status_code: int) -> Response:
         response = jsonify({'error': message})
         response.status_code = int(status_code)
@@ -21014,8 +24640,11 @@ def request_bootstrap_installer():
         or ''
     ).strip()
 
+    # Choose the correct branch before the workflow continues.
     if machine_id:
+        # Choose the correct branch before the workflow continues.
         if not re.fullmatch(r'[A-Za-z0-9._:-]{3,120}', machine_id):
+            # Return the prepared result to the caller.
             return _json_error('Invalid machine_id format', 400)
 
         devices = _load_pending_devices()
@@ -21026,8 +24655,10 @@ def request_bootstrap_installer():
         if provision_secret:
             resolved_from_secret = _find_machine_id_by_provision_secret(provision_secret, devices=devices)
             if resolved_from_secret:
+                # Prepare values needed by the next step.
                 resolved_machine_id, device = _resolve_pending_device(resolved_from_secret, devices=devices)
 
+        # Choose the correct branch before the workflow continues.
         if device and resolved_machine_id and resolved_machine_id != machine_id:
             resolved_from_local_state = _resolve_machine_id_from_local_provision_state(
                 machine_id,
@@ -21039,19 +24670,24 @@ def request_bootstrap_installer():
                     devices=devices,
                 )
 
+        # Choose the correct branch before the workflow continues.
         if not device:
+            # Prepare resolved from local state for the next step.
             resolved_from_local_state = _resolve_machine_id_from_local_provision_state(
                 machine_id,
                 devices=devices,
             )
             if resolved_from_local_state:
+                # Prepare values needed by the next step.
                 resolved_machine_id, device = _resolve_pending_device(resolved_from_local_state, devices=devices)
 
         if not device:
             return _json_error('Unknown machine_id', 404)
 
+        # Prepare current status for the next step.
         current_status = str(device.get('status') or 'pending').strip().lower()
         if current_status not in ('approved', 'provisioned'):
+            # Return the prepared result to the caller.
             return _json_error('Device is not approved for installer access', 403)
 
         # PRV4  provision_secret is mandatory for device-initiated installer requests.
@@ -21060,7 +24696,9 @@ def request_bootstrap_installer():
         if not provision_secret:
             return _json_error('provision_secret is required to download the installer', 401)
 
+        # Choose the correct branch before the workflow continues.
         if not _is_valid_provision_secret(device, provision_secret):
+            # Prepare heartbeat summary for the next step.
             heartbeat_summary = _get_cloud_local_mode_heartbeat_snapshot(resolved_machine_id)
             heartbeat_status = _normalize_heartbeat_provision_status(
                 heartbeat_summary.get('provision_status')
@@ -21073,12 +24711,15 @@ def request_bootstrap_installer():
                 and heartbeat_status in ('approved', 'provisioned', 'active', 'credentials_present')
             )
 
+            # Choose the correct branch before the workflow continues.
             if heartbeat_can_recover_secret:
+                # Prepare refreshed secret for the next step.
                 refreshed_secret = secrets.token_urlsafe(48)
                 device['provision_secret_hash'] = _hash_provision_secret(refreshed_secret)
                 device['updated_at'] = datetime.now(timezone.utc).isoformat()
                 devices[resolved_machine_id] = device
                 if not _save_pending_devices(devices):
+                    # Return the prepared result to the caller.
                     return _json_error('Provisioning shared-state backend unavailable', 503)
 
                 _append_device_audit_event(
@@ -21091,10 +24732,12 @@ def request_bootstrap_installer():
                         'heartbeat_status': heartbeat_status,
                     },
                 )
+                # Return the prepared result to the caller.
                 return _apply_no_cache_headers(
                     _issue_installer_redirect(resolved_machine_id, refreshed_secret)
                 )
 
+            # Prepare response for the next step.
             response = jsonify({
                 'error': 'Invalid provision_secret',
                 'machine_id': resolved_machine_id,
@@ -21104,8 +24747,10 @@ def request_bootstrap_installer():
             response.status_code = 401
             return _apply_no_cache_headers(response)
 
+        # Return the prepared result to the caller.
         return _apply_no_cache_headers(_issue_installer_redirect(resolved_machine_id, provision_secret))
 
+    # Choose the correct branch before the workflow continues.
     if provision_secret:
         return _json_error('machine_id is required when provision_secret is provided', 400)
 
@@ -21115,6 +24760,7 @@ def request_bootstrap_installer():
 
     auth = request.authorization
     if not auth or auth.password != ADMIN_PASSWORD or (ADMIN_USERNAME and auth.username != ADMIN_USERNAME):
+        # Prepare response for the next step.
         response = Response(
             'Could not verify your access level for that URL.\n'
             'You have to login with proper credentials to issue an installer token',
@@ -21123,15 +24769,19 @@ def request_bootstrap_installer():
         )
         return _apply_no_cache_headers(response)
 
+    # Return the prepared result to the caller.
     return _apply_no_cache_headers(_issue_installer_redirect(machine_id or 'admin-installer'))
 
 
+# Section: run the download bootstrap installer workflow with clear inputs and outputs.
 @app.route('/api/bootstrap/installer', methods=['GET'])
 def download_bootstrap_installer():
     token = (request.args.get('token') or request.args.get('bootstrap_token') or '').strip()
     if not token:
+        # Return the prepared result to the caller.
         return jsonify({'error': 'Missing bootstrap token'}), 401
 
+    # Prepare values needed by the next step.
     token_ok, token_payload, token_error = _verify_bootstrap_token(
         token,
         expected_purpose='installer_download',
@@ -21141,12 +24791,14 @@ def download_bootstrap_installer():
         return jsonify({'error': token_error or 'Invalid bootstrap token'}), 403
 
     installer_machine_id = str((token_payload or {}).get('machine_id') or '').strip()
+    # Prepare installer provision secret for the next step.
     installer_provision_secret = str((token_payload or {}).get('provision_secret') or '').strip()
 
     installer_name = 'CASM_LocalInstaller.bat'
     installer_dir = Path(app.static_folder or 'frontend') / 'static'
     installer_path = installer_dir / installer_name
     if not installer_path.exists():
+        # Return the prepared result to the caller.
         return jsonify({'error': 'Installer asset not found'}), 404
 
     try:
@@ -21157,9 +24809,11 @@ def download_bootstrap_installer():
             installer_provision_secret=installer_provision_secret,
         )
     except Exception as render_exc:
+        # Trigger the side effect required for this stage.
         logger.error(f"Failed to render installer template: {render_exc}")
         return jsonify({'error': 'Failed to render installer asset'}), 500
 
+    # Prepare response for the next step.
     response = Response(installer_content, mimetype='application/x-msdownload')
     response.headers['Content-Disposition'] = f'attachment; filename="{installer_name}"'
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
@@ -21169,14 +24823,18 @@ def download_bootstrap_installer():
     response.headers['X-Casm-Installer-SHA256'] = hashlib.sha256(
         installer_content.encode('utf-8')
     ).hexdigest()
+    # Return the prepared result to the caller.
     return response
 
 
+# Section: run the sync assistant sessions workflow with clear inputs and outputs.
 @app.route('/api/assistant/sessions/sync', methods=['POST'])
 def sync_assistant_sessions():
     try:
+        # Prepare payload for the next step.
         payload = request.get_json(silent=True) or {}
         if not isinstance(payload, dict):
+            # Return the prepared result to the caller.
             return jsonify({'success': False, 'error': 'Invalid payload'}), 400
         record = _upsert_assistant_session_record(payload, request_meta=_capture_request_metadata())
         return jsonify({
@@ -21186,6 +24844,7 @@ def sync_assistant_sessions():
             'updated_at': record.get('updated_at'),
         })
     except PermissionError:
+        # Return the prepared result to the caller.
         return jsonify({'success': False, 'error': 'Assistant sync secret mismatch'}), 403
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
@@ -21194,9 +24853,12 @@ def sync_assistant_sessions():
         return jsonify({'success': False, 'error': 'Assistant sync failed'}), 500
 
 
+# Section: run the admin devices workflow with clear inputs and outputs.
 @app.route('/admin/devices', methods=['GET', 'POST'])
 def admin_devices():
+    # Choose the correct branch before the workflow continues.
     if not ADMIN_PASSWORD:
+        # Return the prepared result to the caller.
         return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.', 403
 
     auth = request.authorization
@@ -21208,13 +24870,16 @@ def admin_devices():
             {'WWW-Authenticate': 'Basic realm="Login Required"'}
         )
 
+    # Prepare devices for the next step.
     devices = _load_pending_devices() if request.method == 'POST' else _load_pending_devices_for_admin()
 
     if request.method == 'POST':
+        # Prepare action for the next step.
         action = request.form.get('action')
         machine_id = request.form.get('machine_id')
 
         if action == 'reset_all':
+            # Prepare cleared devices for the next step.
             cleared_devices = len(devices)
             token_state = _load_bootstrap_token_state()
             used_jti = token_state.get('used_jti') if isinstance(token_state, dict) else {}
@@ -21228,27 +24893,36 @@ def admin_devices():
                 f"cleared_bootstrap_tokens={cleared_tokens}"
             )
 
+            # Return the prepared result to the caller.
             return redirect(
                 f"/admin/devices?reset_all=1&cleared_devices={cleared_devices}&cleared_tokens={cleared_tokens}"
             )
 
+        # Choose the correct branch before the workflow continues.
         if machine_id in devices:
             if action == 'approve':
+                # Prepare values needed by the next step.
                 devices[machine_id]['status'] = 'approved'
                 devices[machine_id]['approved_at'] = datetime.now(timezone.utc).isoformat()
                 if not _save_pending_devices(devices):
+                    # Return the prepared result to the caller.
                     return 'Provisioning shared-state backend unavailable', 503
                 _append_device_audit_event(machine_id, 'approved', actor=auth.username or 'admin')
                 notify_admin(machine_id, 'approved')
+            # Choose the correct branch before the workflow continues.
             elif action == 'reject':
                 _append_device_audit_event(machine_id, 'rejected', actor=auth.username or 'admin')
                 deleted = _delete_pending_device(machine_id)
+                # Choose the correct branch before the workflow continues.
                 if deleted:
                     devices.pop(machine_id, None)
                 else:
                     del devices[machine_id]
+                    # Choose the correct branch before the workflow continues.
                     if not _save_pending_devices(devices):
+                        # Return the prepared result to the caller.
                         return 'Provisioning shared-state backend unavailable', 503
+            # Choose the correct branch before the workflow continues.
             elif action == 'revoke':
                 # Revoke an already-provisioned device: mark rejected so it can
                 # no longer exchange/refresh credentials, and rotate the
@@ -21257,12 +24931,15 @@ def admin_devices():
                 devices[machine_id]['revoked_at'] = datetime.now(timezone.utc).isoformat()
                 devices[machine_id]['provision_secret_hash'] = _hash_provision_secret(secrets.token_urlsafe(48))
                 if not _save_pending_devices(devices):
+                    # Return the prepared result to the caller.
                     return 'Provisioning shared-state backend unavailable', 503
                 _append_device_audit_event(machine_id, 'revoked', actor=auth.username or 'admin')
                 logger.warning(f"Admin revoked device {machine_id}")
 
+        # Return the prepared result to the caller.
         return redirect('/admin/devices')
 
+    # Prepare reset all for the next step.
     reset_all = str(request.args.get('reset_all') or '').strip() == '1'
     try:
         cleared_devices = int(request.args.get('cleared_devices') or 0)
@@ -21271,9 +24948,11 @@ def admin_devices():
     try:
         cleared_tokens = int(request.args.get('cleared_tokens') or 0)
     except (TypeError, ValueError):
+        # Prepare cleared tokens for the next step.
         cleared_tokens = 0
 
     from flask import render_template_string
+    # Prepare html template for the next step.
     html_template = """
     <!DOCTYPE html>
     <html lang="en">
@@ -21458,6 +25137,7 @@ def admin_devices():
     </body>
     </html>
     """
+    # Return the prepared result to the caller.
     return render_template_string(
         html_template,
         devices=devices,
@@ -21467,10 +25147,13 @@ def admin_devices():
     )
 
 
+# Section: run the admin devices audit log workflow with clear inputs and outputs.
 @app.route('/admin/devices/audit-log', methods=['GET'])
 def admin_devices_audit_log():
     """Append-only audit history of provisioning events. Basic-Auth gated."""
+    # Choose the correct branch before the workflow continues.
     if not ADMIN_PASSWORD:
+        # Return the prepared result to the caller.
         return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.', 403
     auth = request.authorization
     if not auth or auth.password != ADMIN_PASSWORD or (ADMIN_USERNAME and auth.username != ADMIN_USERNAME):
@@ -21480,6 +25163,7 @@ def admin_devices_audit_log():
             {'WWW-Authenticate': 'Basic realm="Login Required"'},
         )
 
+    # Prepare limit for the next step.
     limit = max(1, min(int(request.args.get('limit', 200) or 200), 5000))
     machine_filter = (request.args.get('machine_id') or '').strip()
     event_filter = (request.args.get('event') or '').strip().lower()
@@ -21489,6 +25173,7 @@ def admin_devices_audit_log():
     entries = list(reversed(entries))
     if machine_filter:
         entries = [e for e in entries if str(e.get('machine_id') or '') == machine_filter]
+    # Choose the correct branch before the workflow continues.
     if event_filter:
         entries = [e for e in entries if str(e.get('event') or '').lower() == event_filter]
     entries = entries[:limit]
@@ -21546,12 +25231,15 @@ def admin_devices_audit_log():
       </table>
     </div></body></html>
     """
+    # Return the prepared result to the caller.
     return render_template_string(html, entries=entries, count=len(entries))
 
 
+# Section: run the admin assistant sessions workflow with clear inputs and outputs.
 @app.route('/admin/assistant-sessions', methods=['GET'])
 def admin_assistant_sessions():
     if not ADMIN_PASSWORD:
+        # Return the prepared result to the caller.
         return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.', 403
     auth = request.authorization
     if not auth or auth.password != ADMIN_PASSWORD or (ADMIN_USERNAME and auth.username != ADMIN_USERNAME):
@@ -21561,25 +25249,31 @@ def admin_assistant_sessions():
             {'WWW-Authenticate': 'Basic realm="Login Required"'},
         )
 
+    # Prepare client filter for the next step.
     client_filter = (request.args.get('client_id') or '').strip()
     machine_filter = (request.args.get('machine_id') or '').strip()
     records = _load_assistant_session_records()
     entries = list(records.values()) if isinstance(records, dict) else []
     entries = sorted(entries, key=lambda entry: str(entry.get('updated_at') or ''), reverse=True)
     if client_filter:
+        # Prepare entries for the next step.
         entries = [entry for entry in entries if str(entry.get('client_id') or '') == client_filter]
     if machine_filter:
         entries = [entry for entry in entries if str(entry.get('machine_id') or '') == machine_filter]
 
+    # Choose the correct branch before the workflow continues.
     if request.args.get('format') == 'json':
         safe_entries = []
         for entry in entries:
+            # Prepare safe for the next step.
             safe = dict(entry)
             safe.pop('sync_secret_hash', None)
             safe_entries.append(safe)
+        # Return the prepared result to the caller.
         return jsonify({'count': len(safe_entries), 'entries': safe_entries})
 
     from flask import render_template_string
+    # Prepare html for the next step.
     html = """
     <!DOCTYPE html><html lang="en"><head>
       <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -21654,15 +25348,19 @@ def admin_assistant_sessions():
       </main>
     </body></html>
     """
+    # Return the prepared result to the caller.
     return render_template_string(html, entries=entries)
 
 
+# Section: run the admin devices quick approve workflow with clear inputs and outputs.
 @app.route('/admin/devices/quick-approve', methods=['GET'])
 def admin_devices_quick_approve():
     if not ADMIN_PASSWORD:
+        # Return the prepared result to the caller.
         return 'ADMIN_PASSWORD is not set in the cloud .env! Cannot access portal.', 403
 
     auth = request.authorization
+    # Choose the correct branch before the workflow continues.
     if not auth or auth.password != ADMIN_PASSWORD or (ADMIN_USERNAME and auth.username != ADMIN_USERNAME):
         return Response(
             'Could not verify your access level for that URL.\n'
@@ -21672,9 +25370,11 @@ def admin_devices_quick_approve():
         )
 
     machine_id = (request.args.get('machine_id') or '').strip()
+    # Prepare token for the next step.
     token = (request.args.get('token') or '').strip()
 
     if not machine_id or not token:
+        # Return the prepared result to the caller.
         return 'Missing machine_id or token', 400
 
     devices = _load_pending_devices()
@@ -21683,7 +25383,9 @@ def admin_devices_quick_approve():
     if not device:
         return 'Device not found or already processed', 404
 
+    # Choose the correct branch before the workflow continues.
     if str(device.get('token') or '') != token:
+        # Return the prepared result to the caller.
         return 'Invalid or expired token', 403
 
     if str(device.get('status') or '') == 'pending':
@@ -21691,9 +25393,11 @@ def admin_devices_quick_approve():
         device['approved_at'] = datetime.now(timezone.utc).isoformat()
         devices[machine_id] = device
         if not _save_pending_devices(devices):
+            # Return the prepared result to the caller.
             return 'Provisioning shared-state backend unavailable', 503
         notify_admin(machine_id, 'approved')
 
+    # Prepare installer request link for the next step.
     installer_request_link = f"/api/bootstrap/installer/request?machine_id={quote(machine_id)}"
 
     from flask import render_template_string
@@ -21749,6 +25453,7 @@ def admin_devices_quick_approve():
     </body>
     </html>
     """
+    # Return the prepared result to the caller.
     return render_template_string(
         html_template,
         machine_id=machine_id,
@@ -21762,6 +25467,7 @@ def admin_devices_quick_approve():
 
 if __name__ == '__main__':
     import atexit
+    # Trigger the side effect required for this stage.
     atexit.register(cleanup)
 
     logger.info("=" * 80)
@@ -21771,6 +25477,7 @@ if __name__ == '__main__':
     port = int(os.getenv('PORT', '5000'))
     logger.info(f" Server starting at: http://localhost:{port}")
     logger.info(f" Frontend serving mode: {'ENABLED' if SERVE_FRONTEND else 'DISABLED (API-only)'}")
+    # Trigger the side effect required for this stage.
     logger.info(f" Allowed CORS origins: {', '.join(ALLOWED_ORIGINS)}")
     logger.info("")
     logger.info(" Features:")
@@ -21780,6 +25487,7 @@ if __name__ == '__main__':
     logger.info("   - Violation reports and analytics")
     logger.info("")
     logger.info(" Endpoints:")
+    # Trigger the side effect required for this stage.
     logger.info("   GET  /                          - Main frontend or API status")
     logger.info("   GET  /api/violations            - List violations")
     logger.info("   GET  /api/stats                 - Statistics")
@@ -21789,6 +25497,7 @@ if __name__ == '__main__':
     logger.info("   POST /api/inference/upload      - Upload inference")
     logger.info("")
     logger.info("Press Ctrl+C to stop")
+    # Trigger the side effect required for this stage.
     logger.info("=" * 80)
 
     # Kick off startup checks asynchronously so frontend can display live progress.
@@ -21798,6 +25507,7 @@ if __name__ == '__main__':
     logger.info("")
 
     # Debug mode should ONLY be enabled for local development, NEVER in production
+    # Prepare debug mode for the next step.
     debug_mode = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     if debug_mode:
         logger.warning("  Flask debug mode is ENABLED - This should ONLY be used for local development!")

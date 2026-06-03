@@ -4,12 +4,14 @@ Violation Detection Engine
 Core logic for detecting PPE violations from YOLO detections.
 Handles person-PPE association and violation rule checking.
 """
+# Readability: Backend core: coordinate detection, persistence, and report workflow concerns.
 
 import numpy as np
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass, field
 import logging
 
+# Prepare logger for the next step.
 logger = logging.getLogger(__name__)
 
 # =============================================================================
@@ -24,17 +26,21 @@ class Detection:
     class_name: str
     class_id: int
     
+    # Section: run the center workflow with clear inputs and outputs.
     @property
     def center(self) -> Tuple[float, float]:
         """Get the center point of the bounding box."""
+        # Return the prepared result to the caller.
         return ((self.bbox[0] + self.bbox[2]) / 2, (self.bbox[1] + self.bbox[3]) / 2)
     
+    # Section: run the area workflow with clear inputs and outputs.
     @property
     def area(self) -> float:
         """Get the area of the bounding box."""
         return (self.bbox[2] - self.bbox[0]) * (self.bbox[3] - self.bbox[1])
 
 
+# Section: group person detection state and behaviour in one readable unit.
 @dataclass
 class PersonDetection:
     """Represents a person and their associated PPE."""
@@ -42,15 +48,19 @@ class PersonDetection:
     ppe_items: Dict[str, List[Detection]] = field(default_factory=dict)
     violations: List[str] = field(default_factory=list)
     
+    # Section: run the has ppe workflow with clear inputs and outputs.
     def has_ppe(self, ppe_type: str) -> bool:
         """Check if person has a specific PPE type."""
+        # Return the prepared result to the caller.
         return ppe_type in self.ppe_items and len(self.ppe_items[ppe_type]) > 0
     
+    # Section: run the has violation workflow with clear inputs and outputs.
     def has_violation(self) -> bool:
         """Check if person has any violations."""
         return len(self.violations) > 0
 
 
+# Section: group violation event state and behaviour in one readable unit.
 @dataclass
 class ViolationEvent:
     """Represents a complete violation event."""
@@ -60,8 +70,10 @@ class ViolationEvent:
     timestamp: str
     violation_summary: List[str] = field(default_factory=list)
     
+    # Section: run the has violations workflow with clear inputs and outputs.
     def has_violations(self) -> bool:
         """Check if event contains any violations."""
+        # Return the prepared result to the caller.
         return any(person.has_violation() for person in self.persons)
 
 # =============================================================================
@@ -78,6 +90,7 @@ def calculate_iou(boxA: List[int], boxB: List[int]) -> float:
     Returns:
         IoU value between 0 and 1
     """
+    # Prepare x a for the next step.
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
     xB = min(boxA[2], boxB[2])
@@ -88,10 +101,12 @@ def calculate_iou(boxA: List[int], boxB: List[int]) -> float:
     boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
     boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
     
+    # Prepare iou for the next step.
     iou = interArea / float(boxAArea + boxBArea - interArea) if (boxAArea + boxBArea - interArea) > 0 else 0
     return iou
 
 
+# Section: run the is within or near workflow with clear inputs and outputs.
 def is_within_or_near(ppe_bbox: List[int], person_bbox: List[int], threshold: float = 0.3, 
                       ppe_class: str = None, strict_head_region: bool = False) -> bool:
     """
@@ -101,10 +116,13 @@ def is_within_or_near(ppe_bbox: List[int], person_bbox: List[int], threshold: fl
     ENHANCED: For head PPE (hardhat), applies strict spatial validation to prevent
     misclassifying nearby objects (lanterns, pillows, decorations) as PPE.
     """
+    # Prepare iou for the next step.
     iou = calculate_iou(ppe_bbox, person_bbox)
     if iou > threshold:
         # For head PPE, require stricter validation even with good IoU
+        # Choose the correct branch before the workflow continues.
         if strict_head_region and ppe_class and 'hardhat' in ppe_class.lower():
+            # Return the prepared result to the caller.
             return is_in_head_region(ppe_bbox, person_bbox)
         return True
     
@@ -115,13 +133,17 @@ def is_within_or_near(ppe_bbox: List[int], person_bbox: List[int], threshold: fl
     if (person_bbox[0] <= ppe_center_x <= person_bbox[2] and
         person_bbox[1] <= ppe_center_y <= person_bbox[3]):
         # Additional check for head PPE - must be in upper portion
+        # Choose the correct branch before the workflow continues.
         if strict_head_region and ppe_class and 'hardhat' in ppe_class.lower():
+            # Return the prepared result to the caller.
             return is_in_head_region(ppe_bbox, person_bbox)
         return True
     
+    # Return the prepared result to the caller.
     return False
 
 
+# Section: run the is in head region workflow with clear inputs and outputs.
 def is_in_head_region(ppe_bbox: List[int], person_bbox: List[int]) -> bool:
     """
     Check if PPE is actually in the head region of a person.
@@ -134,6 +156,7 @@ def is_in_head_region(ppe_bbox: List[int], person_bbox: List[int]) -> bool:
     - PPE center must be horizontally aligned with person center (±40% width)
     - PPE should not extend significantly beyond person width
     """
+    # Prepare person height for the next step.
     person_height = person_bbox[3] - person_bbox[1]
     person_width = person_bbox[2] - person_bbox[0]
     head_region_bottom = person_bbox[1] + (person_height * 0.30)  # Top 30% is head
@@ -144,6 +167,7 @@ def is_in_head_region(ppe_bbox: List[int], person_bbox: List[int]) -> bool:
     person_center_x = (person_bbox[0] + person_bbox[2]) / 2
     
     # Check 1: PPE center must be in head region (upper 30%)
+    # Choose the correct branch before the workflow continues.
     if ppe_center_y > head_region_bottom:
         return False
     
@@ -162,8 +186,10 @@ def is_in_head_region(ppe_bbox: List[int], person_bbox: List[int]) -> bool:
     return True
 
 
+# Section: run the normalize class name workflow with clear inputs and outputs.
 def normalize_class_name(name: str) -> str:
     """Normalize class name for consistent matching."""
+    # Return the prepared result to the caller.
     return ''.join(ch for ch in name.lower() if ch.isalnum())
 
 # =============================================================================
@@ -178,6 +204,7 @@ class ViolationDetector:
     configurable rules.
     """
     
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, violation_rules: Dict):
         """
         Initialize the violation detector.
@@ -186,6 +213,7 @@ class ViolationDetector:
             violation_rules: Violation rules from config (VIOLATION_RULES)
         """
         # Extract required PPE from rules
+        # Prepare required ppe rules for the next step.
         required_ppe_rules = violation_rules.get('required_ppe', {})
         self.required_ppe = {
             ppe_name: ppe_config['negative_classes']
@@ -204,6 +232,7 @@ class ViolationDetector:
         logger.info(f"Required PPE: {list(self.required_ppe.keys())}")
         logger.info(f"Critical violations: {list(self.critical_violations.keys())}")
     
+    # Section: run the check violations workflow with clear inputs and outputs.
     def check_violations(self, detections: List[Dict]) -> Dict[str, any]:
         """
         Check for violations in detections (simplified interface for orchestrator).
@@ -221,9 +250,12 @@ class ViolationDetector:
                 - details: list
         """
         # Check for critical violations first (Fall Detection)
+        # Process each item in this collection using the same rule set.
         for det in detections:
+            # Prepare class name for the next step.
             class_name = det.get('class_name', '')
             if class_name in self.critical_violations:
+                # Return the prepared result to the caller.
                 return {
                     'has_violation': True,
                     'summary': f'CRITICAL: {class_name} detected',
@@ -234,22 +266,27 @@ class ViolationDetector:
                 }
         
         # NEW: Check for negative PPE classes directly (no person required)
+        # Prepare violation details for the next step.
         violation_details = []
         violation_count = 0
         severity = 'NONE'
         
         for det in detections:
+            # Prepare class name for the next step.
             class_name = det.get('class_name', '')
             # Check if this is a negative PPE class we care about
             for required_ppe, negative_classes in self.required_ppe.items():
+                # Choose the correct branch before the workflow continues.
                 if class_name in negative_classes:
                     violation_details.append(f"Missing {required_ppe}")
                     violation_count += 1
                     severity = 'HIGH'
         
+        # Prepare has violation for the next step.
         has_violation = violation_count > 0
         
         if has_violation:
+            # Prepare summary for the next step.
             summary = f"{violation_count} PPE violation(s) detected: {', '.join(violation_details)}"
         else:
             summary = "No violations detected"
@@ -263,6 +300,7 @@ class ViolationDetector:
             'details': violation_details
         }
     
+    # Section: run the parse detections workflow with clear inputs and outputs.
     def parse_detections(self, detections: List[Dict]) -> Tuple[List[Detection], List[Detection]]:
         """
         Parse raw detections into person and PPE categories.
@@ -273,10 +311,12 @@ class ViolationDetector:
         Returns:
             Tuple of (person_detections, ppe_detections)
         """
+        # Prepare persons for the next step.
         persons = []
         ppe = []
         
         for det in detections:
+            # Prepare detection for the next step.
             detection = Detection(
                 bbox=det['bbox'],
                 confidence=det['confidence'],  # Fixed: was 'score', should be 'confidence'
@@ -288,15 +328,19 @@ class ViolationDetector:
             norm_name = normalize_class_name(detection.class_name)
             
             if 'person' in norm_name:
+                # Choose the correct branch before the workflow continues.
                 if detection.confidence >= self.person_conf_threshold:
+                    # Trigger the side effect required for this stage.
                     persons.append(detection)
                     logger.debug(f"Person detected with confidence {detection.confidence:.2f}")
             else:
                 ppe.append(detection)
                 logger.debug(f"PPE detected: {detection.class_name} ({detection.confidence:.2f})")
         
+        # Return the prepared result to the caller.
         return persons, ppe
     
+    # Section: run the check ppe violations workflow with clear inputs and outputs.
     def check_ppe_violations(self, person_objects: List[PersonDetection]) -> List[PersonDetection]:
         """
         Check each person for PPE violations based on rules.
@@ -307,9 +351,12 @@ class ViolationDetector:
         Returns:
             Same list with violations populated
         """
+        # Process each item in this collection using the same rule set.
         for person_obj in person_objects:
+            # Process each item in this collection using the same rule set.
             for required, negative in self.required_ppe.items():
                 # Check if person has the required PPE
+                # Prepare has positive for the next step.
                 has_positive = person_obj.has_ppe(required)
                 has_negative = person_obj.has_ppe(negative)
                 
@@ -321,8 +368,10 @@ class ViolationDetector:
                     person_obj.violations.append(violation_msg)
                     logger.warning(f"Violation detected: {violation_msg} at bbox {person_obj.detection.bbox}")
         
+        # Return the prepared result to the caller.
         return person_objects
     
+    # Section: run the associate ppe with persons workflow with clear inputs and outputs.
     def associate_ppe_with_persons(self, persons: List[Detection], 
                                    ppe: List[Detection]) -> List[PersonDetection]:
         """
@@ -335,9 +384,11 @@ class ViolationDetector:
         Returns:
             List of PersonDetection objects with associated PPE
         """
+        # Prepare person objects for the next step.
         person_objects = []
         
         for person in persons:
+            # Prepare person obj for the next step.
             person_obj = PersonDetection(detection=person)
             
             # Find all PPE items associated with this person
@@ -345,18 +396,23 @@ class ViolationDetector:
                 if is_within_or_near(ppe_item.bbox, person.bbox, self.iou_threshold,
                                    ppe_class=ppe_item.class_name, 
                                    strict_head_region=self.strict_head_region):
+                    # Prepare class name for the next step.
                     class_name = ppe_item.class_name
                     
                     if class_name not in person_obj.ppe_items:
+                        # Prepare values needed by the next step.
                         person_obj.ppe_items[class_name] = []
                     
                     person_obj.ppe_items[class_name].append(ppe_item)
                     logger.debug(f"Associated {class_name} with person at {person.bbox}")
             
+            # Trigger the side effect required for this stage.
             person_objects.append(person_obj)
         
+        # Return the prepared result to the caller.
         return person_objects
     
+    # Section: run the detect violations workflow with clear inputs and outputs.
     def detect_violations(self, detections: List[Dict], frame: np.ndarray, 
                          timestamp: str) -> Optional[ViolationEvent]:
         """
@@ -370,7 +426,9 @@ class ViolationDetector:
         Returns:
             ViolationEvent if violations found, None otherwise
         """
+        # Choose the correct branch before the workflow continues.
         if not detections:
+            # Trigger the side effect required for this stage.
             logger.debug("No detections in frame")
             return None
         
@@ -381,6 +439,7 @@ class ViolationDetector:
             logger.debug("No persons detected in frame")
             return None
         
+        # Trigger the side effect required for this stage.
         logger.info(f"Frame analysis: {len(persons)} persons, {len(ppe)} PPE items")
         
         # Associate PPE with persons
@@ -390,9 +449,11 @@ class ViolationDetector:
         person_objects = self.check_violations(person_objects)
         
         # Create violation event
+        # Prepare violation summary for the next step.
         violation_summary = []
         for i, person in enumerate(person_objects, 1):
             if person.has_violation():
+                # Trigger the side effect required for this stage.
                 violation_summary.append(f"Person {i}: {', '.join(person.violations)}")
         
         if violation_summary:
@@ -403,9 +464,11 @@ class ViolationDetector:
                 timestamp=timestamp,
                 violation_summary=violation_summary
             )
+            # Trigger the side effect required for this stage.
             logger.info(f"Violation event created with {len(violation_summary)} violations")
             return event
         
+        # Trigger the side effect required for this stage.
         logger.debug("No violations detected in frame")
         return None
 
@@ -416,6 +479,7 @@ class ViolationDetector:
 
 def get_violation_summary_text(event: ViolationEvent) -> str:
     """Generate a human-readable summary of violations."""
+    # Prepare lines for the next step.
     lines = [
         f"Violation detected at {event.timestamp}",
         f"Total persons: {len(event.persons)}",
@@ -425,15 +489,20 @@ def get_violation_summary_text(event: ViolationEvent) -> str:
     ]
     
     for i, person in enumerate(event.persons, 1):
+        # Choose the correct branch before the workflow continues.
         if person.has_violation():
+            # Trigger the side effect required for this stage.
             lines.append(f"  Person {i}:")
             for violation in person.violations:
+                # Trigger the side effect required for this stage.
                 lines.append(f"    - {violation}")
             lines.append(f"    PPE detected: {', '.join(person.ppe_items.keys()) if person.ppe_items else 'None'}")
     
+    # Return the prepared result to the caller.
     return "\n".join(lines)
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == '__main__':
     # Test the module
     logging.basicConfig(level=logging.DEBUG)
@@ -444,6 +513,7 @@ if __name__ == '__main__':
         'Safety Vest': 'NO-Safety Vest',
     }
     
+    # Prepare detector for the next step.
     detector = ViolationDetector(required_ppe)
     
     # Example detections
@@ -453,9 +523,11 @@ if __name__ == '__main__':
     ]
     
     test_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    # Prepare event for the next step.
     event = detector.detect_violations(test_detections, test_frame, "2025-11-05 10:30:00")
     
     if event:
+        # Trigger the side effect required for this stage.
         print(get_violation_summary_text(event))
     else:
         print("No violations detected")

@@ -1,3 +1,4 @@
+// Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 // PPE Safety Monitor - Service Worker
 // Offline support for app shell, read-only API payloads, and violation images.
 
@@ -47,6 +48,7 @@ self.addEventListener('install', (event) => {
 
     await Promise.all(
       STATIC_ASSETS.map(async (assetUrl) => {
+        // Keep this browser operation recoverable if it fails.
         try {
           await cache.add(assetUrl);
         } catch (error) {
@@ -57,6 +59,7 @@ self.addEventListener('install', (event) => {
 
     await Promise.all(
       CDN_ASSETS.map(async (assetUrl) => {
+        // Keep this browser operation recoverable if it fails.
         try {
           await cache.add(assetUrl);
         } catch (error) {
@@ -86,7 +89,9 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
   const data = event && event.data ? event.data : {};
+  // Choose the correct browser state branch before continuing.
   if (data.type !== 'PPE_CLEAR_RUNTIME_API_CACHE') {
+    // Return the prepared value to the caller.
     return;
   }
 
@@ -102,12 +107,14 @@ self.addEventListener('message', (event) => {
   })());
 });
 
+// Section: handle the notify window clients workflow.
 async function notifyWindowClients(message) {
   const clients = await self.clients.matchAll({
     type: 'window',
     includeUncontrolled: true
   });
   clients.forEach((client) => {
+    // Keep this browser operation recoverable if it fails.
     try {
       client.postMessage(message);
     } catch (error) {
@@ -116,8 +123,10 @@ async function notifyWindowClients(message) {
   });
 }
 
+// Choose the correct browser state branch before continuing.
 if ('sync' in self.registration) {
   self.addEventListener('sync', (event) => {
+    // Choose the correct browser state branch before continuing.
     if (event.tag !== LOCAL_REPORT_SYNC_TAG) return;
     event.waitUntil(notifyWindowClients({
       type: 'PPE_BACKGROUND_SYNC_LOCAL_REPORTS',
@@ -128,10 +137,13 @@ if ('sync' in self.registration) {
   });
 }
 
+// Section: handle the is api get request workflow.
 function isApiGetRequest(request, url) {
+  // Return the prepared value to the caller.
   return request.method === 'GET' && url.pathname.startsWith('/api/');
 }
 
+// Section: handle the is live or mutating api workflow.
 function isLiveOrMutatingApi(url) {
   return (
     url.pathname.startsWith('/api/live/') ||
@@ -140,7 +152,9 @@ function isLiveOrMutatingApi(url) {
   );
 }
 
+// Section: handle the is no store status api workflow.
 function isNoStoreStatusApi(url) {
+  // Return the prepared value to the caller.
   return (
     url.pathname === '/api/local-mode/provisioning/status' ||
     url.pathname === '/api/providers/runtime-status' ||
@@ -149,19 +163,24 @@ function isNoStoreStatusApi(url) {
   );
 }
 
+// Section: handle the is violation image request workflow.
 function isViolationImageRequest(url) {
   return /\/image\/.+\/(annotated|original)\.jpg$/i.test(url.pathname);
 }
 
+// Section: handle the is report document request workflow.
 function isReportDocumentRequest(url) {
+  // Return the prepared value to the caller.
   return /^\/report\/[^/]+\/?$/i.test(url.pathname);
 }
 
+// Section: handle the is report details api request workflow.
 function isReportDetailsApiRequest(url) {
   return /^\/api\/report\/[^/]+\/status\/?$/i.test(url.pathname)
     || /^\/api\/violation\/[^/]+\/?$/i.test(url.pathname);
 }
 
+// Section: handle the offline cloud report json workflow.
 function offlineCloudReportJson() {
   return new Response(
     JSON.stringify({
@@ -176,7 +195,9 @@ function offlineCloudReportJson() {
   );
 }
 
+// Section: handle the offline cloud report html workflow.
 function offlineCloudReportHtml() {
+  // Return the prepared value to the caller.
   return new Response(
     `<!doctype html><html><head><meta charset="utf-8"><title>Report unavailable offline</title></head><body><main style="font-family: system-ui, sans-serif; max-width: 640px; margin: 12vh auto; padding: 24px;"><h1>Report unavailable offline</h1><p>${OFFLINE_CLOUD_REPORT_MESSAGE}</p></main></body></html>`,
     {
@@ -186,11 +207,14 @@ function offlineCloudReportHtml() {
   );
 }
 
+// Section: handle the network first with cache workflow.
 async function networkFirstWithCache(request, cacheName, offlineFallback = null) {
   const cache = await caches.open(cacheName);
 
+  // Keep this browser operation recoverable if it fails.
   try {
     const networkResponse = await fetch(request);
+    // Choose the correct browser state branch before continuing.
     if (networkResponse && networkResponse.ok) {
       cache.put(request, networkResponse.clone());
     }
@@ -198,6 +222,7 @@ async function networkFirstWithCache(request, cacheName, offlineFallback = null)
   } catch (error) {
     const cached = await cache.match(request);
     if (cached) {
+      // Return the prepared value to the caller.
       return cached;
     }
     if (offlineFallback) {
@@ -207,12 +232,14 @@ async function networkFirstWithCache(request, cacheName, offlineFallback = null)
   }
 }
 
+// Section: handle the stale while revalidate workflow.
 async function staleWhileRevalidate(request, cacheName) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request);
 
   const fetchPromise = fetch(request)
     .then((response) => {
+      // Choose the correct browser state branch before continuing.
       if (response && response.ok) {
         cache.put(request, response.clone());
       }
@@ -220,6 +247,7 @@ async function staleWhileRevalidate(request, cacheName) {
     })
     .catch(() => cached || new Response('', { status: 503 }));
 
+  // Return the prepared value to the caller.
   return cached || fetchPromise;
 }
 
@@ -228,9 +256,11 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
 
   if (request.method !== 'GET') {
+    // Return the prepared value to the caller.
     return;
   }
 
+  // Choose the correct browser state branch before continuing.
   if (isReportDocumentRequest(url)) {
     event.respondWith(
       networkFirstWithCache(request, REPORT_CACHE, offlineCloudReportHtml())
@@ -239,16 +269,19 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (isApiGetRequest(request, url)) {
+    // Choose the correct browser state branch before continuing.
     if (isReportDetailsApiRequest(url)) {
       event.respondWith(
         fetch(request, { cache: 'no-store' }).catch(() => offlineCloudReportJson())
       );
+      // Return the prepared value to the caller.
       return;
     }
 
     if (isNoStoreStatusApi(url)) {
       event.respondWith(
         fetch(request, { cache: 'no-store' }).catch(() => {
+          // Return the prepared value to the caller.
           return new Response(
             JSON.stringify({ error: 'Status endpoint unavailable while offline.' }),
             {
@@ -258,12 +291,15 @@ self.addEventListener('fetch', (event) => {
           );
         })
       );
+      // Return the prepared value to the caller.
       return;
     }
 
+    // Choose the correct browser state branch before continuing.
     if (isLiveOrMutatingApi(url)) {
       event.respondWith(
         fetch(request).catch(() => {
+          // Return the prepared value to the caller.
           return new Response(
             JSON.stringify({ error: 'Live endpoint unavailable while offline.' }),
             {
@@ -273,6 +309,7 @@ self.addEventListener('fetch', (event) => {
           );
         })
       );
+      // Return the prepared value to the caller.
       return;
     }
 
@@ -286,9 +323,11 @@ self.addEventListener('fetch', (event) => {
         })
       )
     );
+    // Return the prepared value to the caller.
     return;
   }
 
+  // Choose the correct browser state branch before continuing.
   if (isViolationImageRequest(url)) {
     event.respondWith(staleWhileRevalidate(request, IMAGE_CACHE));
     return;
@@ -299,11 +338,14 @@ self.addEventListener('fetch', (event) => {
   const isNavigation = request.mode === 'navigate'
     || (request.headers.get('accept') || '').includes('text/html');
 
+  // Choose the correct browser state branch before continuing.
   if (isNavigation) {
     event.respondWith((async () => {
       const cache = await caches.open(STATIC_CACHE);
+      // Keep this browser operation recoverable if it fails.
       try {
         const networkResponse = await fetch(request);
+        // Choose the correct browser state branch before continuing.
         if (networkResponse && networkResponse.ok) {
           cache.put(request, networkResponse.clone());
         }
@@ -314,6 +356,7 @@ self.addEventListener('fetch', (event) => {
         throw error;
       }
     })());
+    // Return the prepared value to the caller.
     return;
   }
 
@@ -324,14 +367,17 @@ self.addEventListener('fetch', (event) => {
     if (cached) {
       fetch(request)
         .then((response) => {
+          // Choose the correct browser state branch before continuing.
           if (response && response.ok) {
             cache.put(request, response.clone());
           }
         })
         .catch(() => undefined);
+      // Return the prepared value to the caller.
       return cached;
     }
 
+    // Keep this browser operation recoverable if it fails.
     try {
       const response = await fetch(request);
       if (response && response.ok) {
@@ -339,7 +385,9 @@ self.addEventListener('fetch', (event) => {
       }
       return response;
     } catch (error) {
+      // Choose the correct browser state branch before continuing.
       if (request.headers.get('accept')?.includes('text/html')) {
+        // Return the prepared value to the caller.
         return cache.match('/');
       }
       throw error;

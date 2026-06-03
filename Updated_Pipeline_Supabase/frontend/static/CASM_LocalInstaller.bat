@@ -1,6 +1,8 @@
 @echo off
+REM Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 setlocal EnableDelayedExpansion
 
+REM Section: perform this operational step before continuing.
 echo ========================================================
 echo CASM PPE SAFETY MONITOR - ZERO-TOUCH LOCAL INSTALLER
 echo ========================================================
@@ -11,6 +13,7 @@ echo completely offline.
 echo.
 echo Please ensure you are running this as Administrator if
 echo Python or Ollama need to be installed.
+REM Section: perform this operational step before continuing.
 echo.
 if /I "%CASM_SKIP_INTRO_PAUSE%"=="true" goto :skip_intro_pause
 pause
@@ -21,6 +24,7 @@ set "CASM_SOURCE_ROOT=__CASM_SOURCE_ROOT__"
 set "CASM_CLOUD_URL=__CASM_CLOUD_URL__"
 set "CASM_INSTALLER_VERSION=__CASM_INSTALLER_VERSION__"
 set "CASM_MACHINE_ID=__CASM_MACHINE_ID__"
+REM Section: perform this operational step before continuing.
 set "CASM_PROVISION_SECRET=__CASM_PROVISION_SECRET__"
 set "CASM_SUPABASE_URL=__CASM_SUPABASE_URL__"
 set "CASM_SUPABASE_DB_URL=__CASM_SUPABASE_DB_URL__"
@@ -31,6 +35,7 @@ set "CASM_PROMPT_UPDATE_ON_LAUNCH=false"
 set "CASM_SELF_UPDATE_LAUNCHER=true"
 set "OLLAMA_CMD="
 
+REM Section: perform this operational step before continuing.
 if /I "!CASM_CLOUD_URL!"=="__CASM_CLOUD_URL__" set "CASM_CLOUD_URL="
 if /I "!CASM_MACHINE_ID!"=="__CASM_MACHINE_ID__" set "CASM_MACHINE_ID="
 if /I "!CASM_PROVISION_SECRET!"=="__CASM_PROVISION_SECRET__" set "CASM_PROVISION_SECRET="
@@ -42,6 +47,7 @@ echo Installer version: !CASM_INSTALLER_VERSION!
 echo Installer source archive: !CASM_REPO_ZIP_URL!
 if not "!CASM_CLOUD_URL!"=="" echo Installer cloud backend URL: !CASM_CLOUD_URL!
 
+REM Section: perform this operational step before continuing.
 set "INSTALL_DIR=C:\CASM_System"
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
 cd /d "%INSTALL_DIR%"
@@ -53,6 +59,7 @@ set "CASM_STATE_DIR_PATH=C:\CASM_System\CASM_LocalState"
 set "HAS_MANAGED_LAUNCHER=false"
 if not exist "!CASM_STATE_DIR_PATH!" mkdir "!CASM_STATE_DIR_PATH!"
 
+REM Section: perform this operational step before continuing.
 if exist "!LOCAL_LAUNCHER_BAT!" set "HAS_MANAGED_LAUNCHER=true"
 if exist "!LEGACY_LAUNCHER_BAT!" set "HAS_MANAGED_LAUNCHER=true"
 
@@ -63,6 +70,7 @@ if not exist "!LOCAL_LAUNCHER_BAT!" if exist "!LEGACY_LAUNCHER_BAT!" (
     )
 )
 
+REM Section: perform this operational step before continuing.
 if not exist "!LOCAL_LAUNCHER_BAT!" (
     copy /Y "!CURRENT_LAUNCHER_BAT!" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
     if errorlevel 1 (
@@ -73,6 +81,7 @@ if not exist "!LOCAL_LAUNCHER_BAT!" (
 ) else (
     if /I not "!CURRENT_LAUNCHER_BAT!"=="!LOCAL_LAUNCHER_BAT!" (
         echo Existing local launcher preserved to avoid stale external launcher overwrite.
+REM Section: perform this operational step before continuing.
         echo Recommended launcher path: !LOCAL_LAUNCHER_BAT!
     )
 )
@@ -83,6 +92,7 @@ if not "!CASM_MACHINE_ID!"=="" (
     if not exist "!CASM_STATE_DIR_PATH!" mkdir "!CASM_STATE_DIR_PATH!" >nul 2>&1
     >"!CASM_STATE_DIR_PATH!\machine_id.txt" echo !CASM_MACHINE_ID!
     if errorlevel 1 (
+REM Section: perform this operational step before continuing.
         echo Warning: Could not seed local machine ID into !CASM_STATE_DIR_PATH!\machine_id.txt
     ) else (
         echo Seeded local machine ID from approved installer token: !CASM_MACHINE_ID!
@@ -93,6 +103,7 @@ if not "!CASM_MACHINE_ID!"=="" if not "!CASM_PROVISION_SECRET!"=="" (
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
       "$statePath='!CASM_STATE_DIR_PATH!\local_mode_provision_state.json'; $machineId=$env:CASM_MACHINE_ID; $secret=$env:CASM_PROVISION_SECRET; $cloudUrl=$env:CASM_CLOUD_URL; if([string]::IsNullOrWhiteSpace($machineId) -or [string]::IsNullOrWhiteSpace($secret)){ exit 0 }; $existing=@{}; if(Test-Path $statePath){ try { $loaded=Get-Content -Raw -Path $statePath | ConvertFrom-Json; if($loaded){ $loaded.PSObject.Properties | ForEach-Object { $existing[$_.Name]=$_.Value } } } catch {} }; $now=[DateTimeOffset]::UtcNow.ToString('o'); $existing['machine_id']=$machineId; $existing['provision_secret']=$secret; if(-not [string]::IsNullOrWhiteSpace($cloudUrl)){ $existing['cloud_url']=$cloudUrl }; if([string]::IsNullOrWhiteSpace([string]$existing['status']) -or [string]$existing['status'] -eq 'idle' -or [string]$existing['status'] -eq 'credentials_present'){ $existing['status']='approved' }; $existing['updated_at']=$now; [void]$existing.Remove('last_provision_secret_error'); [void]$existing.Remove('last_provision_secret_error_at'); [void]$existing.Remove('last_provision_secret_error_detail'); $existing | ConvertTo-Json -Depth 6 | Set-Content -Path $statePath -Encoding UTF8"
     if errorlevel 1 (
+REM Section: perform this operational step before continuing.
         echo Warning: Could not seed local provisioning heartbeat secret.
     ) else (
         echo Seeded local provisioning heartbeat linkage for approved installer.
@@ -103,6 +114,7 @@ if /I not "!CURRENT_LAUNCHER_BAT!"=="!LOCAL_LAUNCHER_BAT!" (
     if /I "!HAS_MANAGED_LAUNCHER!"=="true" (
         echo Detected external launcher execution. Fresh provisioning linkage was applied before handoff.
         echo Handing off to managed local launcher:
+REM Section: perform this operational step before continuing.
         echo   !LOCAL_LAUNCHER_BAT!
         set "CASM_SKIP_INTRO_PAUSE=true"
         call "!LOCAL_LAUNCHER_BAT!"
@@ -113,6 +125,7 @@ if /I not "!CURRENT_LAUNCHER_BAT!"=="!LOCAL_LAUNCHER_BAT!" (
 set "CASM_APP_DIR=!CASM_SOURCE_ROOT!\Updated_Pipeline_Supabase"
 
 if not exist "!CASM_STATE_DIR_PATH!\machine_id.txt" (
+REM Section: perform this operational step before continuing.
     if exist "!CASM_APP_DIR!\machine_id.txt" (
         copy /Y "!CASM_APP_DIR!\machine_id.txt" "!CASM_STATE_DIR_PATH!\machine_id.txt" >nul 2>&1
         if not errorlevel 1 (
@@ -123,6 +136,7 @@ if not exist "!CASM_STATE_DIR_PATH!\machine_id.txt" (
             powershell -NoProfile -ExecutionPolicy Bypass -Command ^
               "$statePath='!CASM_APP_DIR!\local_mode_provision_state.json'; $machinePath='!CASM_STATE_DIR_PATH!\machine_id.txt'; try { $payload = Get-Content -Raw -Path $statePath -ErrorAction Stop | ConvertFrom-Json; $machineId = [string]$payload.machine_id; if(-not [string]::IsNullOrWhiteSpace($machineId)){ Set-Content -Path $machinePath -Value $machineId -Encoding ASCII } } catch { exit 1 }"
             if not errorlevel 1 (
+REM Section: perform this operational step before continuing.
                 if exist "!CASM_STATE_DIR_PATH!\machine_id.txt" (
                     echo Recovered machine ID from legacy provisioning-state file.
                 )
@@ -138,6 +152,7 @@ if exist "!CASM_APP_DIR!\.env" (
       "if((-not [string]::IsNullOrWhiteSpace($env:CASM_SUPABASE_URL)) -and (-not [string]::IsNullOrWhiteSpace($env:CASM_SUPABASE_DB_URL)) -and (-not [string]::IsNullOrWhiteSpace($env:CASM_SUPABASE_SERVICE_ROLE_KEY))){ $updates['SUPABASE_URL']=$env:CASM_SUPABASE_URL; $updates['SUPABASE_DB_URL']=$env:CASM_SUPABASE_DB_URL; $updates['SUPABASE_SERVICE_ROLE_KEY']=$env:CASM_SUPABASE_SERVICE_ROLE_KEY }; " ^
     "if($updates.Count -gt 0){ $keyPattern='^\s*([A-Za-z_][A-Za-z0-9_]*)\s*='; $seen=@{}; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $keyPattern){ $k=$Matches[1]; if($updates.Contains($k)){ if(-not $seen.ContainsKey($k)){ $lines[$i]=($k + '=' + $updates[$k]); $seen[$k]=$true } else { $lines[$i]='' } } } }; foreach($k in $updates.Keys){ if(-not $seen.ContainsKey($k)){ $lines += ($k + '=' + $updates[$k]) } }; $lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8 }"
 
+REM Section: perform this operational step before continuing.
     if %errorlevel% neq 0 (
         echo Warning: Could not pre-sync existing .env values from installer payload.
     ) else (
@@ -148,6 +163,7 @@ if exist "!CASM_APP_DIR!\.env" (
 if exist "!CASM_APP_DIR!\start.bat" (
     echo.
     echo Existing local installation detected:
+REM Section: perform this operational step before continuing.
     echo   !CASM_APP_DIR!
     echo.
     set "CASM_SHOULD_CHECK_UPDATES=false"
@@ -158,6 +174,7 @@ if exist "!CASM_APP_DIR!\start.bat" (
         echo   [1] Launch now ^(skip update check^)
         echo   [2] Check for updates then launch ^(recommended^)
         set "CASM_LAUNCH_CHOICE="
+REM Section: perform this operational step before continuing.
         set /p "CASM_LAUNCH_CHOICE=Enter choice [1/2] ^(default 2^): "
         if "!CASM_LAUNCH_CHOICE!"=="" set "CASM_LAUNCH_CHOICE=2"
         if "!CASM_LAUNCH_CHOICE!"=="1" set "CASM_SHOULD_CHECK_UPDATES=false"
@@ -168,6 +185,7 @@ if exist "!CASM_APP_DIR!\start.bat" (
     if /I "!CASM_SHOULD_CHECK_UPDATES!"=="true" (
         echo Checking for source updates before launch...
         call :refresh_existing_source_snapshot
+REM Section: perform this operational step before continuing.
         if errorlevel 1 (
             echo Warning: Auto-update failed or was skipped. Launching existing local files.
             if not "!CASM_UPDATE_ERROR!"=="" echo   Reason: !CASM_UPDATE_ERROR!
@@ -178,6 +196,7 @@ if exist "!CASM_APP_DIR!\start.bat" (
 
         call :safe_refresh_local_launcher
         if errorlevel 1 (
+REM Section: perform this operational step before continuing.
             echo Warning: Could not self-update launcher script from latest template.
             if not "!CASM_LAUNCHER_UPDATE_ERROR!"=="" echo   Reason: !CASM_LAUNCHER_UPDATE_ERROR!
         ) else (
@@ -189,6 +208,7 @@ if exist "!CASM_APP_DIR!\start.bat" (
         echo.
 
         call :safe_refresh_local_launcher >nul 2>&1
+REM Section: perform this operational step before continuing.
         if not errorlevel 1 (
             echo Launcher script refreshed from installed template.
             echo.
@@ -201,6 +221,7 @@ if exist "!CASM_APP_DIR!\start.bat" (
         if not "!CASM_START_BAT_REPAIR_ERROR!"=="" echo   Reason: !CASM_START_BAT_REPAIR_ERROR!
     )
 
+REM Section: perform this operational step before continuing.
     echo Launching existing CASM local backend...
     cd /d "!CASM_APP_DIR!"
     start cmd /k "start.bat"
@@ -216,6 +237,7 @@ if exist "!CASM_APP_DIR!\start.bat" (
     exit /b 0
 )
 
+REM Section: perform this operational step before continuing.
 echo.
 echo [1/6] Checking System Dependencies...
 echo.
@@ -226,6 +248,7 @@ py -3 --version >nul 2>&1
 if not errorlevel 1 (
     set "PYTHON_EXE=py -3"
 ) else (
+REM Section: perform this operational step before continuing.
     python --version >nul 2>&1
     if not errorlevel 1 (
         set "PYTHON_EXE=python"
@@ -236,6 +259,7 @@ if "!PYTHON_EXE!"=="" (
     echo Python is completely missing. Launching Python 3.11 installer...
     winget install --id Python.Python.3.11 -e
     if !errorlevel! neq 0 (
+REM Section: perform this operational step before continuing.
         echo Failed to install Python using winget.
         echo Please manually install Python 3.11 from python.org and rerun this script.
         pause
@@ -246,6 +270,7 @@ if "!PYTHON_EXE!"=="" (
 ) else (
     !PYTHON_EXE! -c "import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)" >nul 2>&1
     if !errorlevel! neq 0 (
+REM Section: perform this operational step before continuing.
         echo [ERROR] Outdated Python detected!
         echo CASM requires Python 3.10 or higher ^(You have an older version like 2.7 or 3.9^).
         echo Launching Python 3.11 installer natively...
@@ -257,6 +282,7 @@ if "!PYTHON_EXE!"=="" (
 )
 
 call :resolve_ollama_cmd
+REM Section: perform this operational step before continuing.
 if errorlevel 1 (
     echo.
     echo Ollama is missing. Launching Ollama installer...
@@ -269,6 +295,7 @@ if errorlevel 1 (
         del OllamaSetup.exe
     )
     call :resolve_ollama_cmd
+REM Section: perform this operational step before continuing.
     if errorlevel 1 (
         echo Warning: Ollama command is still not reachable in current shell.
         echo start.bat will retry resolution from known install paths.
@@ -280,6 +307,7 @@ if errorlevel 1 (
     echo Ollama is already installed at: !OLLAMA_CMD!
 )
 
+REM Section: perform this operational step before continuing.
 echo Ensuring Ollama service is reachable...
 call :ensure_ollama_running 30
 if errorlevel 1 (
@@ -290,6 +318,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/6] Downloading CASM Source Code...
+REM Section: perform this operational step before continuing.
 echo.
 if exist "!CASM_SOURCE_ROOT!" (
     if /I "!CASM_FORCE_SOURCE_REFRESH!"=="true" (
@@ -303,6 +332,7 @@ if exist "!CASM_SOURCE_ROOT!" (
     )
 )
 
+REM Section: perform this operational step before continuing.
 if not exist "!CASM_SOURCE_ROOT!" (
     echo Downloading from GitHub...
     rem --ssl-no-revoke avoids CRYPT_E_NO_REVOCATION_CHECK on networks where the CRL/OCSP responder is blocked.
@@ -316,6 +346,7 @@ if not exist "!CASM_SOURCE_ROOT!" (
         pause
         exit /b 1
     )
+REM Section: perform this operational step before continuing.
     echo Extracting files...
     powershell -command "Expand-Archive -Force casm.zip ."
     del casm.zip
@@ -326,6 +357,7 @@ cd "!CASM_SOURCE_ROOT!\Updated_Pipeline_Supabase"
 echo.
 echo [3/6] Configuring Environment...
 echo.
+REM Section: perform this operational step before continuing.
 if not exist ".env" (
     if exist ".env.example" (
         copy .env.example .env >nul
@@ -342,6 +374,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$placeholder='your-project-id|your-service-role-key|your-db-password|example\.supabase\.co'; foreach($key in @('SUPABASE_URL','SUPABASE_DB_URL','SUPABASE_SERVICE_ROLE_KEY')){ $pattern='^\s*'+[regex]::Escape($key)+'\s*=\s*(.*)$'; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ $value=($Matches[1] -as [string]); if($value -match $placeholder){ $lines[$i]=($key + '=') }; break } } }; " ^
     "$lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8"
 
+REM Section: perform this operational step before continuing.
 if %errorlevel% neq 0 (
     echo Warning: Could not normalize .env local defaults. Proceeding with existing values.
 ) else (
@@ -354,6 +387,7 @@ if not "!CASM_CLOUD_URL!"=="" (
       "$key='CLOUD_URL'; $value='!CASM_CLOUD_URL!'; $pattern='^\s*'+[regex]::Escape($key)+'\s*='; $updated=$false; for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i] -match $pattern){ if(-not $updated){ $lines[$i]=($key + '=' + $value); $updated=$true } else { $lines[$i]='' } } }; if(-not $updated){ $lines += ($key + '=' + $value) }; " ^
       "$lines = $lines | Where-Object { $_ -ne '' }; Set-Content -Path $envPath -Value $lines -Encoding UTF8"
 
+REM Section: perform this operational step before continuing.
     if %errorlevel% neq 0 (
         echo Warning: Could not write CLOUD_URL into .env automatically.
     ) else (
@@ -364,6 +398,7 @@ if not "!CASM_CLOUD_URL!"=="" (
 )
 
 if not "!CASM_SUPABASE_URL!"=="" if not "!CASM_SUPABASE_DB_URL!"=="" if not "!CASM_SUPABASE_SERVICE_ROLE_KEY!"=="" (
+REM Section: perform this operational step before continuing.
     powershell -NoProfile -ExecutionPolicy Bypass -Command ^
       "$envPath='.env'; $lines=@(Get-Content -Path $envPath -ErrorAction SilentlyContinue); if($null -eq $lines){$lines=@()}; " ^
       "$updates=[ordered]@{ 'SUPABASE_URL'=$env:CASM_SUPABASE_URL; 'SUPABASE_DB_URL'=$env:CASM_SUPABASE_DB_URL; 'SUPABASE_SERVICE_ROLE_KEY'=$env:CASM_SUPABASE_SERVICE_ROLE_KEY }; " ^
@@ -376,6 +411,7 @@ if not "!CASM_SUPABASE_URL!"=="" if not "!CASM_SUPABASE_DB_URL!"=="" if not "!CA
         echo Supabase credentials applied from approved installer payload.
     )
 ) else (
+REM Section: perform this operational step before continuing.
     echo Provisioned Supabase credentials were not embedded in this installer package.
     echo Auto-provisioning will continue in the background at runtime.
 )
@@ -386,6 +422,7 @@ echo.
 if not exist "venv\Scripts\activate.bat" (
     !PYTHON_EXE! -m venv venv
     if !errorlevel! neq 0 (
+REM Section: perform this operational step before continuing.
         echo Failed to create python environment. Please reopen this terminal to refresh PATH and run start.bat manually.
         explorer .
         pause
@@ -396,6 +433,7 @@ if not exist "venv\Scripts\activate.bat" (
 echo.
 echo [5/6] Launching CASM Background Server...
 echo.
+REM Section: perform this operational step before continuing.
 echo ========================================================
 echo SETUP COMPLETE!
 echo The backend is now starting in a new window.
@@ -406,6 +444,7 @@ echo.
 
 call :repair_startup_batch_label_mismatch
 if errorlevel 1 (
+REM Section: perform this operational step before continuing.
     echo Warning: Could not auto-repair startup batch label mismatch before first launch.
     if not "!CASM_START_BAT_REPAIR_ERROR!"=="" echo   Reason: !CASM_START_BAT_REPAIR_ERROR!
 )
@@ -417,6 +456,7 @@ rem Resolve actual Desktop folder via Shell API. Handles OneDrive Desktop redire
 for /f "usebackq delims=" %%D in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "[Environment]::GetFolderPath('Desktop')"`) do set "DESKTOP_DIR=%%D"
 if "!DESKTOP_DIR!"=="" set "DESKTOP_DIR=%USERPROFILE%\Desktop"
 if not exist "!DESKTOP_DIR!" (
+REM Section: perform this operational step before continuing.
     echo Warning: Desktop folder !DESKTOP_DIR! not found; skipping shortcut creation.
     goto :skip_shortcut
 )
@@ -428,6 +468,7 @@ if errorlevel 1 (
 set "TARGET_PATH=%LOCAL_LAUNCHER_BAT%"
 set "WORKING_DIR=%INSTALL_DIR%"
 
+REM Section: perform this operational step before continuing.
 powershell -Command "$wshell = New-Object -ComObject WScript.Shell; $shortcut = $wshell.CreateShortcut('!SHORTCUT_PATH!'); $shortcut.TargetPath = '%TARGET_PATH%'; $shortcut.WorkingDirectory = '%WORKING_DIR%'; $shortcut.Description = 'Launch CASM Offline Mode'; $shortcut.Save()"
 :skip_shortcut
 
@@ -438,6 +479,7 @@ echo your Desktop and points to the same installer-launcher BAT.
 echo Double-click the same BAT/shortcut anytime to launch.
 echo If CASM is already installed, it auto-refreshes source then launches.
 echo Reinstall/refresh is optional and only needed for recovery.
+REM Section: perform this operational step before continuing.
 echo --------------------------------------------------------
 echo You can safely close this installer window now.
 pause
@@ -448,6 +490,7 @@ set "OLLAMA_CMD="
 
 where ollama >nul 2>&1
 if not errorlevel 1 (
+REM Section: perform this operational step before continuing.
     set "OLLAMA_CMD=ollama"
     exit /b 0
 )
@@ -458,6 +501,7 @@ if exist "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" (
 )
 
 if exist "%ProgramFiles%\Ollama\ollama.exe" (
+REM Section: perform this operational step before continuing.
     set "OLLAMA_CMD=%ProgramFiles%\Ollama\ollama.exe"
     exit /b 0
 )
@@ -469,6 +513,7 @@ if defined ProgramFiles(x86) if exist "%ProgramFiles(x86)%\Ollama\ollama.exe" (
 
 exit /b 1
 
+REM Section: perform this operational step before continuing.
 :ensure_ollama_running
 set "OLLAMA_WAIT_SECONDS=%~1"
 if "%OLLAMA_WAIT_SECONDS%"=="" set "OLLAMA_WAIT_SECONDS=30"
@@ -481,6 +526,7 @@ if !errorlevel! equ 0 exit /b 0
 
 call :spawn_ollama_runtime >nul 2>&1
 
+REM Section: perform this operational step before continuing.
 for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
     "%OLLAMA_CMD%" list >nul 2>&1
     if !errorlevel! equ 0 exit /b 0
@@ -492,6 +538,7 @@ exit /b 1
 
 :spawn_ollama_runtime
 call :resolve_ollama_cmd
+REM Section: perform this operational step before continuing.
 if errorlevel 1 exit /b 1
 
 start "" /b "%OLLAMA_CMD%" serve >nul 2>&1
@@ -505,6 +552,7 @@ if not errorlevel 1 exit /b 0
 
 exit /b 1
 
+REM Section: perform this operational step before continuing.
 :launch_ollama_desktop
 set "OLLAMA_APP_CMD="
 
@@ -515,6 +563,7 @@ if not "%OLLAMA_CMD%"=="" (
 
 if "!OLLAMA_APP_CMD!"=="" if exist "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe" set "OLLAMA_APP_CMD=%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"
 if "!OLLAMA_APP_CMD!"=="" if exist "%ProgramFiles%\Ollama\ollama app.exe" set "OLLAMA_APP_CMD=%ProgramFiles%\Ollama\ollama app.exe"
+REM Section: perform this operational step before continuing.
 if defined ProgramFiles(x86) if "!OLLAMA_APP_CMD!"=="" if exist "%ProgramFiles(x86)%\Ollama\ollama app.exe" set "OLLAMA_APP_CMD=%ProgramFiles(x86)%\Ollama\ollama app.exe"
 
 if "!OLLAMA_APP_CMD!"=="" exit /b 1
@@ -527,6 +576,7 @@ if not errorlevel 1 exit /b 0
 
 exit /b 1
 
+REM Section: perform this operational step before continuing.
 :repair_startup_batch_label_mismatch
 set "CASM_START_BAT_REPAIR_ERROR="
 set "START_BAT_PATH=!CASM_APP_DIR!\start.bat"
@@ -548,6 +598,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "if($updated){ Set-Content -Path $path -Value $content -Encoding ASCII; exit 0 }; " ^
   "if(($callsSafe -and -not $hasSafeLabel) -or ($callsStart -and -not $hasStartLabel)){ exit 2 }; exit 0"
 
+REM Section: perform this operational step before continuing.
 set "REPAIR_STATUS=!errorlevel!"
 if not "!REPAIR_STATUS!"=="0" (
     if "!REPAIR_STATUS!"=="2" (
@@ -560,6 +611,7 @@ if not "!REPAIR_STATUS!"=="0" (
 
 exit /b 0
 
+REM Section: perform this operational step before continuing.
 :refresh_existing_source_snapshot
 set "UPDATE_ZIP=%TEMP%\casm_source_update.zip"
 set "UPDATE_STAGE=%TEMP%\casm_source_update_%RANDOM%_%RANDOM%"
@@ -570,6 +622,7 @@ if "!CASM_REPO_ZIP_URL!"=="" (
     set "CASM_UPDATE_ERROR=missing_repo_zip_url"
     exit /b 1
 )
+REM Section: perform this operational step before continuing.
 if /I "!CASM_REPO_ZIP_URL!"=="__CASM_REPO_ZIP_URL__" (
     set "CASM_UPDATE_ERROR=placeholder_repo_zip_url"
     exit /b 1
@@ -580,6 +633,7 @@ curl.exe -fL --ssl-no-revoke --retry 2 --retry-delay 1 --connect-timeout 15 --ma
 if not errorlevel 1 set "UPDATE_DOWNLOAD_OK=1"
 
 if "!UPDATE_DOWNLOAD_OK!"=="" (
+REM Section: perform this operational step before continuing.
     powershell -NoProfile -ExecutionPolicy Bypass -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri '!CASM_REPO_ZIP_URL!' -OutFile '!UPDATE_ZIP!' -TimeoutSec 240; exit 0 } catch { exit 1 }" >nul 2>&1
     if errorlevel 1 (
         set "CASM_UPDATE_ERROR=download_failed"
@@ -592,6 +646,7 @@ if not exist "!UPDATE_ZIP!" (
     goto :refresh_existing_source_snapshot_fail
 )
 
+REM Section: perform this operational step before continuing.
 for %%Z in ("!UPDATE_ZIP!") do (
     if %%~zZ LSS 1024 (
         set "CASM_UPDATE_ERROR=zip_too_small"
@@ -605,6 +660,7 @@ if errorlevel 1 (
     goto :refresh_existing_source_snapshot_fail
 )
 
+REM Section: perform this operational step before continuing.
 if exist "!UPDATE_STAGE!\!CASM_SOURCE_ROOT!\Updated_Pipeline_Supabase\start.bat" (
     set "UPDATE_SOURCE_DIR=!UPDATE_STAGE!\!CASM_SOURCE_ROOT!\Updated_Pipeline_Supabase"
 ) else (
@@ -615,6 +671,7 @@ if exist "!UPDATE_STAGE!\!CASM_SOURCE_ROOT!\Updated_Pipeline_Supabase\start.bat"
     )
 )
 
+REM Section: perform this operational step before continuing.
 if "!UPDATE_SOURCE_DIR!"=="" (
     set "CASM_UPDATE_ERROR=source_dir_not_found"
     goto :refresh_existing_source_snapshot_fail
@@ -627,6 +684,7 @@ if !ROBOCOPY_CODE! GEQ 8 (
     goto :refresh_existing_source_snapshot_fail
 )
 
+REM Section: perform this operational step before continuing.
 if exist "!UPDATE_ZIP!" del "!UPDATE_ZIP!" >nul 2>&1
 if exist "!UPDATE_STAGE!" rmdir /s /q "!UPDATE_STAGE!" >nul 2>&1
 set "CASM_UPDATE_ERROR="
@@ -637,6 +695,7 @@ if exist "!UPDATE_ZIP!" del "!UPDATE_ZIP!" >nul 2>&1
 if exist "!UPDATE_STAGE!" rmdir /s /q "!UPDATE_STAGE!" >nul 2>&1
 exit /b 1
 
+REM Section: perform this operational step before continuing.
 :safe_refresh_local_launcher
 set "CASM_LAUNCHER_UPDATE_ERROR="
 call :refresh_local_launcher_from_template >nul 2>&1
@@ -649,6 +708,7 @@ if /I "!CASM_SELF_UPDATE_LAUNCHER!" NEQ "true" (
     set "CASM_LAUNCHER_UPDATE_ERROR=self_update_disabled"
     exit /b 1
 )
+REM Section: perform this operational step before continuing.
 if not exist "!TEMPLATE_BAT!" (
     set "CASM_LAUNCHER_UPDATE_ERROR=template_missing"
     exit /b 1
@@ -661,6 +721,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$lineMap = [ordered]@{}; foreach($token in $tokenMap.Keys){ $varName = $tokenMap[$token]; $pattern = '(?im)^\s*set\s+\"' + [regex]::Escape($varName) + '=(.*)\"\s*$'; $m = [regex]::Match($current, $pattern); $value = if($m.Success){ [string]$m.Groups[1].Value } else { '' }; $sourceLine = 'set \"' + $varName + '=' + $token + '\"'; $targetLine = 'set \"' + $varName + '=' + $value + '\"'; $lineMap[$sourceLine] = $targetLine }; foreach($sourceLine in $lineMap.Keys){ $template = $template.Replace($sourceLine, $lineMap[$sourceLine]) }; " ^
     "Set-Content -Path '!UPDATED_LAUNCHER!' -Value $template -Encoding ASCII"
 
+REM Section: perform this operational step before continuing.
 if errorlevel 1 (
     if exist "!UPDATED_LAUNCHER!" del "!UPDATED_LAUNCHER!" >nul 2>&1
     set "CASM_LAUNCHER_UPDATE_ERROR=fallback_template_render_failed"
@@ -671,6 +732,7 @@ if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" (
     start "" cmd /c "timeout /t 2 >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LOCAL_LAUNCHER_BAT!\" >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LEGACY_LAUNCHER_BAT!\" >nul & del \"!UPDATED_LAUNCHER!\" >nul"
 ) else (
     copy /Y "!UPDATED_LAUNCHER!" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
+REM Section: perform this operational step before continuing.
     if errorlevel 1 (
         del "!UPDATED_LAUNCHER!" >nul 2>&1
         set "CASM_LAUNCHER_UPDATE_ERROR=fallback_launcher_copy_failed"
@@ -683,6 +745,7 @@ if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" (
 set "CASM_LAUNCHER_UPDATE_ERROR="
 exit /b 0
 
+REM Section: perform this operational step before continuing.
 :refresh_local_launcher_from_template
 set "CASM_LAUNCHER_UPDATE_ERROR="
 set "TEMPLATE_BAT=!CASM_APP_DIR!\frontend\static\CASM_LocalInstaller.bat"
@@ -693,6 +756,7 @@ if /I "!CASM_SELF_UPDATE_LAUNCHER!" NEQ "true" (
     exit /b 1
 )
 if not exist "!TEMPLATE_BAT!" (
+REM Section: perform this operational step before continuing.
     set "CASM_LAUNCHER_UPDATE_ERROR=template_missing"
     exit /b 1
 )
@@ -704,6 +768,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$lineMap = [ordered]@{}; foreach($token in $tokenMap.Keys){ $varName = $tokenMap[$token]; $pattern = '(?im)^\s*set\s+\"' + [regex]::Escape($varName) + '=(.*)\"\s*$'; $m = [regex]::Match($current, $pattern); $value = if($m.Success){ [string]$m.Groups[1].Value } else { '' }; $sourceLine = 'set \"' + $varName + '=' + $token + '\"'; $targetLine = 'set \"' + $varName + '=' + $value + '\"'; $lineMap[$sourceLine] = $targetLine }; foreach($sourceLine in $lineMap.Keys){ $template = $template.Replace($sourceLine, $lineMap[$sourceLine]) }; " ^
     "Set-Content -Path '!UPDATED_LAUNCHER!' -Value $template -Encoding ASCII"
 
+REM Section: perform this operational step before continuing.
 if errorlevel 1 (
     if exist "!UPDATED_LAUNCHER!" del "!UPDATED_LAUNCHER!" >nul 2>&1
     set "CASM_LAUNCHER_UPDATE_ERROR=template_render_failed"
@@ -714,6 +779,7 @@ if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" (
     start "" cmd /c "timeout /t 2 >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LOCAL_LAUNCHER_BAT!\" >nul & copy /Y \"!UPDATED_LAUNCHER!\" \"!LEGACY_LAUNCHER_BAT!\" >nul & del \"!UPDATED_LAUNCHER!\" >nul"
 ) else (
     copy /Y "!UPDATED_LAUNCHER!" "!LOCAL_LAUNCHER_BAT!" >nul 2>&1
+REM Section: perform this operational step before continuing.
     if errorlevel 1 (
         del "!UPDATED_LAUNCHER!" >nul 2>&1
         set "CASM_LAUNCHER_UPDATE_ERROR=launcher_copy_failed"
@@ -726,6 +792,7 @@ if /I "%~f0"=="!LOCAL_LAUNCHER_BAT!" (
 set "CASM_LAUNCHER_UPDATE_ERROR="
 exit /b 0
 
+REM Section: perform this operational step before continuing.
 :sync_launcher_aliases
 if not defined LOCAL_LAUNCHER_BAT exit /b 0
 if not defined LEGACY_LAUNCHER_BAT exit /b 0

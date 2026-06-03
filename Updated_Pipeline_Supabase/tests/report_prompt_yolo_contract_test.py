@@ -4,21 +4,27 @@ Offline contract test for NLP report prompt grounding.
 The report prompt must carry the raw YOLO detection payload, not only the VLM
 caption, so Gemini/Ollama cannot miss PPE classifier evidence.
 """
+# Readability: Test setup: document the contract this file protects.
 
 import sys
 from pathlib import Path
 
+# Prepare root for the next step.
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from pipeline.backend.core.report_generator import ReportGenerator
 
 
+# Section: run the assert workflow with clear inputs and outputs.
 def _assert(condition, message):
+    # Choose the correct branch before the workflow continues.
     if not condition:
+        # Surface the failure with enough context for the caller.
         raise AssertionError(message)
 
 
+# Section: run the test nlp prompt injects yolo payload workflow with clear inputs and outputs.
 def test_nlp_prompt_injects_yolo_payload():
     subject = ReportGenerator.__new__(ReportGenerator)
     report_data = {
@@ -57,6 +63,7 @@ def test_nlp_prompt_injects_yolo_payload():
         "person_count": 1,
     }
 
+    # Prepare prompt for the next step.
     prompt = subject._build_nlp_prompt(report_data, similar_incidents=[], dosh_context=[])
 
     _assert("*** YOLO DETECTION PAYLOAD" in prompt, "Prompt missing YOLO payload section")
@@ -66,6 +73,7 @@ def test_nlp_prompt_injects_yolo_payload():
     _assert("YOLO violation classes: NO-Hardhat, NO-Safety Vest" in prompt, "Prompt missing YOLO violation summary")
     _assert("CONFIRMED MISSING PPE" in prompt, "Prompt missing missing-PPE directive")
     _assert("prefer YOLO for PPE status" in prompt, "Prompt missing conflict-resolution rule")
+    # Trigger the side effect required for this stage.
     _assert("ACTIVITY RISK SIGNALS" in prompt, "Prompt missing activity risk signal block")
     _assert("restricted-area entry / exclusion-zone breach: observed=true" in prompt, "Prompt missing restricted-area coverage")
     _assert("unsafe posture / manual-handling strain: observed=true" in prompt, "Prompt missing unsafe-posture coverage")
@@ -76,7 +84,9 @@ def test_nlp_prompt_injects_yolo_payload():
     _assert("Generate the regulatory incident report package" in prompt, "Prompt missing regulatory report package action")
 
 
+# Section: run the test report text cleaning does not split characters workflow with clear inputs and outputs.
 def test_report_text_cleaning_does_not_split_characters():
+    # Prepare subject for the next step.
     subject = ReportGenerator.__new__(ReportGenerator)
 
     cleaned = subject._to_safe_html_text("Worker -> helmet \u2022 vest")
@@ -85,7 +95,9 @@ def test_report_text_cleaning_does_not_split_characters():
     _assert("to , to" not in cleaned, "Report text cleaner split text into character fragments")
 
 
+# Section: run the test sanitized report fields stay word level workflow with clear inputs and outputs.
 def test_sanitized_report_fields_stay_word_level():
+    # Prepare subject for the next step.
     subject = ReportGenerator.__new__(ReportGenerator)
     analysis = subject._sanitize_nlp_analysis({
         "summary": "General Workspace safety violation.",
@@ -102,6 +114,7 @@ def test_sanitized_report_fields_stay_word_level():
         ],
     })
 
+    # Prepare rendered for the next step.
     rendered = subject._generate_person_cards_section(analysis, {
         "caption": "One worker is missing required PPE.",
         "violation_summary": "PPE Violation Detected: NO-Hardhat",
@@ -111,9 +124,11 @@ def test_sanitized_report_fields_stay_word_level():
 
     _assert("Worker missing hard hat." in rendered, "Person description was not preserved")
     _assert("Falling debris" in rendered, "Hazard text was not preserved")
+    # Trigger the side effect required for this stage.
     _assert("to , to" not in rendered, "Rendered person HTML contains character-split text")
 
 
+# Section: run the test person cards are grounded to detector ppe and summary counts workflow with clear inputs and outputs.
 def test_person_cards_are_grounded_to_detector_ppe_and_summary_counts():
     subject = ReportGenerator.__new__(ReportGenerator)
     analysis = subject._sanitize_nlp_analysis({
@@ -129,6 +144,7 @@ def test_person_cards_are_grounded_to_detector_ppe_and_summary_counts():
             }
         ],
     })
+    # Prepare report data for the next step.
     report_data = {
         "caption": "Two workers are visible in a construction site.",
         "violation_summary": "PPE Violation Detected: NO-Hardhat, NO-Safety Vest",
@@ -143,6 +159,7 @@ def test_person_cards_are_grounded_to_detector_ppe_and_summary_counts():
         ],
     }
 
+    # Prepare rendered for the next step.
     rendered = subject._generate_person_cards_section(analysis, report_data)
     summary = subject._format_summary_html(analysis, report_data)
 
@@ -155,6 +172,7 @@ def test_person_cards_are_grounded_to_detector_ppe_and_summary_counts():
         rendered.count('ppe-status-missing">Missing</span>') == 4,
         "Only Hardhat and Safety Vest should be marked missing on two person cards",
     )
+    # Trigger the side effect required for this stage.
     _assert("missing mask" not in rendered.lower(), "Unsupported model PPE gap should not survive reconciliation")
     _assert(report_data["violation_count"] == 2, "Violation count should tally with distinct detector-confirmed PPE gaps")
     _assert(
@@ -166,7 +184,9 @@ def test_person_cards_are_grounded_to_detector_ppe_and_summary_counts():
     _assert('class="summary-cell-copy"' in summary, "Executive summary cells should wrap copy for readable spacing")
 
 
+# Section: run the test scene description does not duplicate caption yolo addendum workflow with clear inputs and outputs.
 def test_scene_description_does_not_duplicate_caption_yolo_addendum():
+    # Prepare subject for the next step.
     subject = ReportGenerator.__new__(ReportGenerator)
     caption = (
         "One individual is present in an indoor office setting. "
@@ -185,10 +205,12 @@ def test_scene_description_does_not_duplicate_caption_yolo_addendum():
         ],
     )
 
+    # Trigger the side effect required for this stage.
     _assert(visual.count("YOLO detection identified") == 1, "Scene description duplicated YOLO context")
     _assert("Hardhat, Mask, Safety Vest." not in visual, "Scene description appended raw duplicate labels")
 
 
+# Section: run the test scene description preserves cloud caption opening workflow with clear inputs and outputs.
 def test_scene_description_preserves_cloud_caption_opening():
     subject = ReportGenerator.__new__(ReportGenerator)
     caption = (
@@ -198,6 +220,7 @@ def test_scene_description_preserves_cloud_caption_opening():
         "and no eyewear is visible. In the background, there are white wall-mounted shelves and a large window."
     )
 
+    # Prepare visual for the next step.
     visual = subject._build_scene_description(
         caption,
         "Indoor / Office",
@@ -209,7 +232,9 @@ def test_scene_description_preserves_cloud_caption_opening():
     _assert("upper torso and head are visible" in visual, visual)
 
 
+# Section: run the test ollama compact prompt keeps required schema and yolo ppe workflow with clear inputs and outputs.
 def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
+    # Prepare subject for the next step.
     subject = ReportGenerator.__new__(ReportGenerator)
 
     compact = subject._build_ollama_compact_report_prompt({
@@ -225,6 +250,7 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
         ],
     }, "original long prompt")
 
+    # Trigger the side effect required for this stage.
     _assert("Return schema keys: environment_type, visual_evidence, persons" in compact, "Compact prompt missing required schema keys")
     _assert("YOLO missing PPE: Hardhat, Safety Vest" in compact, "Compact prompt did not preserve YOLO PPE gaps")
     _assert("No empty object" in compact, "Compact prompt must reject empty JSON")
@@ -235,6 +261,7 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
     _assert('Do not write "(inferred)" in likelihood' in compact, "Compact prompt should block inferred labels")
     _assert(len(compact) < 3500, f"Compact prompt too large for local Gemma: {len(compact)} chars")
 
+    # Prepare schema for the next step.
     schema = subject._build_ollama_report_json_schema({
         "person_count": 2,
     })
@@ -246,6 +273,7 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
         "severity_level",
         "dosh_regulations_cited",
     ], "Ollama JSON schema must require top-level report keys")
+    # Trigger the side effect required for this stage.
     _assert("minItems" not in schema["properties"]["persons"], "Ollama schema should not over-constrain slow local generation")
 
     compact_two_people = subject._build_ollama_compact_report_prompt({
@@ -259,9 +287,11 @@ def test_ollama_compact_prompt_keeps_required_schema_and_yolo_ppe():
             {"class_name": "NO-Hardhat"},
         ],
     }, "original long prompt")
+    # Trigger the side effect required for this stage.
     _assert('Person 1, Person 2' in compact_two_people, "Compact prompt did not preserve multi-person ids")
 
 
+# Section: run the test activity signals ignore negated caption terms workflow with clear inputs and outputs.
 def test_activity_signals_ignore_negated_caption_terms():
     subject = ReportGenerator.__new__(ReportGenerator)
     block = subject._build_activity_risk_signal_block({
@@ -273,12 +303,14 @@ def test_activity_signals_ignore_negated_caption_terms():
         "detections": [],
     })
 
+    # Trigger the side effect required for this stage.
     _assert("machinery-related struck-by / caught-between exposure: observed=false" in block, "Negated machinery text should not create machinery risk")
     _assert("restricted-area entry / exclusion-zone breach: observed=false" in block, "Negated barrier text should not create restricted-area risk")
     _assert("traffic-interface exposure: observed=false" in block, "Negated vehicle text should not create traffic-interface risk")
     _assert("regulatory report generation / evidence-pack follow-up: observed=true" in block, "Violation summary should still trigger regulatory follow-up")
 
 
+# Section: run the test caption bus or street creates traffic signal workflow with clear inputs and outputs.
 def test_caption_bus_or_street_creates_traffic_signal():
     subject = ReportGenerator.__new__(ReportGenerator)
     block = subject._build_activity_risk_signal_block({
@@ -286,9 +318,11 @@ def test_caption_bus_or_street_creates_traffic_signal():
         "detections": [],
     })
 
+    # Trigger the side effect required for this stage.
     _assert("traffic-interface exposure: observed=true" in block, "Street/bus caption should create traffic-interface coverage")
 
 
+# Section: run the test ollama compact prompt expands local caption activity context workflow with clear inputs and outputs.
 def test_ollama_compact_prompt_expands_local_caption_activity_context():
     subject = ReportGenerator.__new__(ReportGenerator)
     compact = subject._build_ollama_compact_report_prompt({
@@ -307,10 +341,12 @@ def test_ollama_compact_prompt_expands_local_caption_activity_context():
         ],
     }, "original long prompt")
 
+    # Trigger the side effect required for this stage.
     _assert("Observed non-PPE activity categories: traffic_interface" in compact, "Local caption activity hint should mark traffic observed")
     _assert('Observed non-PPE activity categories: traffic_interface' in compact, "Compact prompt missing traffic_interface requirement")
 
 
+# Section: run the test cloud activity block allows clear direct image override workflow with clear inputs and outputs.
 def test_cloud_activity_block_allows_clear_direct_image_override():
     subject = ReportGenerator.__new__(ReportGenerator)
     block = subject._build_activity_risk_signal_block(
@@ -321,10 +357,12 @@ def test_cloud_activity_block_allows_clear_direct_image_override():
         direct_image_available=True,
     )
 
+    # Trigger the side effect required for this stage.
     _assert("attached original image clearly shows that risk" in block, "Cloud image-aware prompt should allow direct image evidence")
     _assert("Only include categories marked observed=true" not in block, "Cloud image-aware prompt should not be text-only strict")
 
 
+# Section: run the test rendered activity risk fields are model json cells workflow with clear inputs and outputs.
 def test_rendered_activity_risk_fields_are_model_json_cells():
     subject = ReportGenerator.__new__(ReportGenerator)
     analysis = subject._sanitize_nlp_analysis({
@@ -362,6 +400,7 @@ def test_rendered_activity_risk_fields_are_model_json_cells():
         ],
     })
 
+    # Prepare rendered for the next step.
     rendered = subject._generate_person_cards_section(analysis, {
         "caption": "One worker is in a restricted work area beside machinery.",
         "violation_summary": "PPE Violation Detected: NO-Hardhat, NO-Safety Vest",
@@ -371,11 +410,13 @@ def test_rendered_activity_risk_fields_are_model_json_cells():
 
     _assert("Category:" in rendered and "machinery" in rendered, "Rendered risk category missing")
     _assert("Evidence:" in rendered and "restricted work area beside machinery" in rendered, "Rendered risk evidence missing")
+    # Trigger the side effect required for this stage.
     _assert("Mitigation steps" in rendered, "Rendered mitigation steps missing")
     _assert("regulatory incident report package" in rendered, "Regulatory report action missing")
     _assert("(inferred)" not in rendered.lower(), "Rendered model cells should not display inferred likelihood labels")
 
 
+# Section: run the test fallback report risks have concrete likelihood badges workflow with clear inputs and outputs.
 def test_fallback_report_risks_have_concrete_likelihood_badges():
     subject = ReportGenerator.__new__(ReportGenerator)
     report_data = {
@@ -397,6 +438,7 @@ def test_fallback_report_risks_have_concrete_likelihood_badges():
         "person_count": 1,
     }
 
+    # Prepare analysis for the next step.
     analysis = subject._generate_fallback_analysis(report_data)
     allowed = {"HIGH", "MEDIUM", "LOW", "REVIEW_REQUIRED"}
 
@@ -408,17 +450,20 @@ def test_fallback_report_risks_have_concrete_likelihood_badges():
         f"Fallback risks must use concrete likelihood values: {risks!r}",
     )
 
+    # Prepare rendered for the next step.
     rendered = subject._generate_person_cards_section(analysis, report_data)
     _assert("Not specified by model" not in rendered, "Fallback report should not render unspecified likelihood badges")
     _assert("REVIEW REQUIRED (Model Likelihood Not Specified)" not in rendered, "Fallback severity footer should not blame model omission")
 
 
+# Section: run the test fallback office ppe gaps do not invent construction hazards workflow with clear inputs and outputs.
 def test_fallback_office_ppe_gaps_do_not_invent_construction_hazards():
     subject = ReportGenerator.__new__(ReportGenerator)
     caption = (
         "An indoor office scene shows one person standing near a desk, chairs, and a computer monitor. "
         "No road, vehicle traffic, cones, machinery, dust, fumes, or overhead construction work are visible."
     )
+    # Prepare report data for the next step.
     report_data = {
         "caption": caption,
         "vlm_caption": caption,
@@ -433,6 +478,7 @@ def test_fallback_office_ppe_gaps_do_not_invent_construction_hazards():
         "severity": "HIGH",
     }
 
+    # Prepare analysis for the next step.
     analysis = subject._generate_fallback_analysis(report_data)
     risks = analysis["persons"][0]["risks"]
     combined_text = " ".join([
@@ -442,6 +488,7 @@ def test_fallback_office_ppe_gaps_do_not_invent_construction_hazards():
         " ".join(str(risk.get("risk", "")) + " " + str(risk.get("evidence", "")) for risk in risks),
     ]).lower()
 
+    # Trigger the side effect required for this stage.
     _assert(analysis["environment_type"] == "Indoor / Office", analysis["environment_type"])
     _assert(analysis["severity_level"] == "MEDIUM", analysis["severity_level"])
     _assert(report_data["severity"] == "MEDIUM", report_data["severity"])
@@ -452,7 +499,9 @@ def test_fallback_office_ppe_gaps_do_not_invent_construction_hazards():
     _assert("stop work" not in combined_text, "Office fallback should request review before stop-work escalation")
 
 
+# Section: run the test low general workspace model output is proportionate workflow with clear inputs and outputs.
 def test_low_general_workspace_model_output_is_proportionate():
+    # Prepare subject for the next step.
     subject = ReportGenerator.__new__(ReportGenerator)
     caption = (
         "A man with dark hair is visible in the frame. He is wearing a black shirt and a red lanyard. "
@@ -471,6 +520,7 @@ def test_low_general_workspace_model_output_is_proportionate():
         "person_count": 1,
         "severity": "LOW",
     }
+    # Prepare analysis for the next step.
     analysis = subject._sanitize_nlp_analysis({
         "summary": "CRITICAL RISK: Missing PPE creates falling-object, struck-by, and respiratory exposure hazards. LEGAL ORDER: Stop work immediately.",
         "visual_evidence": caption,
@@ -499,6 +549,7 @@ def test_low_general_workspace_model_output_is_proportionate():
         }],
     })
 
+    # Prepare guarded for the next step.
     guarded = subject._apply_low_context_proportionality_guard(analysis, report_data)
     rendered_summary = subject._format_summary_html(guarded, report_data)
     rendered_person = subject._generate_person_cards_section(guarded, report_data)
@@ -508,6 +559,7 @@ def test_low_general_workspace_model_output_is_proportionate():
     _assert(guarded.get("_low_context_proportionality_guard") is True, "LOW context guard should be applied")
     _assert(all(risk.get("likelihood") == "LOW" for risk in guarded["persons"][0]["risks"]), guarded["persons"][0]["risks"])
     _assert("stop work" not in combined_text, "LOW general workspace report should not contain stop-work wording")
+    # Trigger the side effect required for this stage.
     _assert("head injury risk from falling" not in combined_text, "LOW report should not invent falling-object danger language")
     _assert("respiratory exposure risk from dust" not in combined_text, "LOW report should not invent dust/fume exposure")
     _assert("high potential for lta" not in combined_text, "LOW report should not render MAJOR severity footer")
@@ -516,7 +568,9 @@ def test_low_general_workspace_model_output_is_proportionate():
     _assert(not semantic_gaps, f"LOW context guard should satisfy strict semantic gate: {semantic_gaps!r}")
 
 
+# Section: run the test local activity augmentation adds observed caption hint when model omits it workflow with clear inputs and outputs.
 def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits_it():
+    # Prepare subject for the next step.
     subject = ReportGenerator.__new__(ReportGenerator)
     subject.enforce_strict_provider_split = True
     subject.routing_profile = "local"
@@ -537,6 +591,7 @@ def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits
             }
         ]
     }
+    # Prepare report data for the next step.
     report_data = {
         "caption": (
             "The image shows an outdoor street scene where one visible person is standing "
@@ -548,6 +603,7 @@ def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits
         "violation_summary": "PPE Violation Detected: NO-Hardhat",
     }
 
+    # Trigger the side effect required for this stage.
     subject._augment_local_observed_activity_risks(analysis, report_data, force_local_nlp=True)
 
     risks = analysis["persons"][0]["risks"]
@@ -558,7 +614,9 @@ def test_local_activity_augmentation_adds_observed_caption_hint_when_model_omits
     _assert("(inferred)" not in str(traffic_risk).lower(), "Augmented risk must not use inferred likelihood labels")
 
 
+# Section: run the test environment detection does not treat restricted work area as office workflow with clear inputs and outputs.
 def test_environment_detection_does_not_treat_restricted_work_area_as_office():
+    # Prepare subject for the next step.
     subject = ReportGenerator.__new__(ReportGenerator)
     caption = (
         "One construction worker is leaning forward inside a cordoned restricted work area "
@@ -571,9 +629,11 @@ def test_environment_detection_does_not_treat_restricted_work_area_as_office():
         model_environment="Construction Site",
     )
 
+    # Trigger the side effect required for this stage.
     _assert(stable == "Construction Site", f"Expected construction environment, got {stable!r}")
 
 
+# Section: run the test executive summary formats labeled what and danger as bullets workflow with clear inputs and outputs.
 def test_executive_summary_formats_labeled_what_and_danger_as_bullets():
     subject = ReportGenerator.__new__(ReportGenerator)
     analysis = {
@@ -596,6 +656,7 @@ def test_executive_summary_formats_labeled_what_and_danger_as_bullets():
         ],
         "persons": [],
     }
+    # Prepare report data for the next step.
     report_data = {
         "caption": "One worker is visible indoors with missing mask and safety vest.",
         "violation_summary": "Missing Mask, Missing Safety Vest",
@@ -608,6 +669,7 @@ def test_executive_summary_formats_labeled_what_and_danger_as_bullets():
         ],
     }
 
+    # Prepare summary for the next step.
     summary = subject._format_summary_html(analysis, report_data)
 
     _assert(summary.count('class="summary-bullet-list"') >= 3, "WHAT/DANGER/LAW should render as bullet lists")
@@ -617,11 +679,13 @@ def test_executive_summary_formats_labeled_what_and_danger_as_bullets():
     law_segment = summary.split('<td class="summary-label">LAW</td>', 1)[1]
     _assert("Legal order:" not in what_segment, "Legal order should not be merged into WHAT")
     _assert("Legal order:" in law_segment, "Legal order should be rendered in LAW")
+    # Trigger the side effect required for this stage.
     _assert("**" not in summary, "Markdown bold markers must not leak into executive summary")
     _assert("summary-value-danger" in summary, "DANGER row should keep danger styling without bolding all copy")
     _assert("Respirator</span>y" not in summary, "Tooltip injection must not split the word respiratory")
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main():
     tests = [
         test_nlp_prompt_injects_yolo_payload,
@@ -642,21 +706,27 @@ def main():
         test_environment_detection_does_not_treat_restricted_work_area_as_office,
         test_executive_summary_formats_labeled_what_and_danger_as_bullets,
     ]
+    # Prepare failures for the next step.
     failures = []
     for test_fn in tests:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Trigger the side effect required for this stage.
             test_fn()
             print(f"PASS: {test_fn.__name__}")
         except Exception as exc:
             failures.append((test_fn.__name__, str(exc)))
             print(f"FAIL: {test_fn.__name__}: {exc}")
 
+    # Choose the correct branch before the workflow continues.
     if failures:
         print("Report prompt YOLO contract test failed")
+        # Surface the failure with enough context for the caller.
         raise SystemExit(1)
 
     print("Report prompt YOLO contract test passed")
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
     main()

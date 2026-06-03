@@ -1,3 +1,4 @@
+// Readability: Page module: organise rendering, user events, and API updates for this view.
 // Home Page Component
 const HomePage = {
     _realtimeHandler: null,
@@ -18,10 +19,12 @@ const HomePage = {
     },
 
     sanitizeInstallerDownloadError(rawText, fallback = 'Installer download failed') {
+        // Prepare text for the next UI or data step.
         let text = String(rawText || '').trim();
         if (!text) return fallback;
 
         if (/<(?:!doctype|html|head|body|style|script)\b/i.test(text) && typeof DOMParser !== 'undefined') {
+            // Keep this browser operation recoverable if it fails.
             try {
                 const doc = new DOMParser().parseFromString(text, 'text/html');
                 const title = String((doc.querySelector('title') || {}).textContent || '').trim();
@@ -44,7 +47,9 @@ const HomePage = {
             .replace(/\s+/g, ' ')
             .trim();
 
+        // Choose the correct browser state branch before continuing.
         if (!text || /^(?:body|html)\s*\{|font-family|background-color/i.test(text)) {
+            // Return the prepared value to the caller.
             return fallback;
         }
         return text.slice(0, 240);
@@ -246,12 +251,14 @@ const HomePage = {
 
     async mount() {
         const cachedRendered = await this.renderCachedDataIfAvailable();
+        // Choose the correct browser state branch before continuing.
         if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
             API.warmDashboardCaches({ reason: 'home-mount', timeoutMs: 10000, minIntervalMs: 90000 });
         }
         await this.refreshData({ skipInitialCache: cachedRendered });
 
         this._realtimeHandler = () => {
+            // Choose the correct browser state branch before continuing.
             if (this._realtimeRefreshTimer) return;
             this._realtimeRefreshTimer = setTimeout(async () => {
                 this._realtimeRefreshTimer = null;
@@ -285,6 +292,7 @@ const HomePage = {
         window.addEventListener('ppe-provisioning:status', this._provisioningHandler);
 
         const runCheckupBtn = document.getElementById('homeRunLocalCheckupBtn');
+        // Choose the correct browser state branch before continuing.
         if (runCheckupBtn) {
             this._runLocalCheckupHandler = () => {
                 Router.navigate('settings-checkup');
@@ -300,8 +308,10 @@ const HomePage = {
                 const machineId = String(latest.machineId || latest.machine_id || '').trim();
                 const isProvisioned = status === 'provisioned' || status === 'approved' || status === 'active';
 
+                // Choose the correct browser state branch before continuing.
                 if (!isProvisioned || !machineId) {
                     const message = 'Installer re-download is available after this device is fully provisioned.';
+                    // Choose the correct browser state branch before continuing.
                     if (typeof NotificationManager !== 'undefined') {
                         NotificationManager.warning(message);
                     } else {
@@ -310,11 +320,13 @@ const HomePage = {
                     return;
                 }
 
+                // Choose the correct browser state branch before continuing.
                 if (
                     typeof GlobalSettingsModal !== 'undefined'
                     && GlobalSettingsModal
                     && typeof GlobalSettingsModal.redownloadInstaller === 'function'
                 ) {
+                    // Choose the correct browser state branch before continuing.
                     if (typeof GlobalSettingsModal.init === 'function') {
                         GlobalSettingsModal.init();
                     }
@@ -325,8 +337,11 @@ const HomePage = {
                     return;
                 }
 
+                // Prepare stored for the next UI or data step.
                 const stored = (() => {
+                    // Keep this browser operation recoverable if it fails.
                     try {
+                        // Return the prepared value to the caller.
                         return JSON.parse(localStorage.getItem('ppe.remoteProvisioningState.v1') || '{}') || {};
                     } catch (_) {
                         return {};
@@ -339,6 +354,7 @@ const HomePage = {
                         provision_secret: provisionSecret,
                         _ts: String(Date.now())
                     });
+                    // Keep this browser operation recoverable if it fails.
                     try {
                         const downloadUrl = `${API_CONFIG.BASE_URL}/api/bootstrap/installer/request?${params.toString()}`;
                         const resp = await fetch(downloadUrl, {
@@ -346,10 +362,13 @@ const HomePage = {
                             cache: 'no-store',
                             redirect: 'follow'
                         });
+                        // Choose the correct browser state branch before continuing.
                         if (!resp.ok) {
+                            // Prepare message for the next UI or data step.
                             let message = `Installer download failed (${resp.status})`;
                             try {
                                 const contentType = String(resp.headers.get('content-type') || '').toLowerCase();
+                                // Choose the correct browser state branch before continuing.
                                 if (contentType.includes('application/json')) {
                                     const payload = await resp.json();
                                     message = this.sanitizeInstallerDownloadError(payload.error || payload.message || message, message);
@@ -361,6 +380,7 @@ const HomePage = {
                             throw new Error(message);
                         }
                         const blob = await resp.blob();
+                        // Choose the correct browser state branch before continuing.
                         if (!blob || blob.size === 0) {
                             throw new Error('Installer download returned an empty file.');
                         }
@@ -375,6 +395,7 @@ const HomePage = {
                             URL.revokeObjectURL(objectUrl);
                             anchor.remove();
                         }, 1000);
+                        // Choose the correct browser state branch before continuing.
                         if (typeof NotificationManager !== 'undefined') {
                             NotificationManager.success('Installer download started.');
                         }
@@ -386,10 +407,12 @@ const HomePage = {
                             alert(message);
                         }
                     }
+                    // Return the prepared value to the caller.
                     return;
                 }
 
                 const message = 'Run Local Mode Checkup to refresh installer access, then try again.';
+                // Choose the correct browser state branch before continuing.
                 if (typeof NotificationManager !== 'undefined') {
                     NotificationManager.warning(message);
                 } else {
@@ -399,6 +422,7 @@ const HomePage = {
             redownloadInstallerBtn.addEventListener('click', this._redownloadInstallerHandler);
         }
 
+        // Choose the correct browser state branch before continuing.
         if (window.PPEProvisioningStatus && typeof window.PPEProvisioningStatus.get === 'function') {
             this.renderProvisioningStatus(window.PPEProvisioningStatus.get());
         } else {
@@ -411,6 +435,7 @@ const HomePage = {
                 : {};
             const measuredAt = Number((currentProvisionState && currentProvisionState.measuredAt) || 0);
             const stale = !Number.isFinite(measuredAt) || measuredAt <= 0 || (Date.now() - measuredAt) > 90000;
+            // Choose the correct browser state branch before continuing.
             if (stale) {
                 window.PPEProvisioningStatus.refresh({
                     source: 'home-mount',
@@ -424,6 +449,7 @@ const HomePage = {
     },
 
     unmount() {
+        // Choose the correct browser state branch before continuing.
         if (this._clockInterval) {
             clearInterval(this._clockInterval);
             this._clockInterval = null;
@@ -436,6 +462,7 @@ const HomePage = {
             clearTimeout(this._realtimeRefreshTimer);
             this._realtimeRefreshTimer = null;
         }
+        // Choose the correct browser state branch before continuing.
         if (this._connectionHandler) {
             window.removeEventListener('ppe-realtime:connection', this._connectionHandler);
             this._connectionHandler = null;
@@ -450,6 +477,7 @@ const HomePage = {
         }
 
         const runCheckupBtn = document.getElementById('homeRunLocalCheckupBtn');
+        // Choose the correct browser state branch before continuing.
         if (runCheckupBtn && this._runLocalCheckupHandler) {
             runCheckupBtn.removeEventListener('click', this._runLocalCheckupHandler);
         }
@@ -462,6 +490,7 @@ const HomePage = {
         this._redownloadInstallerHandler = null;
         this._latestProvisioningStatus = null;
 
+        // Choose the correct browser state branch before continuing.
         if (this._fallbackInterval) {
             clearInterval(this._fallbackInterval);
             this._fallbackInterval = null;
@@ -471,6 +500,7 @@ const HomePage = {
     syncFallbackPolling() {
         const connected = typeof RealtimeSync !== 'undefined' && RealtimeSync.isConnected;
         if (connected) {
+            // Choose the correct browser state branch before continuing.
             if (this._fallbackInterval) {
                 clearInterval(this._fallbackInterval);
                 this._fallbackInterval = null;
@@ -478,6 +508,7 @@ const HomePage = {
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (!this._fallbackInterval) {
             this._fallbackInterval = setInterval(() => this.refreshData(), 12000);
         }
@@ -495,6 +526,7 @@ const HomePage = {
     },
 
     async renderCachedDataIfAvailable() {
+        // Choose the correct browser state branch before continuing.
         if (typeof API === 'undefined' || typeof API.readJsonCache !== 'function') return false;
         try {
             const [cachedStats, cachedPending] = await Promise.all([
@@ -504,6 +536,7 @@ const HomePage = {
             const stats = cachedStats && cachedStats.data && typeof cachedStats.data === 'object'
                 ? cachedStats.data
                 : null;
+            // Choose the correct browser state branch before continuing.
             if (!stats) return false;
             const pendingReports = cachedPending && Array.isArray(cachedPending.data)
                 ? cachedPending.data
@@ -522,6 +555,7 @@ const HomePage = {
             API.getPendingReports()
         ]);
 
+        // Choose the correct browser state branch before continuing.
         if (!cachedRendered || stats) {
             this.renderHomeDataset(stats, pendingReports || []);
         }
@@ -532,6 +566,7 @@ const HomePage = {
         if (!el) return;
         const t = Number(target);
         if (!Number.isFinite(t)) { el.textContent = target; return; }
+        // Prepare suffix for the next UI or data step.
         const suffix = (opts && opts.suffix) || '';
         const duration = (opts && opts.duration) || 700;
         // Skip animation on subsequent updates
@@ -545,6 +580,7 @@ const HomePage = {
             const eased = 1 - Math.pow(1 - p, 3);
             const value = Math.round(start + (t - start) * eased);
             el.textContent = `${value}${suffix}`;
+            // Choose the correct browser state branch before continuing.
             if (p < 1) requestAnimationFrame(step);
         };
         requestAnimationFrame(step);
@@ -555,6 +591,7 @@ const HomePage = {
         const violationsEl = document.getElementById('trustViolationsTotal');
         const reportsEl = document.getElementById('trustReportsTotal');
         const complianceEl = document.getElementById('trustComplianceRate');
+        // Choose the correct browser state branch before continuing.
         if (!violationsEl || !reportsEl || !complianceEl) return;
 
         const totalViolations = Number(stats.total)
@@ -573,6 +610,7 @@ const HomePage = {
             || (Array.isArray(pendingReports) ? pendingReports.length : 0)
             || 0;
 
+        // Prepare safety for the next UI or data step.
         const safety = (typeof API !== 'undefined' && API.computeSafetyCompliance)
             ? API.computeSafetyCompliance(stats || {})
             : { score: 0 };
@@ -586,12 +624,14 @@ const HomePage = {
     renderReportsOverview(stats, pendingReports) {
         const pendingEl = document.getElementById('pendingCount');
         const processingEl = document.getElementById('processingCount');
+        // Choose the correct browser state branch before continuing.
         if (!pendingEl || !processingEl) return;
 
         const pendingCount = Number.isFinite(Number(stats.pending)) ? Number(stats.pending) : (Array.isArray(pendingReports) ? pendingReports.length : 0);
         const processingCount = Array.isArray(pendingReports)
             ? pendingReports.filter((r) => {
                 const s = String(r.status || '').toLowerCase();
+                // Return the prepared value to the caller.
                 return s === 'processing' || s === 'generating' || s === 'queued';
             }).length
             : 0;
@@ -606,7 +646,9 @@ const HomePage = {
         const machineEl = document.getElementById('homeProvisionMachine');
         const redownloadInstallerBtn = document.getElementById('homeRedownloadInstallerBtn');
 
+        // Choose the correct browser state branch before continuing.
         if (!messageEl || !machineEl) {
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -619,6 +661,7 @@ const HomePage = {
         const adminPortalUrl = String((statusPayload && (statusPayload.adminPortalUrl || statusPayload.admin_portal_url)) || '').trim();
             const isProvisioned = status === 'provisioned' || status === 'approved' || status === 'active';
 
+        // Choose the correct browser state branch before continuing.
         if (redownloadInstallerBtn) {
             const canRedownload = isProvisioned && !!machineId;
             redownloadInstallerBtn.style.display = canRedownload ? 'inline-flex' : 'none';
@@ -638,6 +681,7 @@ const HomePage = {
 
         machineEl.textContent = '';
 
+        // Choose the correct browser state branch before continuing.
         if (status === 'active') {
             setBadge('badge badge-success', 'Active');
             messageEl.textContent = 'Device provisioned and active. Local backend is running.';
@@ -651,6 +695,7 @@ const HomePage = {
             setBadge('badge badge-success', 'Approved');
             messageEl.textContent = 'Approved by admin. Cloud sync is active.';
         } else if (status === 'credentials_present') {
+            // Prepare viewing through cloud for the next UI or data step.
             const viewingThroughCloud = (typeof isLikelyRemoteBackend === 'function')
                 ? isLikelyRemoteBackend()
                 : false;
@@ -678,8 +723,10 @@ const HomePage = {
             messageEl.textContent = 'No approval request yet. Run Local Mode Checkup to begin local provisioning.';
         }
 
+        // Choose the correct browser state branch before continuing.
         if (machineId) {
             machineEl.textContent = `Machine ID: ${machineId}`;
+            // Choose the correct browser state branch before continuing.
             if (adminPortalUrl) {
                 machineEl.textContent += ` | Admin portal: ${adminPortalUrl}`;
             }
@@ -704,7 +751,9 @@ const HomePage = {
         const todayDeltaEl = document.getElementById("todayDelta");
         const weekDeltaEl = document.getElementById("weekDelta");
 
+        // Choose the correct browser state branch before continuing.
         if (!todayCountEl || !weekCountEl || !highSeverityCountEl || !todayDeltaEl || !weekDeltaEl) {
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -733,7 +782,9 @@ const HomePage = {
         const barEl = document.getElementById("safety-bar");
         const benchmarkEl = document.getElementById("safety-benchmark-note");
 
+        // Choose the correct browser state branch before continuing.
         if (!scoreEl || !barEl) {
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -743,6 +794,7 @@ const HomePage = {
             benchmarkEl.textContent = safety.benchmarkNote;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (score >= 80) {
             scoreEl.style.color = 'var(--success-color)';
             barEl.style.background =
@@ -762,6 +814,7 @@ const HomePage = {
 
     renderViolationTypes(stats) {
         const container = document.getElementById("violation-types");
+        // Choose the correct browser state branch before continuing.
         if (!container) return;
         const breakdown = stats.breakdown || {};
 
@@ -803,6 +856,7 @@ const HomePage = {
 
     renderRecentViolations(violations) {
         const container = document.getElementById("recent-violations");
+        // Choose the correct browser state branch before continuing.
         if (!container) return;
 
         if (!violations.length) {
@@ -811,6 +865,7 @@ const HomePage = {
                     <i class="fas fa-check-circle" style="font-size:2rem;display:block;margin-bottom:0.5rem;"></i>
                     No recent violations detected
                 </div>`;
+            // Return the prepared value to the caller.
             return;
         }
 

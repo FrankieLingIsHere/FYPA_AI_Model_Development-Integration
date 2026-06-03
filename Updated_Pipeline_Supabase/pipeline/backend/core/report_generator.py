@@ -12,6 +12,7 @@ Generates comprehensive safety violation reports combining:
 
 Based on NLP_CASM/llama3_variant implementation.
 """
+# Readability: Backend core: coordinate detection, persistence, and report workflow concerns.
 
 import logging
 import json
@@ -28,6 +29,7 @@ from datetime import datetime
 import sys
 
 # Add parent to path
+# Trigger the side effect required for this stage.
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.absolute()))
 
 # Try to import Gemini client (primary AI provider)
@@ -39,10 +41,12 @@ except ImportError:
     logging.info("Gemini client not available")
 
 # Try to import local Llama (fallback)
+# Protect this step so expected failures can fall back cleanly.
 try:
     from pipeline.backend.integration.local_llama import LocalLlamaGenerator
     LOCAL_LLAMA_AVAILABLE = True
 except ImportError:
+    # Prepare local llama available for the next step.
     LOCAL_LLAMA_AVAILABLE = False
 
 # Try to import Chroma DB (legacy RAG  only used if Gemini disabled)
@@ -52,11 +56,14 @@ try:
     CHROMA_AVAILABLE = True
 except ImportError:
     CHROMA_AVAILABLE = False
+    # Trigger the side effect required for this stage.
     logging.debug("chromadb not installed (not needed when using Gemini)")
 
+# Prepare logger for the next step.
 logger = logging.getLogger(__name__)
 
 
+# Section: run the resolve effective nlp provider order workflow with clear inputs and outputs.
 def _resolve_effective_nlp_provider_order(
     configured_order: Any,
     *,
@@ -64,7 +71,9 @@ def _resolve_effective_nlp_provider_order(
     enforce_strict_provider_split: bool = False,
 ) -> List[str]:
     """Normalize and scope NLP provider order to the active routing profile."""
+    # Choose the correct branch before the workflow continues.
     if isinstance(configured_order, list):
+        # Prepare raw items for the next step.
         raw_items = configured_order
     elif isinstance(configured_order, str):
         raw_items = [segment.strip() for segment in configured_order.split(',')]
@@ -74,6 +83,7 @@ def _resolve_effective_nlp_provider_order(
     normalized: List[str] = []
     for item in raw_items:
         provider = str(item or '').strip().lower()
+        # Choose the correct branch before the workflow continues.
         if not provider:
             continue
         if provider not in ('model_api', 'gemini', 'ollama', 'local'):
@@ -82,7 +92,9 @@ def _resolve_effective_nlp_provider_order(
             continue
         normalized.append(provider)
 
+    # Choose the correct branch before the workflow continues.
     if not enforce_strict_provider_split:
+        # Return the prepared result to the caller.
         return normalized
 
     active_profile = 'local' if str(routing_profile or '').strip().lower() == 'local' else 'cloud'
@@ -91,6 +103,7 @@ def _resolve_effective_nlp_provider_order(
 
     if scoped:
         return scoped
+    # Return the prepared result to the caller.
     return ['ollama'] if active_profile == 'local' else ['gemini']
 
 
@@ -109,6 +122,7 @@ _PERSON_NOUNS = r"(?:people|persons?|workers?|individuals?|men|women|guys|crew(?
 _OPT_ADJ = r"(?:(?:\w+\s+){0,3})"  # 0-3 optional intermediate words
 
 
+# Section: run the infer people count from text workflow with clear inputs and outputs.
 def infer_people_count_from_text(*texts: str) -> int:
     """Best-effort person count extraction from caption / summary text.
 
@@ -118,8 +132,10 @@ def infer_people_count_from_text(*texts: str) -> int:
     - Ordinal mentions: "first person", "second worker"
     Returns the highest number found, or 0 if nothing can be inferred.
     """
+    # Prepare combined for the next step.
     combined = " ".join(str(t or "") for t in texts).lower()
     if not combined.strip():
+        # Return the prepared result to the caller.
         return 0
 
     candidates: List[int] = []
@@ -131,6 +147,7 @@ def infer_people_count_from_text(*texts: str) -> int:
     )
 
     # Word: "three workers", "three construction workers", "two male workers"
+    # Process each item in this collection using the same rule set.
     for word, value in _PERSON_NUMBER_WORDS.items():
         if re.search(rf"\b{word}\s+{_OPT_ADJ}{_PERSON_NOUNS}\b", combined):
             candidates.append(value)
@@ -144,21 +161,26 @@ def infer_people_count_from_text(*texts: str) -> int:
         r"(?:\w+\s+){0,2}(?:person|worker|individual)\b",
         combined,
     )
+    # Choose the correct branch before the workflow continues.
     if ordinal_hits:
+        # Return the prepared result to the caller.
         return len(set(ordinal_hits))
 
     return 0
 
 
+# Section: run the text has yolo ppe context workflow with clear inputs and outputs.
 def _text_has_yolo_ppe_context(text: str) -> bool:
     """Return true when a YOLO PPE evidence clause is already present."""
     normalized = re.sub(r'\s+', ' ', str(text or '')).strip().lower()
+    # Return the prepared result to the caller.
     return (
         'yolo detection identified' in normalized
         and 'ppe deficiencies' in normalized
     )
 
 
+# Prepare ppe canonical labels for the next step.
 _PPE_CANONICAL_LABELS = {
     'hardhat': 'Hardhat',
     'safety_vest': 'Safety Vest',
@@ -176,24 +198,31 @@ _PPE_CANONICAL_TERMS = {
 }
 
 
+# Section: run the canonical ppe key workflow with clear inputs and outputs.
 def _canonical_ppe_key(value: Any) -> str:
     """Map model/YOLO PPE labels into the report's canonical PPE fields."""
+    # Prepare text for the next step.
     text = str(value or '').strip()
     if not text:
+        # Return the prepared result to the caller.
         return ''
     text = re.sub(r'^(?:NO[-_\s]*|Missing\s+)', '', text, flags=re.IGNORECASE)
     text = re.sub(r'[\-_]+', ' ', text).strip().lower()
     text = re.sub(r'\s+', ' ', text)
     for key, terms in _PPE_CANONICAL_TERMS.items():
         if any(term in text for term in terms):
+            # Return the prepared result to the caller.
             return key
+    # Return the prepared result to the caller.
     return ''
 
 
+# Section: run the ppe label for key workflow with clear inputs and outputs.
 def _ppe_label_for_key(key: str) -> str:
     return _PPE_CANONICAL_LABELS.get(str(key or '').strip(), str(key or '').replace('_', ' ').title())
 
 
+# Section: group report generator state and behaviour in one readable unit.
 class ReportGenerator:
     """
     Generates safety violation reports with NLP analysis.
@@ -202,6 +231,7 @@ class ReportGenerator:
     and Llama3 via Ollama for intelligent report generation.
     """
 
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, config: Dict[str, Any]):
         """
         Initialize report generator.
@@ -209,6 +239,7 @@ class ReportGenerator:
         Args:
             config: Configuration dictionary from config.py
         """
+        # Prepare config for the next step.
         self.config = config
         self.last_nlp_error = None
         self.last_nlp_provider = None
@@ -218,6 +249,7 @@ class ReportGenerator:
         self.provider_runtime_lock = threading.RLock()
         self.provider_runtime_epoch = 0
         self.routing_profile = str(os.getenv('CASM_ROUTING_PROFILE', '')).strip().lower()
+        # Prepare enforce strict provider split for the next step.
         self.enforce_strict_provider_split = os.getenv('STRICT_PROVIDER_MODE_SPLIT', 'true').lower() in ('1', 'true', 'yes', 'on')
         # strict_local_profile is now a computed property  see below; do not set it here
         self.sticky_nlp_provider = None
@@ -227,15 +259,18 @@ class ReportGenerator:
         self.allow_nlp_fallback = str(os.getenv('ALLOW_NLP_FALLBACK', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.cloud_report_fallback_enabled = str(os.getenv('CLOUD_REPORT_FALLBACK_ENABLED', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.gemini_schema_regen_attempts = int(os.getenv('GEMINI_SCHEMA_REGEN_ATTEMPTS', '1') or 1)
+        # Prepare gemini semantic regen attempts for the next step.
         self.gemini_semantic_regen_attempts = int(os.getenv('GEMINI_SEMANTIC_REGEN_ATTEMPTS', '1') or 1)
         self.allow_schema_incomplete_report = str(os.getenv('GEMINI_ALLOW_SCHEMA_INCOMPLETE', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.allow_semantic_incomplete_report = str(os.getenv('GEMINI_ALLOW_SEMANTIC_INCOMPLETE', 'false')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.sticky_nlp_provider_enabled = os.getenv('STICKY_NLP_PROVIDER_ENABLED', 'true').lower() in ('1', 'true', 'yes', 'on')
         self.sticky_nlp_provider_ttl_seconds = int(os.getenv('STICKY_NLP_PROVIDER_TTL_SECONDS', '900') or 900)
         try:
+            # Prepare ollama nlp max attempts for the next step.
             self.ollama_nlp_max_attempts = int(os.getenv('OLLAMA_NLP_MAX_ATTEMPTS', '3') or 3)
         except (TypeError, ValueError):
             self.ollama_nlp_max_attempts = 3
+        # Prepare ollama nlp max attempts for the next step.
         self.ollama_nlp_max_attempts = max(1, min(self.ollama_nlp_max_attempts, 8))
         try:
             self.ollama_schema_regen_attempts = int(os.getenv('OLLAMA_SCHEMA_REGEN_ATTEMPTS', '1') or 1)
@@ -243,13 +278,16 @@ class ReportGenerator:
             self.ollama_schema_regen_attempts = 1
         self.ollama_schema_regen_attempts = max(0, min(self.ollama_schema_regen_attempts, 3))
         try:
+            # Prepare ollama retry backoff seconds for the next step.
             self.ollama_retry_backoff_seconds = float(os.getenv('OLLAMA_RETRY_BACKOFF_SECONDS', '0.9') or 0.9)
         except (TypeError, ValueError):
             self.ollama_retry_backoff_seconds = 0.9
+        # Prepare ollama retry backoff seconds for the next step.
         self.ollama_retry_backoff_seconds = max(0.0, min(self.ollama_retry_backoff_seconds, 5.0))
 
         if self.strict_local_profile:
             if self.allow_nlp_fallback:
+                # Trigger the side effect required for this stage.
                 logger.info("Strict local provider profile active; disabling NLP fallback generation")
             self.allow_nlp_fallback = False
 
@@ -266,6 +304,7 @@ class ReportGenerator:
         self.gemini_report_include_image = str(
             os.getenv('GEMINI_REPORT_INCLUDE_IMAGE', 'false')
         ).strip().lower() in ('1', 'true', 'yes', 'on')
+        # Prepare strict model report cells for the next step.
         self.strict_model_report_cells = str(os.getenv('STRICT_MODEL_REPORT_CELLS', 'true')).strip().lower() in ('1', 'true', 'yes', 'on')
         self.gemini_budget_state_path = Path(
             os.getenv(
@@ -282,15 +321,19 @@ class ReportGenerator:
         gemini_config = config.get('GEMINI_CONFIG', {})
         gemini_requested = bool(gemini_config.get('enabled', True))
         if self.strict_local_profile and gemini_requested:
+            # Trigger the side effect required for this stage.
             logger.info("Strict local provider profile active; skipping Gemini initialization")
         self.use_gemini = bool(gemini_requested and GEMINI_AVAILABLE and not self.strict_local_profile)
         self.gemini_client = None
 
         if self.use_gemini:
             try:
+                # Prepare gemini client for the next step.
                 self.gemini_client = GeminiClient(config)
                 if self.gemini_client.is_available:
+                    # Choose the correct branch before the workflow continues.
                     if self.gemini_max_output_tokens_per_report > 0:
+                        # Prepare max tokens for the next step.
                         self.gemini_client.max_tokens = min(
                             max(self.gemini_client.max_tokens, self.gemini_min_output_tokens_per_report),
                             self.gemini_max_output_tokens_per_report,
@@ -299,8 +342,10 @@ class ReportGenerator:
                 else:
                     logger.warning("Gemini client not available, falling back to Ollama")
                     self.gemini_client = None
+                    # Prepare use gemini for the next step.
                     self.use_gemini = False
             except Exception as e:
+                # Trigger the side effect required for this stage.
                 logger.error(f"Failed to initialize Gemini: {e}")
                 self.gemini_client = None
                 self.use_gemini = False
@@ -313,7 +358,9 @@ class ReportGenerator:
         regulations_file = rag_config.get('regulations_file', '')
 
         if GEMINI_AVAILABLE:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare regulations data for the next step.
                 self.regulations_data = load_regulations(str(regulations_file) if regulations_file else None)
                 logger.info(f"Loaded {len(self.regulations_data.get('regulations', {}))} regulation entries")
             except Exception as e:
@@ -335,6 +382,7 @@ class ReportGenerator:
         except (TypeError, ValueError):
             self.temperature = 0.2
         # Hard cap to prevent runaway creativity even if config sets it high.
+        # Prepare temperature for the next step.
         self.temperature = min(max(0.0, self.temperature), 0.4)
         self.cloud_api_timeout = max(30, int(os.getenv('CLOUD_API_TIMEOUT_SECONDS', '120') or 120))
         self.ollama_connect_timeout = max(1, int(os.getenv('OLLAMA_CONNECT_TIMEOUT_SECONDS', '8') or 8))
@@ -346,7 +394,9 @@ class ReportGenerator:
                 ) or 180
             )
         except (TypeError, ValueError):
+            # Prepare ollama read timeout for the next step.
             self.ollama_read_timeout = 180
+        # Choose the correct branch before the workflow continues.
         if self.ollama_read_timeout <= 0:
             logger.warning(
                 "Ignoring unbounded OLLAMA_REPORT_READ_TIMEOUT_SECONDS=%s; using 180s circuit breaker",
@@ -370,6 +420,7 @@ class ReportGenerator:
             'embedding_provider_order', ['model_api', 'ollama']
         )
 
+        # Prepare nlp api url for the next step.
         self.nlp_api_url = model_api_config.get('nlp_api_url', '')
         self.nlp_api_key = model_api_config.get('nlp_api_key', '')
         self.nlp_model = model_api_config.get('nlp_model', self.model)
@@ -379,8 +430,10 @@ class ReportGenerator:
         self.embedding_api_model = model_api_config.get('embedding_model', 'nomic-ai/nomic-embed-text-v1.5')
 
         if self.enforce_strict_provider_split:
+            # Prepare profile for the next step.
             profile = 'local' if self.strict_local_profile else 'cloud'
             if profile == 'local':
+                # Prepare strict local model for the next step.
                 strict_local_model = str(os.getenv('STRICT_LOCAL_OLLAMA_MODEL', 'gemma3:4b') or 'gemma3:4b').strip() or 'gemma3:4b'
                 self.model_api_enabled = False
                 self.use_gemini = False
@@ -390,9 +443,11 @@ class ReportGenerator:
                 self.embedding_provider_order = ['ollama']
             else:
                 self.model_api_enabled = False
+                # Prepare nlp provider order for the next step.
                 self.nlp_provider_order = ['gemini']
                 self.embedding_provider_order = ['model_api']
 
+        # Prepare ollama low memory fallback models for the next step.
         self.ollama_low_memory_fallback_models = self._build_ollama_model_chain(self.model)
         self.last_ollama_model_used = self.model
 
@@ -402,8 +457,11 @@ class ReportGenerator:
             r'C:\Users\maste\Downloads\FYP Combined\Meta-Llama-3-8B-Instruct')
         self.local_llama = None
 
+        # Choose the correct branch before the workflow continues.
         if not self.use_gemini and self.use_local_llama and LOCAL_LLAMA_AVAILABLE:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Trigger the side effect required for this stage.
                 logger.info("Initializing local Llama model...")
                 self.local_llama = LocalLlamaGenerator(self.local_model_path)
                 logger.info("[OK] Local Llama initialized (will load on first use)")
@@ -424,15 +482,18 @@ class ReportGenerator:
         self.top_k = rag_config.get('top_k', 3)
 
         # Chroma DB client (legacy)
+        # Prepare chroma client for the next step.
         self.chroma_client = None
         self.chroma_collection = None
         if self.rag_enabled and self.use_chroma:
+            # Trigger the side effect required for this stage.
             self._initialize_chroma()
 
         # Report settings
         report_config = config.get('REPORT_CONFIG', {})
         self.reports_dir = config.get('REPORTS_DIR', Path('reports'))
         self.violations_dir = config.get('VIOLATIONS_DIR', Path('violations'))
+        # Prepare format for the next step.
         self.format = report_config.get('format', 'both')
         self.enable_pdf = report_config.get('enable_pdf_generation', True)
 
@@ -446,6 +507,7 @@ class ReportGenerator:
         })
 
         # Load RAG incident database
+        # Prepare incident data for the next step.
         self.incident_data = []
         if self.rag_enabled:
             self._load_incident_database()
@@ -453,11 +515,14 @@ class ReportGenerator:
         ai_provider = ' -> '.join(self.nlp_provider_order)
         logger.info(f"Report Generator initialized (NLP provider order: {ai_provider})")
 
+    # Section: run the strict local profile workflow with clear inputs and outputs.
     @property
     def strict_local_profile(self) -> bool:
         """Always derived from current routing_profile so it stays in sync after runtime profile switches."""
+        # Return the prepared result to the caller.
         return bool(self.enforce_strict_provider_split and self.routing_profile == 'local')
 
+    # Section: run the strict local profile workflow with clear inputs and outputs.
     @strict_local_profile.setter
     def strict_local_profile(self, value):
         # Ignored  value is always computed from routing_profile.
@@ -466,8 +531,11 @@ class ReportGenerator:
 
     def notify_provider_route_changed(self, routing_profile: Optional[str] = None, reason: str = 'runtime switch') -> int:
         """Invalidate in-flight provider work after a local/cloud routing change."""
+        # Open the managed resource only for the block that needs it.
         with self.provider_runtime_lock:
+            # Choose the correct branch before the workflow continues.
             if routing_profile:
+                # Prepare routing profile for the next step.
                 self.routing_profile = str(routing_profile or '').strip().lower()
             self.provider_runtime_epoch += 1
             self.sticky_nlp_provider = None
@@ -476,8 +544,10 @@ class ReportGenerator:
             self.last_nlp_provider = None
             self.last_nlp_model = None
             self.last_nlp_fallback_reason = None
+            # Prepare last gemini budget block reason for the next step.
             self.last_gemini_budget_block_reason = None
             epoch = self.provider_runtime_epoch
+        # Trigger the side effect required for this stage.
         logger.info(
             "Provider route changed to %s; invalidated in-flight NLP work (epoch=%s, reason=%s)",
             self.routing_profile or 'cloud',
@@ -486,10 +556,14 @@ class ReportGenerator:
         )
         return epoch
 
+    # Section: run the get provider runtime epoch workflow with clear inputs and outputs.
     def get_provider_runtime_epoch(self) -> int:
+        # Open the managed resource only for the block that needs it.
         with self.provider_runtime_lock:
+            # Return the prepared result to the caller.
             return int(self.provider_runtime_epoch)
 
+    # Section: run the assert generation epoch current workflow with clear inputs and outputs.
     def _assert_generation_epoch_current(self, start_epoch: int, report_id: str, stage: str) -> None:
         current_epoch = self.get_provider_runtime_epoch()
         if current_epoch != start_epoch:
@@ -498,15 +572,20 @@ class ReportGenerator:
                 f"(report_id={report_id}, stage={stage}, epoch={start_epoch}->{current_epoch}). "
                 "Retry under the current mode."
             )
+            # Open the managed resource only for the block that needs it.
             with self.provider_runtime_lock:
+                # Prepare last nlp error for the next step.
                 self.last_nlp_error = detail
                 self.last_nlp_fallback_reason = detail
             raise RuntimeError(detail)
 
+    # Section: run the get runtime provider diagnostics workflow with clear inputs and outputs.
     def get_runtime_provider_diagnostics(self) -> Dict[str, Any]:
         """Expose NLP routing runtime details for operator visibility."""
+        # Open the managed resource only for the block that needs it.
         with self._gemini_budget_lock:
             self._rotate_gemini_budget_windows_locked()
+            # Prepare state for the next step.
             state = dict(self._gemini_budget_state)
 
         budget_enabled = self.gemini_daily_budget_usd > 0 or self.gemini_monthly_budget_usd > 0
@@ -533,14 +612,18 @@ class ReportGenerator:
             },
         }
 
+    # Section: run the utc day key workflow with clear inputs and outputs.
     def _utc_day_key(self, now: Optional[datetime] = None) -> str:
+        # Prepare dt for the next step.
         dt = now or datetime.utcnow()
         return dt.strftime('%Y-%m-%d')
 
+    # Section: run the utc month key workflow with clear inputs and outputs.
     def _utc_month_key(self, now: Optional[datetime] = None) -> str:
         dt = now or datetime.utcnow()
         return dt.strftime('%Y-%m')
 
+    # Section: run the default gemini budget state workflow with clear inputs and outputs.
     def _default_gemini_budget_state(self) -> Dict[str, Any]:
         return {
             'day_key': self._utc_day_key(),
@@ -552,19 +635,27 @@ class ReportGenerator:
             'updated_at': datetime.utcnow().isoformat() + 'Z',
         }
 
+    # Section: run the load gemini budget state workflow with clear inputs and outputs.
     def _load_gemini_budget_state(self) -> Dict[str, Any]:
+        # Prepare state for the next step.
         state = self._default_gemini_budget_state()
         try:
+            # Choose the correct branch before the workflow continues.
             if self.gemini_budget_state_path.exists():
+                # Prepare loaded for the next step.
                 loaded = json.loads(self.gemini_budget_state_path.read_text(encoding='utf-8'))
                 if isinstance(loaded, dict):
+                    # Trigger the side effect required for this stage.
                     state.update(loaded)
         except Exception as e:
             logger.warning(f"Could not load Gemini budget state: {e}")
         return state
 
+    # Section: run the save gemini budget state locked workflow with clear inputs and outputs.
     def _save_gemini_budget_state_locked(self):
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Trigger the side effect required for this stage.
             self.gemini_budget_state_path.parent.mkdir(parents=True, exist_ok=True)
             payload = dict(self._gemini_budget_state)
             payload['updated_at'] = datetime.utcnow().isoformat() + 'Z'
@@ -574,28 +665,35 @@ class ReportGenerator:
         except Exception as e:
             logger.warning(f"Could not persist Gemini budget state: {e}")
 
+    # Section: run the rotate gemini budget windows locked workflow with clear inputs and outputs.
     def _rotate_gemini_budget_windows_locked(self):
+        # Prepare current day for the next step.
         current_day = self._utc_day_key()
         current_month = self._utc_month_key()
         changed = False
 
         if self._gemini_budget_state.get('day_key') != current_day:
+            # Prepare values needed by the next step.
             self._gemini_budget_state['day_key'] = current_day
             self._gemini_budget_state['daily_spend_usd'] = 0.0
             self._gemini_budget_state['daily_calls'] = 0
             changed = True
 
+        # Choose the correct branch before the workflow continues.
         if self._gemini_budget_state.get('month_key') != current_month:
             self._gemini_budget_state['month_key'] = current_month
             self._gemini_budget_state['monthly_spend_usd'] = 0.0
             self._gemini_budget_state['monthly_calls'] = 0
+            # Prepare changed for the next step.
             changed = True
 
         if changed:
             self._save_gemini_budget_state_locked()
 
+    # Section: run the estimate text tokens workflow with clear inputs and outputs.
     def _estimate_text_tokens(self, text: str) -> int:
         # Simple approximation: ~4 chars/token for English text.
+        # Return the prepared result to the caller.
         return max(1, int(len(text or '') / 4))
 
     def _estimate_gemini_call_cost_usd(self, prompt: str) -> Tuple[float, int, int]:
@@ -605,8 +703,11 @@ class ReportGenerator:
         out_cost = (output_tokens / 1_000_000.0) * self.gemini_cost_per_1m_output_tokens
         return in_cost + out_cost, input_tokens, output_tokens
 
+    # Section: run the can spend gemini budget workflow with clear inputs and outputs.
     def _can_spend_gemini_budget(self, estimated_cost_usd: float) -> Tuple[bool, Optional[str]]:
+        # Choose the correct branch before the workflow continues.
         if estimated_cost_usd <= 0:
+            # Return the prepared result to the caller.
             return True, None
 
         with self._gemini_budget_lock:
@@ -615,6 +716,7 @@ class ReportGenerator:
             month_spend = float(self._gemini_budget_state.get('monthly_spend_usd', 0.0) or 0.0)
 
             if self.gemini_daily_budget_usd > 0 and day_spend + estimated_cost_usd > self.gemini_daily_budget_usd:
+                # Prepare reason for the next step.
                 reason = (
                     f"Gemini daily budget guardrail hit ({day_spend:.4f}/{self.gemini_daily_budget_usd:.4f} USD used). "
                     "Falling back to next provider."
@@ -622,18 +724,23 @@ class ReportGenerator:
                 self.last_gemini_budget_block_reason = reason
                 return False, reason
 
+            # Choose the correct branch before the workflow continues.
             if self.gemini_monthly_budget_usd > 0 and month_spend + estimated_cost_usd > self.gemini_monthly_budget_usd:
                 reason = (
                     f"Gemini monthly budget guardrail hit ({month_spend:.4f}/{self.gemini_monthly_budget_usd:.4f} USD used). "
                     "Falling back to next provider."
                 )
+                # Prepare last gemini budget block reason for the next step.
                 self.last_gemini_budget_block_reason = reason
                 return False, reason
 
+        # Return the prepared result to the caller.
         return True, None
 
+    # Section: run the record gemini spend workflow with clear inputs and outputs.
     def _record_gemini_spend(self, estimated_cost_usd: float):
         if estimated_cost_usd <= 0:
+            # Return the prepared result to the caller.
             return
         with self._gemini_budget_lock:
             self._rotate_gemini_budget_windows_locked()
@@ -643,9 +750,12 @@ class ReportGenerator:
             self._gemini_budget_state['monthly_calls'] = int(self._gemini_budget_state.get('monthly_calls', 0) or 0) + 1
             self._save_gemini_budget_state_locked()
 
+    # Section: run the normalize openai base url workflow with clear inputs and outputs.
     def _normalize_openai_base_url(self, raw_url: str, endpoint_suffix: str) -> str:
         """Normalize OpenAI-compatible base URL so callers can pass either base URL or full endpoint."""
+        # Choose the correct branch before the workflow continues.
         if not raw_url:
+            # Return the prepared result to the caller.
             return ''
         url = raw_url.rstrip('/')
         if url.endswith(endpoint_suffix):
@@ -654,23 +764,29 @@ class ReportGenerator:
             return f"{url}{endpoint_suffix}"
         return f"{url}/v1{endpoint_suffix}"
 
+    # Section: run the build auth headers workflow with clear inputs and outputs.
     def _build_auth_headers(self, api_key: str) -> Dict[str, str]:
         """Build headers for provider API calls."""
+        # Prepare headers for the next step.
         headers = {'Content-Type': 'application/json'}
         if api_key:
+            # Prepare values needed by the next step.
             headers['Authorization'] = f"Bearer {api_key}"
         return headers
 
+    # Section: run the call model api nlp workflow with clear inputs and outputs.
     def _call_model_api_nlp(self, prompt: str) -> Optional[Dict[str, Any]]:
         """Call a model-specific cloud API (OpenAI-compatible chat/completions) for NLP JSON output."""
         if not self.model_api_enabled:
             return None
+        # Choose the correct branch before the workflow continues.
         if not self.nlp_api_url or not self.nlp_model:
             return None
 
         endpoint = self._normalize_openai_base_url(self.nlp_api_url, '/chat/completions')
 
         try:
+            # Prepare response for the next step.
             response = requests.post(
                 endpoint,
                 headers=self._build_auth_headers(self.nlp_api_key),
@@ -689,7 +805,9 @@ class ReportGenerator:
                 timeout=self.cloud_api_timeout
             )
 
+            # Choose the correct branch before the workflow continues.
             if not response.ok:
+                # Trigger the side effect required for this stage.
                 logger.warning(f"Model API NLP call failed: {response.status_code}")
                 return None
 
@@ -699,8 +817,10 @@ class ReportGenerator:
                 logger.warning("Model API NLP returned no choices")
                 return None
 
+            # Prepare content for the next step.
             content = choices[0].get('message', {}).get('content', '')
             if not content:
+                # Trigger the side effect required for this stage.
                 logger.warning("Model API NLP returned empty content")
                 return None
 
@@ -708,10 +828,13 @@ class ReportGenerator:
 
         except Exception as e:
             logger.warning(f"Model API NLP error: {e}")
+            # Return the prepared result to the caller.
             return None
 
+    # Section: run the get model api embeddings workflow with clear inputs and outputs.
     def _get_model_api_embeddings(self, text: str) -> Optional[List[float]]:
         """Call a model-specific cloud API (OpenAI-compatible embeddings) for vector search."""
+        # Choose the correct branch before the workflow continues.
         if not self.model_api_enabled:
             return None
         if not self.embedding_api_url or not self.embedding_api_model:
@@ -720,6 +843,7 @@ class ReportGenerator:
         endpoint = self._normalize_openai_base_url(self.embedding_api_url, '/embeddings')
 
         try:
+            # Prepare response for the next step.
             response = requests.post(
                 endpoint,
                 headers=self._build_auth_headers(self.embedding_api_key),
@@ -730,7 +854,9 @@ class ReportGenerator:
                 timeout=self.cloud_api_timeout
             )
 
+            # Choose the correct branch before the workflow continues.
             if not response.ok:
+                # Trigger the side effect required for this stage.
                 logger.warning(f"Model API embeddings call failed: {response.status_code}")
                 return None
 
@@ -741,6 +867,7 @@ class ReportGenerator:
             return vectors[0].get('embedding')
 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.warning(f"Model API embeddings error: {e}")
             return None
 
@@ -750,9 +877,12 @@ class ReportGenerator:
 
     def _load_incident_database(self):
         """Load incident database from CSV for RAG."""
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare rag path for the next step.
             rag_path = Path(self.rag_data_path)
             if not rag_path.exists():
+                # Trigger the side effect required for this stage.
                 logger.warning(f"RAG data file not found: {rag_path}")
                 return
 
@@ -760,15 +890,19 @@ class ReportGenerator:
                 reader = csv.DictReader(f)
                 self.incident_data = list(reader)
 
+            # Trigger the side effect required for this stage.
             logger.info(f"[OK] Loaded {len(self.incident_data)} incident records for RAG")
 
         except Exception as e:
             logger.error(f"Error loading incident database: {e}")
             self.incident_data = []
 
+    # Section: run the initialize chroma workflow with clear inputs and outputs.
     def _initialize_chroma(self):
         """Initialize Chroma DB client and collection."""
+        # Choose the correct branch before the workflow continues.
         if not CHROMA_AVAILABLE:
+            # Trigger the side effect required for this stage.
             logger.error("Chroma DB not available. Install with: pip install chromadb")
             self.use_chroma = False
             return
@@ -786,6 +920,7 @@ class ReportGenerator:
             )
 
             # Get existing collection
+            # Prepare chroma collection for the next step.
             self.chroma_collection = self.chroma_client.get_collection(
                 name=self.collection_name
             )
@@ -796,15 +931,19 @@ class ReportGenerator:
             logger.info(f"Using embedding model: {self.embedding_model}")
 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.error(f"Failed to initialize Chroma DB: {e}")
             logger.warning("Falling back to CSV-based RAG")
             self.use_chroma = False
             self.chroma_client = None
             self.chroma_collection = None
 
+    # Section: run the get ollama embeddings workflow with clear inputs and outputs.
     def _get_ollama_embeddings(self, text: str) -> Optional[List[float]]:
         """Get embeddings from Ollama using nomic-embed-text."""
+        # Choose the correct branch before the workflow continues.
         if os.getenv('DISABLE_OLLAMA_EMBEDDINGS', 'false').lower() == 'true':
+            # Trigger the side effect required for this stage.
             logger.info("Skipping Ollama embeddings because DISABLE_OLLAMA_EMBEDDINGS=true")
             return None
 
@@ -813,9 +952,12 @@ class ReportGenerator:
             if provider == 'model_api':
                 cloud_embedding = self._get_model_api_embeddings(text)
                 if cloud_embedding:
+                    # Return the prepared result to the caller.
                     return cloud_embedding
 
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare response for the next step.
             response = requests.post(
                 self.embeddings_url,
                 json={
@@ -825,7 +967,9 @@ class ReportGenerator:
                 timeout=30
             )
 
+            # Choose the correct branch before the workflow continues.
             if response.ok:
+                # Prepare data for the next step.
                 data = response.json()
                 return data.get('embedding')
             else:
@@ -834,15 +978,19 @@ class ReportGenerator:
 
         except Exception as e:
             logger.error(f"Error getting Ollama embeddings: {e}")
+            # Return the prepared result to the caller.
             return None
 
+    # Section: run the query chroma db workflow with clear inputs and outputs.
     def _query_chroma_db(
         self,
         query_text: str,
         n_results: int = 3
     ) -> List[Dict[str, Any]]:
         """Query Chroma DB for relevant DOSH documentation."""
+        # Choose the correct branch before the workflow continues.
         if not self.chroma_collection:
+            # Return the prepared result to the caller.
             return []
 
         try:
@@ -850,10 +998,12 @@ class ReportGenerator:
             query_embedding = self._get_ollama_embeddings(query_text)
 
             if not query_embedding:
+                # Trigger the side effect required for this stage.
                 logger.warning("Could not generate query embeddings, skipping Chroma search")
                 return []
 
             # Query collection
+            # Prepare results for the next step.
             results = self.chroma_collection.query(
                 query_embeddings=[query_embedding],
                 n_results=n_results,
@@ -864,6 +1014,7 @@ class ReportGenerator:
             formatted_results = []
             if results['documents'] and len(results['documents']) > 0:
                 for i, doc in enumerate(results['documents'][0]):
+                    # Prepare metadata for the next step.
                     metadata = results['metadatas'][0][i] if results['metadatas'] else {}
                     distance = results['distances'][0][i] if results['distances'] else 0.0
 
@@ -874,6 +1025,7 @@ class ReportGenerator:
                         'source': 'DOSH Documentation'
                     })
 
+            # Trigger the side effect required for this stage.
             logger.info(f"Found {len(formatted_results)} relevant DOSH chunks")
             return formatted_results
 
@@ -881,6 +1033,7 @@ class ReportGenerator:
             logger.error(f"Error querying Chroma DB: {e}")
             return []
 
+    # Section: run the find similar incidents workflow with clear inputs and outputs.
     def _find_similar_incidents(
         self,
         description: str,
@@ -896,7 +1049,9 @@ class ReportGenerator:
         Returns:
             List of similar incident dictionaries
         """
+        # Choose the correct branch before the workflow continues.
         if not self.incident_data:
+            # Return the prepared result to the caller.
             return []
 
         # Extract keywords from description
@@ -906,6 +1061,7 @@ class ReportGenerator:
         scored = []
         for incident in self.incident_data:
             abstract = incident.get('Abstract', '')
+            # Prepare abstract words for the next step.
             abstract_words = set(abstract.lower().split())
 
             # Calculate overlap score
@@ -913,6 +1069,7 @@ class ReportGenerator:
             scored.append((overlap, incident))
 
         # Sort by score and return top N
+        # Trigger the side effect required for this stage.
         scored.sort(reverse=True, key=lambda x: x[0])
         return [incident for score, incident in scored[:count] if score > 0]
     # =========================================================================
@@ -982,10 +1139,13 @@ class ReportGenerator:
             ]
         }
 
+    # Section: run the normalize environment type workflow with clear inputs and outputs.
     def _normalize_environment_type(self, value: Any) -> str:
         """Normalize known environment labels while preserving useful custom labels."""
+        # Prepare text for the next step.
         text = re.sub(r'\s+', ' ', str(value or '')).strip()
         if not text:
+            # Return the prepared result to the caller.
             return ''
 
         alias_map = {
@@ -1016,21 +1176,27 @@ class ReportGenerator:
             'public area': 'Public Area',
         }
 
+        # Prepare lowered for the next step.
         lowered = text.lower()
         if lowered in alias_map:
+            # Return the prepared result to the caller.
             return alias_map[lowered]
 
         for canonical in [*self._environment_keyword_map().keys(), 'General Workspace']:
             if lowered == canonical.lower():
+                # Return the prepared result to the caller.
                 return canonical
 
         return text
 
+    # Section: run the has positive environment keyword workflow with clear inputs and outputs.
     def _has_positive_environment_keyword(self, text: str, keyword: str) -> bool:
         """Return True when a keyword appears as positive scene evidence."""
+        # Prepare source for the next step.
         source = str(text or '').lower()
         needle = str(keyword or '').strip().lower()
         if not source or not needle:
+            # Return the prepared result to the caller.
             return False
 
         pattern = re.compile(r'\b' + re.escape(needle).replace(r'\ ', r'\s+') + r'\b')
@@ -1039,6 +1205,7 @@ class ReportGenerator:
             clause = re.split(r'[.;:!?]', prefix)[-1]
             negation = re.search(r'\b(no|not|without|neither|nor)\b', clause)
             if negation:
+                # Prepare between for the next step.
                 between = clause[negation.end():]
                 # "No PPE is visible in a roadside work zone" is still positive
                 # roadside evidence; "no road, traffic cones, or roadside controls"
@@ -1046,8 +1213,10 @@ class ReportGenerator:
                 if not re.search(r'\b(ppe|helmet|hardhat|vest|glove|mask|boot|shoe|harness)\b', between):
                     continue
             return True
+        # Return the prepared result to the caller.
         return False
 
+    # Section: run the environment evidence score workflow with clear inputs and outputs.
     def _environment_evidence_score(
         self,
         environment_type: Any,
@@ -1055,8 +1224,10 @@ class ReportGenerator:
         detections: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
         """Score how much visual evidence supports an environment label."""
+        # Prepare env for the next step.
         env = self._normalize_environment_type(environment_type)
         if not env or env == 'General Workspace':
+            # Return the prepared result to the caller.
             return 0
 
         caption_lower = str(caption or '').lower()
@@ -1065,6 +1236,7 @@ class ReportGenerator:
             for det in (detections or [])
             if isinstance(det, dict)
         )
+        # Prepare evidence text for the next step.
         evidence_text = f"{caption_lower} {detections_text}"
 
         keywords = list(self._environment_keyword_map().get(env, []))
@@ -1074,8 +1246,10 @@ class ReportGenerator:
         }
         keywords.extend(custom_keywords.get(env, []))
 
+        # Return the prepared result to the caller.
         return sum(1 for keyword in keywords if self._has_positive_environment_keyword(evidence_text, keyword))
 
+    # Section: run the resolve stable environment type workflow with clear inputs and outputs.
     def _resolve_stable_environment_type(
         self,
         caption: str,
@@ -1090,16 +1264,19 @@ class ReportGenerator:
         refined label; otherwise we keep the anchored label to avoid environment
         drift between prompt output, HTML, and Supabase metadata.
         """
+        # Prepare caption environment for the next step.
         caption_environment = self._normalize_environment_type(
             self._extract_environment_from_caption(caption)
         ) or 'General Workspace'
         model_environment = self._normalize_environment_type(model_environment)
 
         if not model_environment:
+            # Return the prepared result to the caller.
             return caption_environment
         if model_environment == caption_environment:
             return model_environment
 
+        # Prepare model score for the next step.
         model_score = self._environment_evidence_score(model_environment, caption, detections)
         caption_score = self._environment_evidence_score(caption_environment, caption, detections)
 
@@ -1107,13 +1284,16 @@ class ReportGenerator:
             return model_environment if model_score > 0 else caption_environment
 
         if model_environment == 'General Workspace':
+            # Return the prepared result to the caller.
             return caption_environment
 
+        # Choose the correct branch before the workflow continues.
         if model_score > 0 and model_score >= caption_score:
             return model_environment
 
         return caption_environment
 
+    # Section: run the extract environment from caption workflow with clear inputs and outputs.
     def _extract_environment_from_caption(self, caption: str) -> str:
         """
         Extract environment type from VLM caption using keyword matching.
@@ -1125,6 +1305,7 @@ class ReportGenerator:
         Returns:
             One of the standard environment types
         """
+        # Prepare caption lower for the next step.
         caption_lower = caption.lower()
 
         # =====================================================================
@@ -1139,6 +1320,7 @@ class ReportGenerator:
         for env_type, keywords in self._environment_keyword_map().items():
             for keyword in keywords:
                 if self._has_positive_environment_keyword(caption_lower, keyword):
+                    # Trigger the side effect required for this stage.
                     logger.info(f"Environment detected from caption: '{env_type}' (matched keyword: '{keyword}')")
                     return env_type
 
@@ -1146,6 +1328,7 @@ class ReportGenerator:
         logger.info("No specific environment detected from caption  defaulting to 'General Workspace'")
         return 'General Workspace'
 
+    # Section: run the build scene description workflow with clear inputs and outputs.
     def _build_scene_description(
         self,
         caption: str,
@@ -1173,6 +1356,7 @@ class ReportGenerator:
         caption_clean = caption.strip()
         for prefix in ['The image shows ', 'The scene shows ', 'This image shows ']:
             if caption_clean.startswith(prefix):
+                # Prepare caption clean for the next step.
                 caption_clean = caption_clean[len(prefix):]
                 # Capitalize the remaining text
                 caption_clean = caption_clean[0].upper() + caption_clean[1:] if caption_clean else caption_clean
@@ -1181,9 +1365,11 @@ class ReportGenerator:
         if caption_clean.lower().startswith(('the scene depicts ', 'the image depicts ')):
             description = caption_clean
         else:
+            # Prepare description for the next step.
             description = f"The scene depicts a {environment_type.lower()} setting. {caption_clean}"
 
         # Ensure it ends with a period
+        # Choose the correct branch before the workflow continues.
         if description and not description.endswith('.'):
             description += '.'
 
@@ -1194,7 +1380,9 @@ class ReportGenerator:
             if d.get('class_name', '').startswith('NO-')
         ]
 
+        # Choose the correct branch before the workflow continues.
         if violation_types and not _text_has_yolo_ppe_context(caption_clean):
+            # Prepare unique violations for the next step.
             unique_violations = list(dict.fromkeys(violation_types))  # preserve order, remove dupes
             violation_text = ', '.join(unique_violations)
             # Count persons: explicit Person detections + infer from violations
@@ -1207,9 +1395,11 @@ class ReportGenerator:
                 f"with the following PPE deficiencies: {violation_text}."
             )
 
+        # Trigger the side effect required for this stage.
         logger.info(f"Built scene description ({len(description)} chars) for environment '{environment_type}'")
         return description
 
+    # Section: run the build activity risk signal block workflow with clear inputs and outputs.
     def _build_activity_risk_signal_block(
         self,
         report_data: Dict[str, Any],
@@ -1217,8 +1407,10 @@ class ReportGenerator:
         direct_image_available: bool = False,
     ) -> str:
         """Summarize non-caption activity-risk evidence for model-authored lower sections."""
+        # Prepare detections for the next step.
         detections = detections if isinstance(detections, list) else report_data.get('detections', [])
         if not isinstance(detections, list):
+            # Prepare detections for the next step.
             detections = []
 
         caption = str(report_data.get('caption') or report_data.get('vlm_caption') or '').strip()
@@ -1226,11 +1418,14 @@ class ReportGenerator:
         text = f"{caption} {violation_summary}".lower()
 
         labels: List[str] = []
+        # Process each item in this collection using the same rule set.
         for det in detections:
             if not isinstance(det, dict):
                 continue
+            # Prepare label for the next step.
             label = str(det.get('class_name') or det.get('class') or '').strip().lower()
             if label:
+                # Trigger the side effect required for this stage.
                 labels.append(label.replace('_', ' '))
         label_text = ' '.join(labels)
 
@@ -1238,9 +1433,12 @@ class ReportGenerator:
             r'\b(?:no|not|without|nor|neither|absent|absence of|devoid of|free of|none|not visible|no visible|no apparent|no immediate|no immediately apparent)\b'
         )
 
+        # Section: run the text has positive workflow with clear inputs and outputs.
         def _text_has_positive(needle: str) -> bool:
+            # Prepare needle for the next step.
             needle = needle.strip().lower()
             if not needle:
+                # Return the prepared result to the caller.
                 return False
             for match in re.finditer(re.escape(needle), text):
                 prefix = text[max(0, match.start() - 90):match.start()]
@@ -1248,15 +1446,20 @@ class ReportGenerator:
                 if negation_re.search(prefix) or re.search(r'\b(?:not present|absent|not visible|none visible)\b', suffix):
                     continue
                 return True
+            # Return the prepared result to the caller.
             return False
 
+        # Section: run the label has any workflow with clear inputs and outputs.
         def _label_has_any(*needles: str) -> bool:
             return any(needle in label_text for needle in needles)
 
+        # Section: run the has any workflow with clear inputs and outputs.
         def _has_any(*needles: str) -> bool:
             return any(_text_has_positive(needle) or _label_has_any(needle) for needle in needles)
 
+        # Section: run the evidence workflow with clear inputs and outputs.
         def _evidence(*parts: str) -> str:
+            # Prepare evidence parts for the next step.
             evidence_parts = [part for part in parts if part]
             return '; '.join(evidence_parts[:3]) or 'visual evidence supplied'
 
@@ -1271,6 +1474,7 @@ class ReportGenerator:
             )
             or ('safety cone' in label_text and any(word in text for word in ('enter', 'inside', 'standing', 'worker', 'person')))
         )
+        # Trigger the side effect required for this stage.
         signals.append((
             'restricted-area entry / exclusion-zone breach',
             restricted_area,
@@ -1282,6 +1486,7 @@ class ReportGenerator:
             'kneeling', 'overreaching', 'leaning', 'twisting', 'climbing',
             'manual handling', 'lifting', 'carrying heavy'
         )
+        # Trigger the side effect required for this stage.
         signals.append((
             'unsafe posture / manual-handling strain',
             unsafe_posture,
@@ -1293,6 +1498,7 @@ class ReportGenerator:
             'cement mixer', 'backhoe', 'bulldozer', 'excavator', 'forklift',
             'crane', 'loader', 'mobile plant', 'plant operator', 'operating equipment'
         )
+        # Trigger the side effect required for this stage.
         signals.append((
             'machinery-related struck-by / caught-between exposure',
             machinery_related,
@@ -1306,6 +1512,7 @@ class ReportGenerator:
             _evidence('caption/detections indicate scaffold, ladder, platform, roof, or elevated edge'),
         ))
 
+        # Prepare material stability for the next step.
         material_stability = _has_any(
             'pile', 'timber', 'log', 'stacked material', 'unsecured stack',
             'unstable stack', 'slope', 'embankment', 'collapse'
@@ -1316,6 +1523,7 @@ class ReportGenerator:
             _evidence('caption describes piles, timber, stacked materials, slope, or unstable storage'),
         ))
 
+        # Prepare traffic interface for the next step.
         traffic_interface = _has_any(
             'road', 'roadside', 'traffic', 'highway', 'lane', 'pavement',
             'street', 'sidewalk', 'bus', 'vehicle', 'parked vehicle', 'safety cone'
@@ -1326,6 +1534,7 @@ class ReportGenerator:
             _evidence('caption/detections indicate road, traffic lane, vehicle, or cone-controlled work zone'),
         ))
 
+        # Prepare severity hint for the next step.
         severity_hint = str(report_data.get('severity') or '').strip().upper()
         ppe_only_low_review = bool(
             severity_hint == 'LOW'
@@ -1339,6 +1548,7 @@ class ReportGenerator:
                 or traffic_interface
             )
         )
+        # Prepare regulatory followup for the next step.
         regulatory_followup = (
             has_ppe_gap
             or bool(violation_summary.strip())
@@ -1354,11 +1564,13 @@ class ReportGenerator:
             ),
         ))
 
+        # Prepare lines for the next step.
         lines = [
             '*** ACTIVITY RISK SIGNALS (Lower Report Sections Only) ***',
             'These signals are context for hazards_faced, persons[].risks, and corrective_actions. Do not copy this block into the caption or visual_evidence.',
         ]
         if direct_image_available:
+            # Trigger the side effect required for this stage.
             lines.append(
                 'Categories marked observed=true are pre-detected from caption/YOLO. Captions can be generic or fallback text, so you must also inspect the attached original image for lower-section risks before finalizing persons[].risks and corrective_actions. Include an observed=false category only when the attached original image clearly shows that risk, such as a bus/road traffic interface, restricted zone, unsafe posture, machinery, work-at-height, or unstable materials, and cite direct image evidence. If uncertain, omit it.'
             )
@@ -1366,8 +1578,10 @@ class ReportGenerator:
             lines.append(
                 'Only include categories marked observed=true. Omit categories marked observed=false; do not invent absent activity recognition findings.'
             )
+        # Process each item in this collection using the same rule set.
         for name, observed, evidence in signals:
             state = 'true' if observed else 'false'
+            # Trigger the side effect required for this stage.
             lines.append(f"- {name}: observed={state}; evidence={evidence}")
         lines.append(
             'When observed=true, the final JSON must contain a model-authored risk/action for the affected person(s), '
@@ -1379,12 +1593,15 @@ class ReportGenerator:
                 'Use supervisor verification, PPE issuance if required by task/zone, and local report note follow-up instead.'
             )
         else:
+            # Trigger the side effect required for this stage.
             lines.append(
                 'If regulatory report generation / evidence-pack follow-up is observed=true, add a corrective action that begins '
                 'with "Generate the regulatory incident report package" and names the required image evidence, detector metadata, and supervisor sign-off.'
             )
+        # Return the prepared result to the caller.
         return '\n'.join(lines)
 
+    # Section: run the observed activity categories from signal block workflow with clear inputs and outputs.
     def _observed_activity_categories_from_signal_block(self, signal_block: str) -> List[str]:
         """Extract observed non-PPE activity category tokens from a signal block."""
         mapping = {
@@ -1396,13 +1613,16 @@ class ReportGenerator:
             'traffic-interface exposure': 'traffic_interface',
         }
         observed: List[str] = []
+        # Process each item in this collection using the same rule set.
         for line in str(signal_block or '').splitlines():
+            # Prepare cleaned for the next step.
             cleaned = line.strip()
             if not cleaned.startswith('- ') or ': observed=true' not in cleaned:
                 continue
             label = cleaned[2:].split(': observed=', 1)[0].strip()
             category = mapping.get(label)
             if category and category not in observed:
+                # Trigger the side effect required for this stage.
                 observed.append(category)
         return observed
 
@@ -1430,6 +1650,7 @@ class ReportGenerator:
             Formatted prompt string
         """
         # Extract data
+        # Prepare caption for the next step.
         caption = report_data.get('caption', 'No caption available')
         detections = report_data.get('detections', [])
         violation_summary = report_data.get('violation_summary', '')
@@ -1452,10 +1673,13 @@ class ReportGenerator:
                 )
             person_count = caption_inferred_people
 
+        # Choose the correct branch before the workflow continues.
         if person_count == 0:
             if len(detections) > 0:
                 person_count = 1  # Assume at least one person committed the violation
+            # Choose the correct branch before the workflow continues.
             elif any(word in video_caption_lower for word in ['man', 'men', 'woman', 'women', 'person', 'people', 'worker', 'workers']):
+                # Prepare person count for the next step.
                 person_count = 1
 
         # Persist the reconciled count back onto the report data so any
@@ -1476,6 +1700,7 @@ class ReportGenerator:
         detection_desc = []
         missing_ppe = []
         for det in detections:
+            # Choose the correct branch before the workflow continues.
             if not isinstance(det, dict):
                 continue
             # Handle both 'confidence' and 'score' keys
@@ -1485,16 +1710,19 @@ class ReportGenerator:
             except (TypeError, ValueError):
                 conf_float = 0.0
             class_name = str(det.get('class_name') or det.get('class') or 'Unknown').strip() or 'Unknown'
+            # Prepare bbox for the next step.
             bbox = det.get('bbox') or det.get('box') or []
             bbox_text = ''
             if isinstance(bbox, (list, tuple)) and len(bbox) >= 4:
                 try:
+                    # Prepare bbox text for the next step.
                     bbox_text = (
                         f", bbox=[{float(bbox[0]):.1f}, {float(bbox[1]):.1f}, "
                         f"{float(bbox[2]):.1f}, {float(bbox[3]):.1f}]"
                     )
                 except (TypeError, ValueError):
                     bbox_text = ''
+            # Trigger the side effect required for this stage.
             detection_desc.append(f"- {class_name} (confidence: {conf_float:.2f}{bbox_text})")
 
             # Identify missing PPE from NO-X detections
@@ -1503,6 +1731,7 @@ class ReportGenerator:
                 missing_ppe.append(ppe_item)
 
         # Also parse caption for missing PPE keywords
+        # Prepare caption lower for the next step.
         caption_lower = caption.lower()
         ppe_keywords = {
             'hardhat': ['hardhat', 'hard hat', 'safety helmet', 'helmet'],
@@ -1512,10 +1741,13 @@ class ReportGenerator:
             'mask': ['mask', 'respirator', 'face mask']
         }
 
+        # Prepare caption missing for the next step.
         caption_missing = []
         for ppe_type, keywords in ppe_keywords.items():
+            # Process each item in this collection using the same rule set.
             for keyword in keywords:
                 # Check if caption mentions NOT wearing this PPE
+                # Choose the correct branch before the workflow continues.
                 if any(phrase in caption_lower for phrase in [
                     f'not wearing {keyword}',
                     f'without {keyword}',
@@ -1524,10 +1756,12 @@ class ReportGenerator:
                     f'lack of {keyword}',
                     f'missing {keyword}'
                 ]):
+                    # Trigger the side effect required for this stage.
                     caption_missing.append(ppe_type.replace('_', ' ').title())
                     break
 
         # Combine detected and caption-identified missing PPE
+        # Prepare all missing for the next step.
         all_missing = list(set(missing_ppe + caption_missing))
         missing_ppe_text = f"**CONFIRMED MISSING PPE**: {', '.join(all_missing)} (Mark these as 'Missing' in PPE status)" if all_missing else "All required PPE present"
         yolo_detection_text = "\n".join(detection_desc) if detection_desc else "- No YOLO detections were provided."
@@ -1537,6 +1771,7 @@ class ReportGenerator:
             if isinstance(det, dict)
             and str((det or {}).get('class_name') or (det or {}).get('class') or '').strip().startswith('NO-')
         ]
+        # Prepare yolo violation text for the next step.
         yolo_violation_text = ', '.join(yolo_violation_classes) if yolo_violation_classes else 'None'
         direct_image_available = (
             bool(report_data.get('original_image_path'))
@@ -1550,16 +1785,19 @@ class ReportGenerator:
         )
 
         # Build context from DOSH documentation (primary source)
+        # Prepare dosh text for the next step.
         dosh_text = ""
         if dosh_context and len(dosh_context) > 0:
             dosh_text = "=== DOSH SAFETY REGULATIONS (Authoritative Source) ===\n\n"
             for i, chunk in enumerate(dosh_context, 1):
+                # Prepare content for the next step.
                 content = chunk.get('content', '')
                 source = chunk.get('metadata', {}).get('source', 'DOSH Documentation')
                 dosh_text += f"[Regulation {i}]\n{content}\n\n"
             dosh_text += "=== END DOSH REGULATIONS ===\n\n"
 
         # Build context from similar incidents (secondary source)
+        # Prepare context text for the next step.
         context_text = ""
         if similar_incidents:
             context_text = "=== HISTORICAL INCIDENTS (For Reference) ===\n\n"
@@ -1717,8 +1955,10 @@ RESPONSE FORMAT (JSON):
 }}
 """
 
+        # Return the prepared result to the caller.
         return prompt
 
+    # Section: run the call gemini api workflow with clear inputs and outputs.
     def _call_gemini_api(
         self,
         prompt: str,
@@ -1736,7 +1976,9 @@ RESPONSE FORMAT (JSON):
         Returns:
             Parsed JSON response or None if failed
         """
+        # Choose the correct branch before the workflow continues.
         if not self.gemini_client or not self.gemini_client.is_available:
+            # Return the prepared result to the caller.
             return None
 
         try:
@@ -1744,7 +1986,9 @@ RESPONSE FORMAT (JSON):
             result = self.gemini_client.generate_report_json(prompt, image_path=image_path, report_id=report_id)
 
             if result:
+                # Choose the correct branch before the workflow continues.
                 if isinstance(result, dict) and self._is_low_severity_review_context(report_data or {}, result):
+                    # Trigger the side effect required for this stage.
                     logger.info(
                         "Applying LOW context proportionality guard to Gemini result before schema/semantic gates for report %s",
                         report_id or 'unknown',
@@ -1754,6 +1998,7 @@ RESPONSE FORMAT (JSON):
                 if isinstance(result, dict) and result.get('_schema_incomplete'):
                     missing = result.get('_missing_required_report_keys') or []
                     if not self.allow_schema_incomplete_report:
+                        # Prepare detail for the next step.
                         detail = (
                             "Gemini returned schema-incomplete JSON and "
                             "GEMINI_ALLOW_SCHEMA_INCOMPLETE is disabled: "
@@ -1762,6 +2007,7 @@ RESPONSE FORMAT (JSON):
                         self.last_nlp_error = detail
                         logger.warning(detail)
                         return None
+                    # Prepare detail for the next step.
                     detail = (
                         "Gemini returned usable partial JSON; downstream report sanitizer "
                         f"will fill missing keys: {', '.join(missing) if missing else 'unknown'}"
@@ -1770,8 +2016,10 @@ RESPONSE FORMAT (JSON):
                     logger.warning(detail)
                     return result
 
+                # Prepare missing fields for the next step.
                 missing_fields = self._missing_required_nlp_fields(result)
                 if missing_fields:
+                    # Trigger the side effect required for this stage.
                     logger.warning(
                         "Gemini NLP output missing required fields %s for report %s; attempting schema regeneration",
                         missing_fields,
@@ -1781,11 +2029,13 @@ RESPONSE FORMAT (JSON):
                     regen_prompt = self._build_schema_regen_prompt(prompt, missing_fields)
                     attempts = max(0, self.gemini_schema_regen_attempts)
                     repaired_result = None
+                    # Prepare repaired missing for the next step.
                     repaired_missing = list(missing_fields)
                     best_effort_result = result if isinstance(result, dict) else None
                     best_effort_missing = list(missing_fields)
 
                     for attempt_idx in range(attempts):
+                        # Prepare candidate for the next step.
                         candidate = self.gemini_client.generate_report_json(
                             regen_prompt,
                             image_path=image_path,
@@ -1795,7 +2045,9 @@ RESPONSE FORMAT (JSON):
                             continue
 
                         candidate_missing = self._missing_required_nlp_fields(candidate)
+                        # Choose the correct branch before the workflow continues.
                         if best_effort_result is None or len(candidate_missing) < len(best_effort_missing):
+                            # Prepare best effort result for the next step.
                             best_effort_result = candidate
                             best_effort_missing = list(candidate_missing)
 
@@ -1809,8 +2061,10 @@ RESPONSE FORMAT (JSON):
                             )
                             break
 
+                        # Prepare repaired missing for the next step.
                         repaired_missing = candidate_missing
 
+                    # Choose the correct branch before the workflow continues.
                     if repaired_result is not None:
                         result = repaired_result
                     elif best_effort_result is not None and self.allow_schema_incomplete_report:
@@ -1818,6 +2072,7 @@ RESPONSE FORMAT (JSON):
                             "Gemini output still missing fields after regeneration (%s); continuing with best-effort Gemini output for downstream sanitization",
                             ', '.join(best_effort_missing),
                         )
+                        # Prepare result for the next step.
                         result = dict(best_effort_result)
                         result['_schema_incomplete'] = True
                         result['_missing_required_report_keys'] = list(best_effort_missing)
@@ -1827,15 +2082,18 @@ RESPONSE FORMAT (JSON):
                             + ", ".join(best_effort_missing or repaired_missing)
                         )
                         self.last_nlp_error = detail
+                        # Trigger the side effect required for this stage.
                         logger.warning(detail)
                         return None
 
+                # Prepare semantic gaps for the next step.
                 semantic_gaps = self._missing_semantic_nlp_fields(
                     result,
                     report_data=report_data,
                     direct_image_available=bool(image_path),
                 )
                 if semantic_gaps:
+                    # Trigger the side effect required for this stage.
                     logger.warning(
                         "Gemini NLP output semantically incomplete %s for report %s; attempting semantic regeneration",
                         semantic_gaps,
@@ -1846,7 +2104,9 @@ RESPONSE FORMAT (JSON):
                     repaired_result = None
                     repaired_gaps = list(semantic_gaps)
 
+                    # Process each item in this collection using the same rule set.
                     for attempt_idx in range(attempts):
+                        # Prepare candidate for the next step.
                         candidate = self.gemini_client.generate_report_json(
                             regen_prompt,
                             image_path=image_path,
@@ -1856,12 +2116,14 @@ RESPONSE FORMAT (JSON):
                             continue
 
                         candidate_missing = self._missing_required_nlp_fields(candidate)
+                        # Prepare candidate gaps for the next step.
                         candidate_gaps = self._missing_semantic_nlp_fields(
                             candidate,
                             report_data=report_data,
                             direct_image_available=bool(image_path),
                         )
                         if not candidate_missing and not candidate_gaps:
+                            # Prepare repaired result for the next step.
                             repaired_result = candidate
                             repaired_gaps = []
                             logger.info(
@@ -1871,8 +2133,10 @@ RESPONSE FORMAT (JSON):
                             )
                             break
 
+                        # Prepare repaired gaps for the next step.
                         repaired_gaps = candidate_missing + candidate_gaps
 
+                    # Choose the correct branch before the workflow continues.
                     if repaired_result is not None:
                         result = repaired_result
                     elif self.allow_semantic_incomplete_report:
@@ -1880,6 +2144,7 @@ RESPONSE FORMAT (JSON):
                             "Gemini output still semantically incomplete after regeneration (%s); opt-in allows continuation",
                             ', '.join(repaired_gaps),
                         )
+                        # Prepare result for the next step.
                         result = dict(result)
                         result['_semantic_incomplete'] = True
                         result['_missing_semantic_report_fields'] = list(repaired_gaps)
@@ -1889,9 +2154,11 @@ RESPONSE FORMAT (JSON):
                             + ", ".join(repaired_gaps or semantic_gaps)
                         )
                         self.last_nlp_error = detail
+                        # Trigger the side effect required for this stage.
                         logger.warning(detail)
                         return None
 
+                # Trigger the side effect required for this stage.
                 logger.info("Gemini NLP analysis completed")
                 self.last_nlp_error = None
                 return result
@@ -1902,33 +2169,42 @@ RESPONSE FORMAT (JSON):
                 return None
 
         except Exception as e:
+            # Prepare last nlp error for the next step.
             self.last_nlp_error = f"Gemini API error: {e}"
             logger.error(f"Gemini API error: {e}")
             return None
 
+    # Section: run the missing required nlp fields workflow with clear inputs and outputs.
     def _missing_required_nlp_fields(self, nlp_analysis: Optional[Dict[str, Any]]) -> List[str]:
         """Return list of missing/empty required NLP fields for strict schema gating."""
+        # Choose the correct branch before the workflow continues.
         if not isinstance(nlp_analysis, dict):
             return ['environment_type', 'visual_evidence', 'persons', 'summary', 'dosh_regulations_cited']
 
         missing = []
         if not str(nlp_analysis.get('environment_type', '') or '').strip():
+            # Trigger the side effect required for this stage.
             missing.append('environment_type')
         if not str(nlp_analysis.get('visual_evidence', '') or '').strip():
             missing.append('visual_evidence')
         if not isinstance(nlp_analysis.get('persons'), list) or len(nlp_analysis.get('persons', [])) == 0:
             missing.append('persons')
+        # Choose the correct branch before the workflow continues.
         if not str(nlp_analysis.get('summary', '') or '').strip():
             missing.append('summary')
         if not isinstance(nlp_analysis.get('dosh_regulations_cited'), list) or len(nlp_analysis.get('dosh_regulations_cited', [])) == 0:
             missing.append('dosh_regulations_cited')
         return missing
 
+    # Section: run the word count workflow with clear inputs and outputs.
     def _word_count(self, value: Any) -> int:
         return len(re.findall(r'[A-Za-z0-9]+', str(value or '')))
 
+    # Section: run the expected report person count workflow with clear inputs and outputs.
     def _expected_report_person_count(self, report_data: Optional[Dict[str, Any]]) -> int:
+        # Choose the correct branch before the workflow continues.
         if not isinstance(report_data, dict):
+            # Return the prepared result to the caller.
             return 0
         try:
             explicit_count = int(report_data.get('person_count') or 0)
@@ -1937,6 +2213,7 @@ RESPONSE FORMAT (JSON):
         if explicit_count > 0:
             return explicit_count
 
+        # Prepare detections for the next step.
         detections = report_data.get('detections') if isinstance(report_data.get('detections'), list) else []
         yolo_count = sum(
             1 for det in detections
@@ -1945,31 +2222,40 @@ RESPONSE FORMAT (JSON):
             in {'person', 'worker', 'man', 'woman', 'people'}
         )
         if yolo_count > 0:
+            # Return the prepared result to the caller.
             return yolo_count
 
+        # Prepare caption count for the next step.
         caption_count = infer_people_count_from_text(
             str(report_data.get('caption') or ''),
             str(report_data.get('violation_summary') or ''),
         )
         return max(0, int(caption_count or 0))
 
+    # Section: run the person ppe payload workflow with clear inputs and outputs.
     def _person_ppe_payload(self, person: Dict[str, Any]) -> Dict[str, Any]:
         ppe = person.get('ppe') if isinstance(person.get('ppe'), dict) else {}
         if ppe:
+            # Return the prepared result to the caller.
             return ppe
+        # Prepare ppe status for the next step.
         ppe_status = person.get('ppe_status') if isinstance(person.get('ppe_status'), dict) else {}
         return ppe_status
 
+    # Section: run the ppe payload marks missing workflow with clear inputs and outputs.
     def _ppe_payload_marks_missing(self, ppe_payload: Dict[str, Any], key: str) -> bool:
         if not isinstance(ppe_payload, dict):
             return False
         for raw_key, raw_value in ppe_payload.items():
             if _canonical_ppe_key(raw_key) != key:
                 continue
+            # Prepare value for the next step.
             value = str(raw_value or '').strip().lower()
             return any(marker in value for marker in ('missing', 'no ', 'not worn', 'not wearing', 'absent', 'lacking'))
+        # Return the prepared result to the caller.
         return False
 
+    # Section: run the risk mentions category workflow with clear inputs and outputs.
     def _risk_mentions_category(self, risk: Any, category: str) -> bool:
         text = ''
         if isinstance(risk, dict):
@@ -1978,7 +2264,9 @@ RESPONSE FORMAT (JSON):
                 for key in ('risk_category', 'category', 'type', 'risk', 'description', 'evidence')
             )
         else:
+            # Prepare text for the next step.
             text = str(risk or '')
+        # Prepare normalized for the next step.
         normalized = text.lower().replace('-', '_').replace(' ', '_')
         aliases = {
             'restricted_area': ('restricted_area', 'restricted', 'exclusion_zone', 'cordoned'),
@@ -1988,8 +2276,10 @@ RESPONSE FORMAT (JSON):
             'work_at_height': ('work_at_height', 'height', 'ladder', 'scaffold', 'roof', 'edge'),
             'material_stability': ('material_stability', 'material', 'collapse', 'stack', 'pile'),
         }
+        # Return the prepared result to the caller.
         return any(alias in normalized for alias in aliases.get(category, (category,)))
 
+    # Section: run the missing semantic nlp fields workflow with clear inputs and outputs.
     def _missing_semantic_nlp_fields(
         self,
         nlp_analysis: Optional[Dict[str, Any]],
@@ -1997,7 +2287,9 @@ RESPONSE FORMAT (JSON):
         direct_image_available: bool = False,
     ) -> List[str]:
         """Return deep semantic gaps that make a Gemini report unusable even if JSON parses."""
+        # Choose the correct branch before the workflow continues.
         if not isinstance(nlp_analysis, dict):
+            # Return the prepared result to the caller.
             return ['semantic_report_json']
 
         gaps: List[str] = []
@@ -2006,7 +2298,9 @@ RESPONSE FORMAT (JSON):
         if expected_count > 0 and len(persons) != expected_count:
             gaps.append(f'persons.count expected {expected_count} got {len(persons)}')
 
+        # Choose the correct branch before the workflow continues.
         if self._word_count(nlp_analysis.get('visual_evidence')) < 12:
+            # Trigger the side effect required for this stage.
             gaps.append('visual_evidence.detail')
         if self._word_count(nlp_analysis.get('summary')) < 10:
             gaps.append('summary.detail')
@@ -2015,16 +2309,20 @@ RESPONSE FORMAT (JSON):
         if expected_severity in {'HIGH', 'MEDIUM', 'LOW'}:
             model_severity = str(nlp_analysis.get('severity_level') or nlp_analysis.get('severity') or '').strip().upper()
             if model_severity != expected_severity:
+                # Trigger the side effect required for this stage.
                 gaps.append(f'severity_level expected {expected_severity}')
 
+        # Prepare missing ppe keys for the next step.
         missing_ppe_keys = self._extract_detector_missing_ppe_keys(report_data or {})
         allowed_likelihood = {'HIGH', 'MEDIUM', 'LOW', 'REVIEW_REQUIRED'}
         all_risks: List[Any] = []
         all_actions: List[str] = []
 
         for idx, person in enumerate(persons):
+            # Prepare prefix for the next step.
             prefix = f'persons[{idx}]'
             if not isinstance(person, dict):
+                # Trigger the side effect required for this stage.
                 gaps.append(prefix)
                 continue
             if self._word_count(person.get('description')) < 8:
@@ -2033,8 +2331,11 @@ RESPONSE FORMAT (JSON):
             ppe_payload = self._person_ppe_payload(person)
             if not ppe_payload:
                 gaps.append(f'{prefix}.ppe')
+            # Process each item in this collection using the same rule set.
             for key in missing_ppe_keys:
+                # Choose the correct branch before the workflow continues.
                 if not self._ppe_payload_marks_missing(ppe_payload, key):
+                    # Trigger the side effect required for this stage.
                     gaps.append(f'{prefix}.ppe.{key}=Missing')
 
             hazards = person.get('hazards_faced') if isinstance(person.get('hazards_faced'), list) else person.get('hazards')
@@ -2042,63 +2343,80 @@ RESPONSE FORMAT (JSON):
                 gaps.append(f'{prefix}.hazards_faced')
 
             risks = person.get('risks') if isinstance(person.get('risks'), list) else []
+            # Choose the correct branch before the workflow continues.
             if not risks:
+                # Trigger the side effect required for this stage.
                 gaps.append(f'{prefix}.risks')
             for risk_idx, risk in enumerate(risks):
                 risk_prefix = f'{prefix}.risks[{risk_idx}]'
                 if not isinstance(risk, dict):
+                    # Trigger the side effect required for this stage.
                     gaps.append(f'{risk_prefix}.structured')
                     continue
                 all_risks.append(risk)
                 risk_text = risk.get('risk') or risk.get('description')
                 if self._word_count(risk_text) < 12:
                     gaps.append(f'{risk_prefix}.risk.detail')
+                # Prepare likelihood for the next step.
                 likelihood = str(risk.get('likelihood') or '').strip().upper()
                 if likelihood not in allowed_likelihood:
                     gaps.append(f'{risk_prefix}.likelihood')
                 if self._word_count(risk.get('evidence')) < 3:
+                    # Trigger the side effect required for this stage.
                     gaps.append(f'{risk_prefix}.evidence')
                 mitigation = risk.get('mitigation_steps') if isinstance(risk.get('mitigation_steps'), list) else []
                 if len([step for step in mitigation if self._word_count(step) >= 4]) < 2:
                     gaps.append(f'{risk_prefix}.mitigation_steps')
 
+            # Prepare actions for the next step.
             actions = person.get('corrective_actions') if isinstance(person.get('corrective_actions'), list) else person.get('actions')
             actions = actions if isinstance(actions, list) else []
             action_texts = [str(action or '').strip() for action in actions if str(action or '').strip()]
             all_actions.extend(action_texts)
             if len([action for action in action_texts if self._word_count(action) >= 6]) < 3:
+                # Trigger the side effect required for this stage.
                 gaps.append(f'{prefix}.corrective_actions')
 
+        # Prepare regs for the next step.
         regs = nlp_analysis.get('dosh_regulations_cited') if isinstance(nlp_analysis.get('dosh_regulations_cited'), list) else []
         for idx, reg in enumerate(regs):
+            # Choose the correct branch before the workflow continues.
             if not isinstance(reg, dict):
                 gaps.append(f'dosh_regulations_cited[{idx}].structured')
                 continue
             if not str(reg.get('regulation') or '').strip():
                 gaps.append(f'dosh_regulations_cited[{idx}].regulation')
             if self._word_count(reg.get('requirement')) < 10:
+                # Trigger the side effect required for this stage.
                 gaps.append(f'dosh_regulations_cited[{idx}].requirement.detail')
             if self._word_count(reg.get('explanation')) < 10:
                 gaps.append(f'dosh_regulations_cited[{idx}].explanation.detail')
+            # Choose the correct branch before the workflow continues.
             if not str(reg.get('penalty') or '').strip():
                 gaps.append(f'dosh_regulations_cited[{idx}].penalty')
 
+        # Choose the correct branch before the workflow continues.
         if missing_ppe_keys and not self._is_low_severity_review_context(report_data or {}, nlp_analysis):
             combined_action_text = ' '.join(all_actions).lower()
             if 'generate the regulatory incident report package' not in combined_action_text:
+                # Trigger the side effect required for this stage.
                 gaps.append('persons[].corrective_actions.regulatory_incident_report_package')
 
         if isinstance(report_data, dict):
+            # Prepare signal block for the next step.
             signal_block = self._build_activity_risk_signal_block(
                 report_data,
                 direct_image_available=direct_image_available,
             )
             for category in self._observed_activity_categories_from_signal_block(signal_block):
                 if not any(self._risk_mentions_category(risk, category) for risk in all_risks):
+                    # Trigger the side effect required for this stage.
                     gaps.append(f'persons[].risks.{category}')
 
+        # Return the prepared result to the caller.
         return gaps
 
+    # Section: run the build schema regen prompt workflow with clear inputs and outputs.
     def _build_schema_regen_prompt(self, prompt: str, missing_fields: List[str]) -> str:
         """Append strict schema reminder to force required fields in regenerated output."""
         fields_text = ', '.join(missing_fields)
@@ -2111,12 +2429,14 @@ RESPONSE FORMAT (JSON):
             + "No markdown fences. No extra text."
         )
 
+    # Section: run the build semantic regen prompt workflow with clear inputs and outputs.
     def _build_semantic_regen_prompt(
         self,
         prompt: str,
         semantic_gaps: List[str],
         report_data: Optional[Dict[str, Any]] = None,
     ) -> str:
+        # Prepare expected count for the next step.
         expected_count = self._expected_report_person_count(report_data)
         expected_severity = str((report_data or {}).get('severity') or '').strip().upper()
         missing_labels = [
@@ -2130,17 +2450,21 @@ RESPONSE FORMAT (JSON):
             "Each risk must be structured with risk, likelihood, evidence, regulation_citation, and at least two mitigation_steps.",
             "Regulation requirement and explanation must be full explanatory sentences, not short labels.",
         ]
+        # Choose the correct branch before the workflow continues.
         if expected_count > 0:
+            # Trigger the side effect required for this stage.
             expectations.append(f"Analyze exactly {expected_count} person(s).")
         if expected_severity in {'HIGH', 'MEDIUM', 'LOW'}:
             expectations.append(f"Set severity_level exactly to {expected_severity}.")
         if missing_labels:
             expectations.append("Mark detector-confirmed missing PPE as Missing in every person ppe map: " + ', '.join(missing_labels) + ".")
             if self._is_low_severity_review_context(report_data or {}, {}):
+                # Trigger the side effect required for this stage.
                 expectations.append("For LOW PPE-only context, use supervisor verification actions and do not create incident-package or stop-work wording.")
             else:
                 expectations.append('Include a corrective action beginning with "Generate the regulatory incident report package".')
 
+        # Return the prepared result to the caller.
         return (
             str(prompt or '')
             + "\n\nSEMANTIC COMPLETENESS REGENERATION REQUIREMENT:\n"
@@ -2151,8 +2475,10 @@ RESPONSE FORMAT (JSON):
             + "\n".join(f"- {item}" for item in expectations)
         )
 
+    # Section: run the build ollama model chain workflow with clear inputs and outputs.
     def _build_ollama_model_chain(self, primary_model: str) -> List[str]:
         """Build a deterministic fallback list where the active model is always attempted first."""
+        # Prepare configured for the next step.
         configured = str(
             os.getenv('OLLAMA_LOW_MEMORY_FALLBACK_MODELS', 'gemma3:4b,gemma3:1b,gemma2:2b')
             or ''
@@ -2161,18 +2487,24 @@ RESPONSE FORMAT (JSON):
 
         primary = str(primary_model or '').strip()
         if primary:
+            # Trigger the side effect required for this stage.
             ordered.append(primary)
 
+        # Process each item in this collection using the same rule set.
         for raw_model in configured.split(','):
             model_name = str(raw_model or '').strip()
             if model_name and model_name not in ordered:
+                # Trigger the side effect required for this stage.
                 ordered.append(model_name)
 
         return ordered or ['gemma3:4b']
 
+    # Section: run the is ollama memory pressure error workflow with clear inputs and outputs.
     def _is_ollama_memory_pressure_error(self, error_text: Optional[str]) -> bool:
         text = str(error_text or '').strip().lower()
+        # Choose the correct branch before the workflow continues.
         if not text:
+            # Return the prepared result to the caller.
             return False
         return (
             'requires more system memory' in text
@@ -2182,13 +2514,16 @@ RESPONSE FORMAT (JSON):
             or ('requires' in text and 'memory' in text)
         )
 
+    # Section: run the build ollama compact report prompt workflow with clear inputs and outputs.
     def _build_ollama_compact_report_prompt(
         self,
         report_data: Optional[Dict[str, Any]],
         original_prompt: str,
     ) -> str:
         """Build a small schema-first prompt for local Gemma JSON generation."""
+        # Choose the correct branch before the workflow continues.
         if not isinstance(report_data, dict):
+            # Return the prepared result to the caller.
             return original_prompt
 
         caption = str(report_data.get('caption') or '').strip()
@@ -2199,8 +2534,10 @@ RESPONSE FORMAT (JSON):
         try:
             person_count = max(1, int(report_data.get('person_count') or 1))
         except (TypeError, ValueError):
+            # Prepare person count for the next step.
             person_count = 1
 
+        # Prepare detections for the next step.
         detections = report_data.get('detections') if isinstance(report_data.get('detections'), list) else []
         missing_labels: List[str] = []
         for det in detections:
@@ -2209,19 +2546,25 @@ RESPONSE FORMAT (JSON):
             label = str(det.get('class_name') or det.get('class') or '').strip()
             if not label.upper().startswith('NO-'):
                 continue
+            # Prepare pretty for the next step.
             pretty = label[3:].replace('_', ' ').replace('-', ' ').strip().title()
             if pretty and pretty not in missing_labels:
+                # Trigger the side effect required for this stage.
                 missing_labels.append(pretty)
 
+        # Choose the correct branch before the workflow continues.
         if not missing_labels and violation_summary:
             for raw_item in re.split(r'[,;/]+', violation_summary):
                 item = re.sub(r'\(x\d+\)', '', raw_item, flags=re.IGNORECASE).strip()
                 if item and item not in missing_labels:
+                    # Trigger the side effect required for this stage.
                     missing_labels.append(item)
 
         if not missing_labels:
+            # Prepare missing labels for the next step.
             missing_labels = ['Required PPE']
 
+        # Prepare detected environment for the next step.
         detected_environment = self._extract_environment_from_caption(caption) or 'General Workspace'
         activity_risk_signal_block = self._build_activity_risk_signal_block(
             report_data,
@@ -2231,6 +2574,7 @@ RESPONSE FORMAT (JSON):
         observed_activity_categories = self._observed_activity_categories_from_signal_block(activity_risk_signal_block)
         observed_activity_text = ', '.join(observed_activity_categories) if observed_activity_categories else 'none'
         missing_phrase = self._format_missing_ppe_phrase(missing_labels)
+        # Prepare required person ids for the next step.
         required_person_ids = ', '.join(f"Person {idx}" for idx in range(1, min(person_count, 6) + 1))
 
         return f"""You are a Malaysian JKR/DOSH safety report JSON generator.
@@ -2263,8 +2607,10 @@ Rules:
 Return schema keys: environment_type, visual_evidence, persons, summary, severity_level, dosh_regulations_cited.
 Use missing PPE phrase where needed: {missing_phrase}."""
 
+    # Section: run the build ollama report json schema workflow with clear inputs and outputs.
     def _build_ollama_report_json_schema(self, report_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Return a compact JSON schema supported by Ollama's format parameter."""
+        # Prepare string array for the next step.
         string_array = {"type": "array", "items": {"type": "string"}}
         return {
             "type": "object",
@@ -2347,6 +2693,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             },
         }
 
+    # Section: run the augment local observed activity risks workflow with clear inputs and outputs.
     def _augment_local_observed_activity_risks(
         self,
         nlp_analysis: Optional[Dict[str, Any]],
@@ -2354,7 +2701,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         force_local_nlp: bool = False,
     ) -> None:
         """Add local observed activity-risk cells when Gemma omits caption hints."""
+        # Choose the correct branch before the workflow continues.
         if not isinstance(nlp_analysis, dict):
+            # Return the prepared result to the caller.
             return
 
         is_local_route = force_local_nlp or self.strict_local_profile or str(self.routing_profile or '').strip().lower() == 'local'
@@ -2365,6 +2714,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         if not enabled:
             return
 
+        # Prepare detections for the next step.
         detections = report_data.get('detections', [])
         signal_block = self._build_activity_risk_signal_block(
             report_data,
@@ -2373,8 +2723,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         )
         observed_categories = self._observed_activity_categories_from_signal_block(signal_block)
         if not observed_categories:
+            # Return the prepared result to the caller.
             return
 
+        # Prepare persons for the next step.
         persons = nlp_analysis.get('persons')
         if not isinstance(persons, list) or not persons:
             return
@@ -2390,16 +2742,22 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'traffic_interface': ('traffic', 'road', 'street', 'bus', 'vehicle', 'lane', 'sidewalk'),
         }
 
+        # Section: run the already has category workflow with clear inputs and outputs.
         def _already_has_category(person: Dict[str, Any], category: str) -> bool:
+            # Prepare terms for the next step.
             terms = category_terms.get(category, (category,))
             for risk in person.get('risks') or []:
+                # Choose the correct branch before the workflow continues.
                 if isinstance(risk, dict):
+                    # Prepare category text for the next step.
                     category_text = ' '.join(
                         str(risk.get(key) or '')
                         for key in ('risk_category', 'category', 'type')
                     ).lower()
                     if category_text:
+                        # Choose the correct branch before the workflow continues.
                         if category in category_text or any(term in category_text for term in terms):
+                            # Return the prepared result to the caller.
                             return True
                         # A PPE-tagged risk may mention road/traffic/machinery as context,
                         # but it still does not satisfy the separate observed activity cell.
@@ -2410,15 +2768,19 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     ).lower()
                 else:
                     text = str(risk).lower()
+                # Choose the correct branch before the workflow continues.
                 if category in text or any(term in text for term in terms):
                     return True
+            # Return the prepared result to the caller.
             return False
 
+        # Section: run the evidence sentence workflow with clear inputs and outputs.
         def _evidence_sentence(category: str) -> str:
             terms = category_terms.get(category, (category,))
             sentences = re.split(r'(?<=[.!?])\s+', caption)
             for sentence in sentences:
                 lowered = sentence.lower()
+                # Choose the correct branch before the workflow continues.
                 if (
                     (
                         'visible activity context' in lowered
@@ -2427,13 +2789,17 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     )
                     and any(term in lowered for term in terms)
                 ):
+                    # Return the prepared result to the caller.
                     return sentence.strip()
+            # Process each item in this collection using the same rule set.
             for sentence in sentences:
+                # Prepare lowered for the next step.
                 lowered = sentence.lower()
                 if any(term in lowered for term in terms):
                     return sentence.strip()
             return caption[:220].strip() if caption else 'local caption activity context'
 
+        # Prepare risk templates for the next step.
         risk_templates = {
             'restricted_area': (
                 'The local caption indicates a restricted or cordoned work area around the affected person. '
@@ -2460,6 +2826,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'Vehicle movement and reduced worker visibility can create struck-by exposure unless pedestrian and work-zone separation is verified.'
             ),
         }
+        # Prepare action templates for the next step.
         action_templates = {
             'restricted_area': 'Verify restricted-zone barriers, access control, and supervisor authorization before the person re-enters the area.',
             'unsafe_posture': 'Pause the task and correct the worker posture, access position, or manual-handling method before work restarts.',
@@ -2477,20 +2844,25 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'traffic_interface': 'Traffic-interface struck-by exposure',
         }
 
+        # Process each item in this collection using the same rule set.
         for person in persons:
+            # Choose the correct branch before the workflow continues.
             if not isinstance(person, dict):
                 continue
             person.setdefault('risks', [])
             if not isinstance(person['risks'], list):
+                # Prepare values needed by the next step.
                 person['risks'] = [person['risks']]
             person.setdefault('hazards_faced', [])
             if not isinstance(person['hazards_faced'], list):
                 person['hazards_faced'] = [person['hazards_faced']]
             person.setdefault('corrective_actions', [])
+            # Choose the correct branch before the workflow continues.
             if not isinstance(person['corrective_actions'], list):
                 person['corrective_actions'] = [person['corrective_actions']]
 
             for category in observed_categories:
+                # Choose the correct branch before the workflow continues.
                 if _already_has_category(person, category):
                     continue
                 risk_text = risk_templates.get(category)
@@ -2510,6 +2882,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     ],
                     'source': 'local_caption_activity_context',
                 })
+                # Trigger the side effect required for this stage.
                 person['hazards_faced'].append({
                     'type': hazard_labels.get(category, category),
                     'source': evidence,
@@ -2517,8 +2890,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 })
                 action = action_templates.get(category)
                 if action and not any(action.lower() in str(existing).lower() for existing in person['corrective_actions']):
+                    # Trigger the side effect required for this stage.
                     person['corrective_actions'].append(action)
 
+    # Section: run the call ollama api workflow with clear inputs and outputs.
     def _call_ollama_api(
         self,
         prompt: str,
@@ -2535,6 +2910,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         Returns:
             Parsed JSON response or None if failed
         """
+        # Prepare last ollama model used for the next step.
         self.last_ollama_model_used = self.model
 
         # Try local Llama first if available
@@ -2548,29 +2924,35 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 )
 
                 if response:
+                    # Trigger the side effect required for this stage.
                     logger.info("[OK] Local Llama NLP analysis completed")
                     return response
                 else:
                     logger.warning("Local Llama returned no valid JSON, trying Ollama...")
 
             except Exception as e:
+                # Trigger the side effect required for this stage.
                 logger.error(f"Local Llama generation failed: {e}")
                 logger.info("Falling back to Ollama API...")
 
         # Fall back to Ollama API
+        # Prepare recovery helper for the next step.
         recovery_helper = None
         check_running = None
         check_model = None
         try:
             from caption_image import attempt_ollama_auto_recover, check_ollama_running, check_model_available
+            # Prepare recovery helper for the next step.
             recovery_helper = attempt_ollama_auto_recover
             check_running = check_ollama_running
             check_model = check_model_available
         except Exception:
             recovery_helper = None
 
+        # Choose the correct branch before the workflow continues.
         if callable(check_running):
             try:
+                # Prepare is running for the next step.
                 is_running = bool(check_running())
                 model_ready = bool(check_model(self.model)) if is_running and callable(check_model) else is_running
                 logger.info(
@@ -2580,7 +2962,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     model_ready,
                     self.api_url,
                 )
+                # Choose the correct branch before the workflow continues.
                 if (not is_running or not model_ready) and callable(recovery_helper):
+                    # Trigger the side effect required for this stage.
                     recovery_helper(
                         reason='NLP provider preflight',
                         model_name=self.model,
@@ -2589,13 +2973,16 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             except Exception:
                 pass
 
+        # Prepare max attempts for the next step.
         max_attempts = max(1, int(getattr(self, 'ollama_nlp_max_attempts', 1) or 1))
         backoff_seconds = max(0.0, float(getattr(self, 'ollama_retry_backoff_seconds', 0.0) or 0.0))
         schema_regen_attempts = max(0, int(getattr(self, 'ollama_schema_regen_attempts', 0) or 0))
 
         request_timeout = self.ollama_timeout
         if fast_mode:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare forced max attempts for the next step.
                 forced_max_attempts = int(os.getenv('OLLAMA_FORCE_LOCAL_MAX_ATTEMPTS', '2') or 2)
             except (TypeError, ValueError):
                 forced_max_attempts = 2
@@ -2605,9 +2992,11 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 forced_schema_regen = int(os.getenv('OLLAMA_FORCE_LOCAL_SCHEMA_REGEN_ATTEMPTS', '1') or 1)
             except (TypeError, ValueError):
                 forced_schema_regen = 1
+            # Prepare schema regen attempts for the next step.
             schema_regen_attempts = max(0, min(forced_schema_regen, schema_regen_attempts or forced_schema_regen, 2))
 
             try:
+                # Prepare forced read timeout for the next step.
                 forced_read_timeout = int(os.getenv('OLLAMA_FORCE_LOCAL_READ_TIMEOUT_SECONDS', '150') or 150)
             except (TypeError, ValueError):
                 forced_read_timeout = 150
@@ -2615,7 +3004,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             connect_timeout = max(1, int(getattr(self, 'ollama_connect_timeout', 8) or 8))
             request_timeout = (connect_timeout, forced_read_timeout)
 
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare local num predict for the next step.
             local_num_predict = int(
                 os.getenv(
                     'OLLAMA_FORCE_LOCAL_NUM_PREDICT' if fast_mode else 'OLLAMA_REPORT_NUM_PREDICT',
@@ -2624,6 +3015,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             )
         except (TypeError, ValueError):
             local_num_predict = 2048
+        # Prepare local num predict for the next step.
         local_num_predict = max(1024 if fast_mode else 512, min(local_num_predict, 4096))
         local_keep_alive = os.getenv(
             'OLLAMA_FORCE_LOCAL_KEEP_ALIVE' if fast_mode else 'OLLAMA_REPORT_KEEP_ALIVE',
@@ -2641,11 +3033,15 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             else 'json'
         )
 
+        # Section: run the sleep before retry workflow with clear inputs and outputs.
         def _sleep_before_retry(attempt_no: int):
+            # Choose the correct branch before the workflow continues.
             if backoff_seconds <= 0:
+                # Return the prepared result to the caller.
                 return
             time.sleep(min(5.0, backoff_seconds * max(1, attempt_no)))
 
+        # Section: run the request ollama json workflow with clear inputs and outputs.
         def _request_ollama_json(request_prompt: str, model_name: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
             prompt_for_request = self._build_ollama_compact_report_prompt(report_data, request_prompt)
             payload = {
@@ -2669,12 +3065,15 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 }
             }
 
+            # Prepare last error for the next step.
             last_error = None
             for attempt_idx in range(max_attempts):
+                # Prepare attempt no for the next step.
                 attempt_no = attempt_idx + 1
                 data = {}
 
                 try:
+                    # Trigger the side effect required for this stage.
                     logger.info(
                         "Calling Ollama API for NLP analysis using model '%s' (attempt %s/%s)...",
                         model_name,
@@ -2684,8 +3083,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     response = requests.post(self.api_url, json=payload, timeout=request_timeout)
 
                     if not response.ok:
+                        # Prepare text detail for the next step.
                         text_detail = ''
                         try:
+                            # Prepare text detail for the next step.
                             text_detail = str(response.text or '').strip()[:220]
                         except Exception:
                             text_detail = ''
@@ -2694,8 +3095,11 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         if text_detail:
                             last_error = f"{last_error}: {text_detail}"
 
+                        # Choose the correct branch before the workflow continues.
                         if callable(recovery_helper) and response.status_code in (404, 408, 409, 425, 429, 500, 502, 503, 504):
+                            # Protect this step so expected failures can fall back cleanly.
                             try:
+                                # Trigger the side effect required for this stage.
                                 recovery_helper(
                                     reason=f"HTTP {response.status_code}",
                                     model_name=model_name,
@@ -2704,25 +3108,32 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                             except Exception:
                                 pass
 
+                        # Choose the correct branch before the workflow continues.
                         if attempt_no < max_attempts:
+                            # Trigger the side effect required for this stage.
                             _sleep_before_retry(attempt_no)
                             continue
                         return None, last_error
 
+                    # Prepare data for the next step.
                     data = response.json()
                     logger.debug(f"Ollama response: {data}")
 
                     raw_json = data.get('response')
                     if raw_json is None:
+                        # Prepare last error for the next step.
                         last_error = 'Ollama response missing response payload'
                         if attempt_no < max_attempts:
+                            # Trigger the side effect required for this stage.
                             _sleep_before_retry(attempt_no)
                             continue
                         return None, last_error
 
+                    # Prepare nlp response for the next step.
                     nlp_response = json.loads(raw_json)
                     if not isinstance(nlp_response, dict):
                         last_error = 'Ollama response JSON root must be an object'
+                        # Choose the correct branch before the workflow continues.
                         if attempt_no < max_attempts:
                             _sleep_before_retry(attempt_no)
                             continue
@@ -2730,10 +3141,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     if not nlp_response:
                         last_error = 'Ollama response JSON was an empty object'
                         if attempt_no < max_attempts:
+                            # Trigger the side effect required for this stage.
                             _sleep_before_retry(attempt_no)
                             continue
+                        # Return the prepared result to the caller.
                         return None, last_error
 
+                    # Trigger the side effect required for this stage.
                     logger.info(
                         "[NLP:ollama] parsed JSON model=%s attempt=%s output_chars=%s keys=%s",
                         model_name,
@@ -2744,6 +3158,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     return nlp_response, None
 
                 except json.JSONDecodeError as e:
+                    # Prepare last error for the next step.
                     last_error = f"Failed to parse Ollama JSON response: {e}"
                     logger.warning(last_error)
                     logger.debug(f"Raw response: {data.get('response', 'N/A') if isinstance(data, dict) else 'N/A'}")
@@ -2753,9 +3168,12 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     logger.warning(last_error)
                     return None, last_error
                 except requests.exceptions.RequestException as e:
+                    # Prepare last error for the next step.
                     last_error = f"Ollama API request failed: {e}"
                     if callable(recovery_helper):
+                        # Protect this step so expected failures can fall back cleanly.
                         try:
+                            # Trigger the side effect required for this stage.
                             recovery_helper(
                                 reason=str(e),
                                 model_name=model_name,
@@ -2764,14 +3182,18 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         except Exception:
                             pass
                 except Exception as e:
+                    # Prepare last error for the next step.
                     last_error = f"Error calling Ollama API: {e}"
                     logger.error(last_error, exc_info=True)
 
+                # Choose the correct branch before the workflow continues.
                 if attempt_no < max_attempts:
                     _sleep_before_retry(attempt_no)
 
+            # Return the prepared result to the caller.
             return None, last_error or 'Ollama NLP request failed'
 
+        # Prepare nlp response for the next step.
         nlp_response = None
         error_detail = None
         selected_model = None
@@ -2779,12 +3201,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
         for model_idx, model_name in enumerate(model_chain):
             if model_idx > 0:
+                # Trigger the side effect required for this stage.
                 logger.warning(
                     "Retrying Ollama NLP with lower-memory model '%s' after error: %s",
                     model_name,
                     error_detail or 'unknown failure',
                 )
 
+            # Prepare values needed by the next step.
             nlp_response, error_detail = _request_ollama_json(prompt, model_name)
             if nlp_response:
                 selected_model = model_name
@@ -2794,13 +3218,16 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 break
 
             if model_idx + 1 < len(model_chain):
+                # Trigger the side effect required for this stage.
                 logger.warning(
                     "Ollama model '%s' appears memory-constrained; falling back to '%s'",
                     model_name,
                     model_chain[model_idx + 1],
                 )
 
+        # Choose the correct branch before the workflow continues.
         if not nlp_response:
+            # Prepare last nlp error for the next step.
             self.last_nlp_error = error_detail
             logger.error("[NLP:ollama] failed model_chain=%s error=%s", model_chain, error_detail or "Ollama NLP analysis failed")
             return None
@@ -2813,12 +3240,16 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 "Ollama NLP output missing required fields %s; attempting schema regeneration",
                 missing_fields,
             )
+            # Prepare regen prompt for the next step.
             regen_prompt = self._build_schema_regen_prompt(prompt, missing_fields)
             for regen_idx in range(schema_regen_attempts):
+                # Prepare values needed by the next step.
                 candidate, regen_error = _request_ollama_json(regen_prompt, self.last_ollama_model_used)
                 if candidate:
+                    # Prepare candidate missing for the next step.
                     candidate_missing = self._missing_required_nlp_fields(candidate)
                     if not candidate_missing:
+                        # Trigger the side effect required for this stage.
                         logger.info(
                             "Ollama schema regeneration succeeded on attempt %s",
                             regen_idx + 1,
@@ -2827,16 +3258,20 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         return candidate
                     missing_fields = candidate_missing
 
+                # Choose the correct branch before the workflow continues.
                 if regen_error:
+                    # Prepare error detail for the next step.
                     error_detail = regen_error
 
                 regen_prompt = self._build_schema_regen_prompt(prompt, missing_fields)
 
+            # Trigger the side effect required for this stage.
             logger.warning(
                 "Ollama output still missing fields after regeneration (%s); continuing with best-effort model output",
                 ', '.join(missing_fields),
             )
 
+        # Prepare last nlp error for the next step.
         self.last_nlp_error = None
         logger.info(
             "[NLP:ollama] completed with model=%s keys=%s",
@@ -2845,8 +3280,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         )
         return nlp_response
 
+    # Section: run the get safety summary prompt workflow with clear inputs and outputs.
     def get_safety_summary_prompt(self, report_data: Dict[str, Any]) -> str:
         """Build executive safety summary prompt for Gemini/Ollama."""
+        # Return the prepared result to the caller.
         return (
             "You are a Senior Safety Compliance Officer in Malaysia. Summarize this safety incident.\n\n"
             "Style: Executive, professional, authoritative.\n"
@@ -2864,6 +3301,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             "- Ground every claim in the visual evidence provided.\n"
         )
 
+    # Section: run the generate report workflow with clear inputs and outputs.
     def generate_report(self, report_data: Dict[str, Any]) -> Dict[str, Optional[Path]]:
         """
         Generate complete violation report.
@@ -2887,11 +3325,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 - pdf: Path to PDF report (if enabled)
                 - nlp_analysis: NLP analysis data
         """
+        # Prepare report id for the next step.
         report_id = str(report_data.get('report_id') or '').strip() or 'unknown'
         generation_started = time.perf_counter()
         generation_timings: Dict[str, float] = {}
 
+        # Section: run the record timing workflow with clear inputs and outputs.
         def _record_timing(stage: str, started_at: float) -> None:
+            # Prepare values needed by the next step.
             generation_timings[stage] = round(time.perf_counter() - started_at, 3)
 
         generation_epoch = self.get_provider_runtime_epoch()
@@ -2908,6 +3349,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         if caption_floor:
             report_data['caption'] = caption_floor
             if not str(report_data.get('vlm_caption') or '').strip():
+                # Prepare values needed by the next step.
                 report_data['vlm_caption'] = caption_floor
 
         # Step 1: RAG - Retrieve relevant context
@@ -2921,6 +3363,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         env_type = self._extract_environment_from_caption(caption)
 
         if self.regulations_data:
+            # Prepare regulation context for the next step.
             regulation_context = build_regulation_context(
                 self.regulations_data,
                 detected_violations=violation_classes,
@@ -2928,10 +3371,12 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             )
             logger.info("Injected Malaysian regulation context into NLP prompt")
 
+        # Prepare similar incidents for the next step.
         similar_incidents = []
         dosh_context = []
 
         if self.rag_enabled:
+            # Prepare query text for the next step.
             query_text = f"{report_data.get('caption', '')} {report_data.get('violation_summary', '')}"
 
             # PRIMARY: Direct regulation injection (Gemini mode)
@@ -2947,6 +3392,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 logger.info(f"Injected {len(regulation_context)} chars of regulation context")
 
             # LEGACY: Use Chroma DB for DOSH documentation (only if Gemini disabled)
+            # Choose the correct branch before the workflow continues.
             elif self.use_chroma and self.chroma_collection:
                 logger.info("Retrieving relevant DOSH documentation from Chroma DB...")
                 dosh_context = self._query_chroma_db(query_text, n_results=self.top_k)
@@ -2967,6 +3413,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         prompt += self.get_safety_summary_prompt(report_data)
 
         # Inject regulation context into prompt if using Gemini
+        # Choose the correct branch before the workflow continues.
         if regulation_context:
             prompt = regulation_context + "\n" + prompt
         _record_timing('prompt_build_seconds', prompt_started)
@@ -2976,6 +3423,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         image_path_str = str(image_path) if image_path else None
 
         self.last_nlp_error = None
+        # Prepare last nlp provider for the next step.
         self.last_nlp_provider = None
         self.last_nlp_model = None
         self.last_nlp_fallback_reason = None
@@ -2995,6 +3443,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         env_mock = str(os.getenv('CASM_MOCK_REPORTS', '') or '').strip().lower() in ('1', 'true', 'yes', 'on')
         request_mock = bool(report_data.get('mock') or report_data.get('mock_report'))
         if env_mock or request_mock:
+            # Prepare mock source for the next step.
             mock_source = 'request' if request_mock else 'env'
             logger.info(
                 "MOCK REPORT MODE active (%s) for report %s \u2014 skipping LLM call",
@@ -3004,17 +3453,21 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             self.last_nlp_provider = 'mock'
             self.last_nlp_model = 'mock-fast-mode'
             self.last_nlp_completed_at = datetime.utcnow().isoformat() + 'Z'
+            # Choose the correct branch before the workflow continues.
             if isinstance(nlp_analysis, dict):
+                # Trigger the side effect required for this stage.
                 nlp_analysis.setdefault('provider', 'mock')
                 nlp_analysis.setdefault('model', 'mock-fast-mode')
                 nlp_analysis['mock_mode'] = True
 
+        # Prepare local rule based fast path for the next step.
         local_rule_based_fast_path = (
             force_local_nlp
             and str(os.getenv('LOCAL_REPORT_RULE_BASED_FAST_PATH', 'false')).strip().lower()
             in ('1', 'true', 'yes', 'on')
         )
         if not nlp_analysis and local_rule_based_fast_path:
+            # Trigger the side effect required for this stage.
             logger.info(
                 "Local report fast path active for %s; using deterministic analysis with VLM/YOLO grounding",
                 report_id,
@@ -3024,11 +3477,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             self.last_nlp_model = 'rule-based-local-fast-path'
             self.last_nlp_fallback_reason = 'local_rule_based_fast_path'
             self.last_nlp_completed_at = datetime.utcnow().isoformat() + 'Z'
+            # Choose the correct branch before the workflow continues.
             if isinstance(nlp_analysis, dict):
+                # Trigger the side effect required for this stage.
                 nlp_analysis.setdefault('provider', 'fallback')
                 nlp_analysis.setdefault('model', 'rule-based-local-fast-path')
                 nlp_analysis['local_fast_path'] = True
 
+        # Prepare effective provider order for the next step.
         effective_provider_order = _resolve_effective_nlp_provider_order(
             self.nlp_provider_order,
             routing_profile=self.routing_profile,
@@ -3037,15 +3493,18 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
         if force_local_nlp:
             # Local/offline runtime should stay independent from cloud provider routing.
+            # Prepare effective provider order for the next step.
             effective_provider_order = ['ollama']
             if (
                 self.local_llama is not None
                 and str(os.getenv('OLLAMA_FORCE_LOCAL_TRY_LOCAL_LLAMA', 'false')).strip().lower()
                 in ('1', 'true', 'yes', 'on')
             ):
+                # Trigger the side effect required for this stage.
                 effective_provider_order.append('local')
             logger.info("Forced local NLP route enabled for this report")
         else:
+            # Prepare sticky provider for the next step.
             sticky_provider = str(self.sticky_nlp_provider or '').strip().lower()
             sticky_active = (
                 self.sticky_nlp_provider_enabled
@@ -3054,16 +3513,19 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 and sticky_provider in effective_provider_order
             )
             if sticky_active:
+                # Prepare effective provider order for the next step.
                 effective_provider_order = [
                     sticky_provider,
                     *[p for p in effective_provider_order if p != sticky_provider]
                 ]
 
         if not effective_provider_order:
+            # Prepare last nlp error for the next step.
             self.last_nlp_error = self.last_nlp_error or 'NLP provider order resolved empty for current routing profile'
             if force_local_nlp or self.strict_local_profile:
                 effective_provider_order = ['ollama', 'local']
             else:
+                # Prepare effective provider order for the next step.
                 effective_provider_order = ['gemini', 'model_api', 'ollama', 'local']
 
         logger.info(
@@ -3079,8 +3541,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             len(prompt or ''),
         )
 
+        # Prepare nlp started for the next step.
         nlp_started = time.perf_counter()
         for provider in effective_provider_order:
+            # Choose the correct branch before the workflow continues.
             if nlp_analysis:
                 break
 
@@ -3090,22 +3554,27 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 report_id,
                 f'before {provider_name} provider',
             )
+            # Choose the correct branch before the workflow continues.
             if provider_name == 'model_api':
+                # Trigger the side effect required for this stage.
                 logger.info("Trying model-specific cloud NLP API...")
                 nlp_analysis = self._call_model_api_nlp(prompt)
                 self.last_nlp_model = self.nlp_model
                 if not nlp_analysis:
+                    # Prepare last nlp error for the next step.
                     self.last_nlp_error = self.last_nlp_error or 'model_api did not return valid NLP JSON'
             elif provider_name == 'gemini':
                 if self.use_gemini:
                     est_cost, _, _ = self._estimate_gemini_call_cost_usd(prompt)
                     allowed, guardrail_reason = self._can_spend_gemini_budget(est_cost)
                     if not allowed:
+                        # Trigger the side effect required for this stage.
                         logger.warning(guardrail_reason)
                         self.last_nlp_error = guardrail_reason
                         self.last_nlp_fallback_reason = guardrail_reason
                         continue
 
+                    # Trigger the side effect required for this stage.
                     logger.info("Trying Gemini NLP API...")
                     gemini_report_image_path = image_path_str if self.gemini_report_include_image else None
                     nlp_analysis = self._call_gemini_api(
@@ -3115,7 +3584,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         report_data=report_data,
                     )
                     if self.gemini_client is not None:
+                        # Prepare last nlp model for the next step.
                         self.last_nlp_model = getattr(self.gemini_client, 'model_name', None)
+                    # Choose the correct branch before the workflow continues.
                     if not nlp_analysis:
                         self.last_nlp_error = self.last_nlp_error or 'Gemini NLP provider failed'
                     else:
@@ -3135,8 +3606,11 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         'rule-based fallback reports.'
                     )
                     self.last_nlp_error = detail
+                    # Trigger the side effect required for this stage.
                     logger.warning(f"Skipping Gemini provider: {detail}")
+            # Choose the correct branch before the workflow continues.
             elif provider_name == 'ollama':
+                # Trigger the side effect required for this stage.
                 logger.info(
                     "[NLP:ollama] report=%s trying Ollama NLP API model=%s api_url=%s fast_mode=%s",
                     report_id,
@@ -3150,9 +3624,12 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     fast_mode=force_local_nlp,
                     report_data=report_data,
                 )
+                # Prepare last nlp model for the next step.
                 self.last_nlp_model = self.last_ollama_model_used or self.model
                 if not nlp_analysis:
+                    # Prepare last nlp error for the next step.
                     self.last_nlp_error = self.last_nlp_error or 'Ollama NLP provider failed'
+            # Choose the correct branch before the workflow continues.
             elif provider_name == 'local':
                 logger.info("Trying local Llama fallback...")
                 nlp_analysis = self._call_ollama_api(
@@ -3161,10 +3638,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     fast_mode=force_local_nlp,
                     report_data=report_data,
                 )
+                # Prepare last nlp model for the next step.
                 self.last_nlp_model = self.last_ollama_model_used if self.local_llama is None else 'local-llama'
                 if not nlp_analysis:
+                    # Prepare last nlp error for the next step.
                     self.last_nlp_error = self.last_nlp_error or 'Local NLP provider failed'
 
+            # Trigger the side effect required for this stage.
             self._assert_generation_epoch_current(
                 generation_epoch,
                 report_id,
@@ -3172,17 +3652,21 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             )
 
             if nlp_analysis:
+                # Prepare last nlp provider for the next step.
                 self.last_nlp_provider = provider_name
                 self.last_nlp_fallback_reason = None
                 self.last_nlp_completed_at = datetime.utcnow().isoformat() + 'Z'
                 if self.sticky_nlp_provider_enabled:
+                    # Prepare sticky nlp provider for the next step.
                     self.sticky_nlp_provider = provider_name
                     self.sticky_nlp_provider_until_epoch = time.time() + max(30, self.sticky_nlp_provider_ttl_seconds)
                 logger.info(f"NLP analysis succeeded with provider: {provider_name}")
                 break
+        # Trigger the side effect required for this stage.
         _record_timing('nlp_provider_seconds', nlp_started)
 
         if not nlp_analysis:
+            # Prepare detail for the next step.
             detail = self.last_nlp_error or 'NLP analysis failed with no provider detail'
             cloud_degraded_fallback = bool(
                 self.cloud_report_fallback_enabled
@@ -3195,7 +3679,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 or (force_local_nlp and allow_forced_local_fallback)
                 or cloud_degraded_fallback
             )
+            # Choose the correct branch before the workflow continues.
             if self.strict_report_generation and not allow_fallback:
+                # Prepare last nlp fallback reason for the next step.
                 self.last_nlp_fallback_reason = detail
                 logger.error(
                     "[NLP_FALLBACK_BLOCKED] report=%s strict_report_generation=%s allow_fallback=%s "
@@ -3207,8 +3693,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     effective_provider_order,
                     detail,
                 )
+                # Trigger the side effect required for this stage.
                 _record_timing('report_total_seconds', generation_started)
                 raise RuntimeError(f"NLP analysis failed: {detail}")
+            # Trigger the side effect required for this stage.
             logger.warning(
                 "[NLP_FALLBACK_APPLIED] report=%s allow_nlp_fallback=%s cloud_degraded_fallback=%s "
                 "force_local_nlp=%s allow_forced_local_fallback=%s strict_report_generation=%s routing_profile=%s "
@@ -3223,6 +3711,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 effective_provider_order,
                 detail,
             )
+            # Prepare nlp analysis for the next step.
             nlp_analysis = self._generate_fallback_analysis(report_data)
             self.last_nlp_provider = 'cloud_fallback' if cloud_degraded_fallback else 'fallback'
             self.last_nlp_model = 'rule-based-cloud-fallback' if cloud_degraded_fallback else 'rule-based-fallback'
@@ -3233,8 +3722,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             detections = report_data.get('detections', [])
             has_violations = any(d.get('class_name', '').startswith('NO-') for d in detections)
 
+            # Prepare fallback for the next step.
             fallback = None
             if has_violations:
+                # Prepare persons payload for the next step.
                 persons_payload = nlp_analysis.get('persons')
                 persons_list = persons_payload if isinstance(persons_payload, list) else []
                 needs_persons = len(persons_list) == 0
@@ -3246,6 +3737,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     and len(person.get('risks') or []) > 0
                     for person in persons_list
                 )
+                # Prepare needs action cells for the next step.
                 needs_action_cells = not any(
                     isinstance(person, dict)
                     and (
@@ -3255,8 +3747,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     for person in persons_list
                 )
 
+                # Prepare missing model cells for the next step.
                 missing_model_cells = []
                 if needs_persons:
+                    # Trigger the side effect required for this stage.
                     missing_model_cells.append('persons')
                 if needs_regulation:
                     missing_model_cells.append('dosh_regulations_cited')
@@ -3265,12 +3759,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 if needs_action_cells:
                     missing_model_cells.append('persons[].corrective_actions')
 
+                # Prepare provider is model for the next step.
                 provider_is_model = str(self.last_nlp_provider or '').strip().lower() not in ('', 'fallback', 'mock')
                 if (
                     missing_model_cells
                     and provider_is_model
                     and self._is_low_severity_review_context(report_data, nlp_analysis)
                 ):
+                    # Trigger the side effect required for this stage.
                     logger.info(
                         "LOW context report %s missing model cells %s; applying proportional verification guard before strict gate",
                         report_id,
@@ -3280,6 +3776,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     persons_payload = nlp_analysis.get('persons')
                     persons_list = persons_payload if isinstance(persons_payload, list) else []
                     needs_persons = len(persons_list) == 0
+                    # Prepare needs regulation for the next step.
                     needs_regulation = not isinstance(nlp_analysis.get('dosh_regulations_cited'), list) or len(nlp_analysis.get('dosh_regulations_cited', [])) == 0
                     needs_environment = not str(nlp_analysis.get('environment_type', '')).strip()
                     needs_risk_cells = not any(
@@ -3296,8 +3793,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         )
                         for person in persons_list
                     )
+                    # Prepare missing model cells for the next step.
                     missing_model_cells = []
                     if needs_persons:
+                        # Trigger the side effect required for this stage.
                         missing_model_cells.append('persons')
                     if needs_regulation:
                         missing_model_cells.append('dosh_regulations_cited')
@@ -3306,6 +3805,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     if needs_action_cells:
                         missing_model_cells.append('persons[].corrective_actions')
 
+                # Prepare schema incomplete payload for the next step.
                 schema_incomplete_payload = bool(
                     isinstance(nlp_analysis, dict)
                     and (
@@ -3324,6 +3824,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         and str(self.routing_profile or '').strip().lower() != 'local'
                     )
                 )
+                # Prepare recoverable model cells for the next step.
                 recoverable_model_cells = {'persons[].corrective_actions'}
                 if (
                     missing_model_cells
@@ -3333,12 +3834,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     and not allow_cell_fallback
                     and set(missing_model_cells).issubset(recoverable_model_cells)
                 ):
+                    # Prepare allow cell fallback for the next step.
                     allow_cell_fallback = True
                     logger.warning(
                         "NLP output for report %s is missing only recoverable action cells; "
                         "injecting grounded corrective actions instead of failing local report generation",
                         report_id,
                     )
+                # Choose the correct branch before the workflow continues.
                 if (
                     missing_model_cells
                     and provider_is_model
@@ -3346,6 +3849,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     and self.strict_model_report_cells
                     and not allow_cell_fallback
                 ):
+                    # Prepare detail for the next step.
                     detail = (
                         'NLP output missing required model-authored report cells: '
                         + ', '.join(missing_model_cells)
@@ -3359,9 +3863,11 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         self.last_nlp_model,
                         ', '.join(missing_model_cells),
                     )
+                    # Trigger the side effect required for this stage.
                     _record_timing('report_total_seconds', generation_started)
                     raise RuntimeError(detail)
 
+                # Choose the correct branch before the workflow continues.
                 if needs_persons or needs_regulation or needs_environment or needs_risk_cells or needs_action_cells:
                     fallback = self._generate_fallback_analysis(report_data)
 
@@ -3370,35 +3876,45 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     nlp_analysis['dosh_regulations_cited'] = fallback.get('dosh_regulations_cited', [])
 
                 if needs_environment and fallback is not None:
+                    # Prepare caption for the next step.
                     caption = report_data.get('caption', '')
                     detected_env = self._extract_environment_from_caption(caption)
                     nlp_analysis['environment_type'] = detected_env if detected_env else fallback.get('environment_type', 'General Workspace')
 
+                # Choose the correct branch before the workflow continues.
                 if needs_persons and fallback is not None:
                     logger.warning("NLP output missing persons; injecting fallback person entries")
                     nlp_analysis['persons'] = fallback.get('persons', [])
                     persons_list = nlp_analysis.get('persons') if isinstance(nlp_analysis.get('persons'), list) else []
                     needs_risk_cells = False
+                    # Prepare needs action cells for the next step.
                     needs_action_cells = False
 
                 if (needs_risk_cells or needs_action_cells) and fallback is not None:
                     fallback_persons = fallback.get('persons', []) if isinstance(fallback.get('persons'), list) else []
                     if isinstance(nlp_analysis.get('persons'), list):
+                        # Process each item in this collection using the same rule set.
                         for idx, person in enumerate(nlp_analysis.get('persons') or []):
+                            # Choose the correct branch before the workflow continues.
                             if not isinstance(person, dict):
                                 continue
                             fallback_person = fallback_persons[idx] if idx < len(fallback_persons) and isinstance(fallback_persons[idx], dict) else {}
                             if needs_risk_cells and not person.get('risks'):
+                                # Prepare values needed by the next step.
                                 person['risks'] = fallback_person.get('risks', [])
                             if needs_action_cells and not (person.get('corrective_actions') or person.get('actions')):
                                 person['corrective_actions'] = fallback_person.get('corrective_actions') or fallback_person.get('actions') or []
                     else:
+                        # Prepare values needed by the next step.
                         nlp_analysis['persons'] = fallback_persons
 
+            # Choose the correct branch before the workflow continues.
             if not str(nlp_analysis.get('summary', '')).strip():
+                # Trigger the side effect required for this stage.
                 logger.info("NLP output missing summary; synthesizing grounded summary")
                 nlp_analysis['summary'] = self._build_grounded_summary_text(report_data, nlp_analysis)
 
+        # Prepare postprocess started for the next step.
         postprocess_started = time.perf_counter()
         if isinstance(nlp_analysis, dict):
             if self.last_nlp_provider and not nlp_analysis.get('provider'):
@@ -3420,9 +3936,11 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             detections_for_quality,
             nlp_analysis.get('environment_type'),
         )
+        # Prepare current environment for the next step.
         current_environment = str(nlp_analysis.get('environment_type') or '').strip()
         environment_changed = bool(stable_environment and stable_environment != current_environment)
         if environment_changed:
+            # Trigger the side effect required for this stage.
             logger.info(
                 "Stabilized report environment for %s: %r -> %r",
                 report_data.get('report_id'),
@@ -3431,6 +3949,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             )
             nlp_analysis['environment_type'] = stable_environment
 
+        # Prepare visual evidence for the next step.
         visual_evidence = str(nlp_analysis.get('visual_evidence', '') or '').strip()
         generic_markers = (
             'person is visible',
@@ -3444,9 +3963,12 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             or len(visual_evidence) < 120
             or any(marker in visual_evidence.lower() for marker in generic_markers)
         )
+        # Choose the correct branch before the workflow continues.
         if not should_rebuild_visual_evidence and caption_for_quality:
             # If model scene text is long but semantically unrelated to caption, rebuild from caption+detections.
+            # Choose the correct branch before the workflow continues.
             if not self._has_grounding_overlap(visual_evidence, caption_for_quality, min_overlap=3, min_ratio=0.08):
+                # Prepare should rebuild visual evidence for the next step.
                 should_rebuild_visual_evidence = True
 
         if should_rebuild_visual_evidence and caption_for_quality:
@@ -3455,15 +3977,19 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 nlp_analysis.get('environment_type', 'General Workspace'),
                 report_data.get('detections', []),
             )
+            # Choose the correct branch before the workflow continues.
             if rebuilt and len(rebuilt) > len(visual_evidence):
+                # Prepare values needed by the next step.
                 nlp_analysis['visual_evidence'] = rebuilt
 
+        # Prepare has ppe gap for the next step.
         has_ppe_gap = any(
             str((det or {}).get('class_name') or '').startswith('NO-')
             for det in detections_for_quality
             if isinstance(det, dict)
         )
         if has_ppe_gap and caption_for_quality:
+            # Prepare visual after rebuild for the next step.
             visual_after_rebuild = str(nlp_analysis.get('visual_evidence', '') or '').strip()
             lower_visual = visual_after_rebuild.lower()
             missing_floor_clause = (
@@ -3471,14 +3997,17 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 or 'ppe deficiencies' not in lower_visual
             )
             if missing_floor_clause:
+                # Prepare grounded visual for the next step.
                 grounded_visual = self._build_scene_description(
                     caption_for_quality,
                     nlp_analysis.get('environment_type', 'General Workspace'),
                     detections_for_quality,
                 )
                 if grounded_visual:
+                    # Prepare values needed by the next step.
                     nlp_analysis['visual_evidence'] = grounded_visual
 
+        # Prepare summary text for the next step.
         summary_text = str(nlp_analysis.get('summary', '') or '').strip()
         violation_summary_text = str(report_data.get('violation_summary', '') or '').strip()
         detection_terms = ' '.join(
@@ -3495,7 +4024,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             ] if part
         )
 
+        # Choose the correct branch before the workflow continues.
         if summary_text and not self._has_grounding_overlap(summary_text, grounding_reference, min_overlap=2, min_ratio=0.08):
+            # Trigger the side effect required for this stage.
             logger.warning(
                 "NLP summary appears ungrounded for report %s; replacing with grounded summary",
                 report_data.get('report_id')
@@ -3507,6 +4038,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             logger.info("Re-grounding summary with executive Malaysian safety context")
             nlp_analysis['summary'] = self._build_grounded_summary_text(report_data, nlp_analysis)
 
+        # Prepare nlp analysis for the next step.
         nlp_analysis = self._apply_low_context_proportionality_guard(nlp_analysis, report_data)
         _record_timing('nlp_postprocess_seconds', postprocess_started)
 
@@ -3534,21 +4066,25 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             )
             _record_timing('sidecar_write_seconds', sidecar_started)
         except Exception as sidecar_err:
+            # Trigger the side effect required for this stage.
             logger.warning(
                 "Failed to write traceability sidecar for %s: %s",
                 report_data.get('report_id'), sidecar_err,
             )
 
         # Step 4: Generate PDF (if enabled)
+        # Prepare pdf path for the next step.
         pdf_path = None
         if self.enable_pdf and self.format in ['pdf', 'both']:
             pdf_started = time.perf_counter()
+            # Prepare pdf path for the next step.
             pdf_path = self._generate_pdf_report(html_path, report_data.get('report_id'))
             _record_timing('pdf_render_seconds', pdf_started)
 
         _record_timing('report_total_seconds', generation_started)
         logger.info(f"[OK] Report generated: {report_data.get('report_id')}")
 
+        # Return the prepared result to the caller.
         return {
             'html': html_path,
             'pdf': pdf_path,
@@ -3558,12 +4094,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'generation_timings': generation_timings,
         }
 
+    # Section: run the generate fallback analysis workflow with clear inputs and outputs.
     def _generate_fallback_analysis(self, report_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Generate comprehensive fallback analysis from YOLO detections when NLP fails.
         Creates person entries with PPE status, hazards, and recommendations.
         Note: Without VLM/NLP, we cannot determine actual environment type.
         """
+        # Prepare detections for the next step.
         detections = report_data.get('detections', [])
 
         # Hazards and recommendations by violation type (aligned with JKR/OSHA standards)
@@ -3662,15 +4200,18 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         }
 
         # Extract violations from detections
+        # Prepare violations for the next step.
         violations = [d.get('class_name', '') for d in detections if d.get('class_name', '').startswith('NO-')]
         detected_person_count = sum(1 for d in detections if 'person' in d.get('class_name', '').lower())
         try:
+            # Prepare reported person count for the next step.
             reported_person_count = int(report_data.get('person_count') or 0)
         except (TypeError, ValueError):
             reported_person_count = 0
         person_count = max(1, reported_person_count, detected_person_count)
 
         # Detect environment from caption keywords AND YOLO detections
+        # Prepare caption for the next step.
         caption = report_data.get('vlm_caption', '') or report_data.get('caption', '') or ''
         caption_lower = caption.lower()
 
@@ -3691,6 +4232,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'road', 'roadside', 'traffic', 'highway', 'street', 'sidewalk',
             'pavement', 'bus', 'public transport', 'vehicle', 'pedestrian',
         ]
+        # Prepare work zone terms for the next step.
         work_zone_terms = [
             'road work', 'roadworks', 'work zone', 'construction', 'site',
             'cone', 'barrier', 'flagman', 'flagger', 'lane closure',
@@ -3700,38 +4242,47 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         has_roadside = has_traffic_interface and has_work_zone_marker
         has_lorry = any(_caption_has_positive_keyword(kw) for kw in ['lorry', 'truck', 'flatbed'])
         has_phone = any(_caption_has_positive_keyword(kw) for kw in ['phone', 'mobile', 'call', 'device', 'watsapp', 'texting'])
+        # Prepare has work height for the next step.
         has_work_height = any(_caption_has_positive_keyword(kw) for kw in ['scaffold', 'ladder', 'roof', 'height', 'elevated', 'platform'])
         caption_env_type = self._normalize_environment_type(self._extract_environment_from_caption(caption))
 
         if has_roadside and has_piles:
+            # Prepare env type for the next step.
             env_type = 'Roadside Bakau Piling Zone'
             env_detail = 'High-risk roadside timber piling zone with struck-by-vehicle and crush hazards.'
         elif has_roadside:
             env_type = 'Roadside Work Zone'
             env_detail = 'Roadside location with struck-by-vehicle risk from passing traffic. JKR ATJ 2C/85 traffic management required.'
+        # Choose the correct branch before the workflow continues.
         elif has_piles:
             env_type = 'Material Handling Area'
             env_detail = 'Bakau piling zone with crush hazards from unsecured timber loads. BOWEC Reg. 18 applies.'
         elif any(_caption_has_positive_keyword(kw) for kw in ['construction', 'building', 'scaffold', 'crane', 'excavat', 'foundation']):
+            # Prepare env type for the next step.
             env_type = 'Construction Site'
             env_detail = 'Active construction zone with potential heavy machinery and falling object hazards.'
         elif any(_caption_has_positive_keyword(kw) for kw in ['warehouse', 'factory', 'industrial', 'manufacturing']):
             env_type = 'Industrial Warehouse'
             env_detail = 'Industrial environment with forklift traffic and material handling hazards.'
+        # Choose the correct branch before the workflow continues.
         elif caption_env_type and caption_env_type != 'General Workspace':
             env_type = caption_env_type
             if env_type == 'Indoor / Office':
+                # Prepare env detail for the next step.
                 env_detail = 'Indoor or office-like setting; PPE severity depends on confirmed task and zone controls.'
+            # Choose the correct branch before the workflow continues.
             elif env_type == 'Residential':
                 env_detail = 'Residential or casual indoor setting; PPE findings require context review before enforcement.'
             elif env_type == 'Public Area':
                 env_detail = 'Public or open area; PPE severity depends on confirmed work-zone/task context.'
             else:
                 env_detail = 'Work environment identified from visual analysis.'
+        # Choose the correct branch before the workflow continues.
         elif has_traffic_interface:
             env_type = 'Public Area'
             env_detail = 'Public traffic or pedestrian interface; PPE severity depends on confirmed work-zone/task context.'
         else:
+            # Prepare env type for the next step.
             env_type = 'General Workspace'
             env_detail = 'Work environment identified from visual analysis.'
 
@@ -3740,6 +4291,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             env_type in {'Indoor / Office', 'Residential'}
             and not (has_roadside or has_piles or has_work_height or has_work_zone_marker or yolo_machinery)
         )
+        # Prepare public context review for the next step.
         public_context_review = bool(
             env_type == 'Public Area'
             and not has_work_zone_marker
@@ -3751,12 +4303,16 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             and input_report_severity == 'LOW'
             and not (has_roadside or has_piles or has_work_height or has_work_zone_marker or yolo_machinery)
         )
+        # Prepare context review scene for the next step.
         context_review_scene = low_hazard_scene or public_context_review or general_low_context_review
         review_risk_tier = 'LOW' if input_report_severity == 'LOW' else 'MEDIUM'
 
+        # Section: run the contextual violation data workflow with clear inputs and outputs.
         def _contextual_violation_data(key: str) -> Optional[Dict[str, Any]]:
+            # Prepare data for the next step.
             data = VIOLATION_DATA.get(key)
             if not data:
+                # Return the prepared result to the caller.
                 return None
             if not context_review_scene or key not in {'hardhat', 'safety vest', 'mask'}:
                 return data
@@ -3766,7 +4322,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'Review under OSHA 1994 Section 15 employer duty; escalate if the task, zone, '
                 'or permit conditions confirm mandatory PPE exposure.'
             )
+            # Choose the correct branch before the workflow continues.
             if key == 'hardhat':
+                # Return the prepared result to the caller.
                 return {
                     'hazard': (
                         f'Detector-confirmed missing hardhat in {scene_label}; no overhead work, '
@@ -3790,7 +4348,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     'penalty': review_penalty,
                     'risk_tier': review_risk_tier,
                 }
+            # Choose the correct branch before the workflow continues.
             if key == 'safety vest':
+                # Return the prepared result to the caller.
                 return {
                     'hazard': (
                         f'Detector-confirmed missing high-visibility vest in {scene_label}; active '
@@ -3814,6 +4374,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     'penalty': review_penalty,
                     'risk_tier': review_risk_tier,
                 }
+            # Return the prepared result to the caller.
             return {
                 'hazard': (
                     f'Detector-confirmed missing mask in {scene_label}; dust, fumes, chemicals, '
@@ -3839,12 +4400,16 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             }
 
         # Build PPE status and collect data
+        # Prepare ppe status for the next step.
         ppe_status = {k: 'Not Mentioned' for k in ['hardhat', 'safety_vest', 'gloves', 'footwear', 'mask']}
         hazards, risks, actions, regulations = [], [], [], []
 
+        # Section: run the add violation signal workflow with clear inputs and outputs.
         def _add_violation_signal(key: str, ppe_field: Optional[str] = None) -> None:
+            # Prepare data for the next step.
             data = _contextual_violation_data(key)
             if not data:
+                # Return the prepared result to the caller.
                 return
             if ppe_field:
                 ppe_status[ppe_field] = 'Missing'
@@ -3854,6 +4419,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'unsecured_piles': 'material_stability',
                 'harness': 'work_at_height',
             }.get(key, 'PPE')
+            # Trigger the side effect required for this stage.
             risks.append({
                 'risk_category': risk_category,
                 'risk': data['risk'],
@@ -3863,6 +4429,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'legal_regulatory_consequences': data.get('penalty', ''),
                 'mitigation_steps': [data['action']],
             })
+            # Trigger the side effect required for this stage.
             actions.append(data['action'])
             regulations.append({
                 'regulation': data['regulation'],
@@ -3872,7 +4439,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'standard_url': data.get('standard_url', '')
             })
 
+        # Section: run the add phone distraction risk workflow with clear inputs and outputs.
         def _add_phone_distraction_risk() -> None:
+            # Trigger the side effect required for this stage.
             risks.append({
                 'risk_category': 'unsafe_posture',
                 'risk': 'Distracted behavior: reduced situational awareness while operating in a monitored work area.',
@@ -3882,16 +4451,21 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
         for v in violations:
             v_lower = v.lower().replace('no-', '')
+            # Process each item in this collection using the same rule set.
             for key in VIOLATION_DATA:
+                # Choose the correct branch before the workflow continues.
                 if key.replace(' ', '') in v_lower.replace(' ', '') or key in v_lower:
+                    # Prepare ppe field for the next step.
                     ppe_field = key.replace(' ', '_')
                     _add_violation_signal(key, ppe_field=ppe_field)
                     break
 
         # Add non-PPE regulatory signals from scene context when evidenced.
+        # Choose the correct branch before the workflow continues.
         if has_roadside:
             _add_violation_signal('roadside_risk')
         if has_piles and has_slope:
+            # Trigger the side effect required for this stage.
             _add_violation_signal('unsecured_piles')
         if has_work_height and 'NO-Harness' in violations:
             _add_violation_signal('harness', ppe_field='harness')
@@ -3900,6 +4474,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         violation_types = [v.replace('NO-', '') for v in violations]
 
         # Create specific person descriptions based on context
+        # Prepare person descriptions for the next step.
         person_descriptions = []
         for i in range(person_count):
             person_id = f"Person {i + 1}"
@@ -3915,11 +4490,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     desc = f"Worker operating in {env_type} without MS 1731 high-visibility vest or MS 183 helmet."
                 if has_slope:
                     desc += " Positioned on unstable embankment."
+                # Choose the correct branch before the workflow continues.
                 if has_piles:
                     desc += " Risk: Loss of situational awareness near heavy timber loads."
                 if has_phone:
                     desc += " DISTRACTED by mobile phone/device."
+                    # Trigger the side effect required for this stage.
                     _add_phone_distraction_risk()
+            # Choose the correct branch before the workflow continues.
             elif 'Safety Vest' in violation_types:
                 if context_review_scene:
                     desc = (
@@ -3928,11 +4506,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     )
                 else:
                     desc = f"Worker without MS 1731 high-visibility vest. INVISIBLE to lorry/plant operators."
+                # Choose the correct branch before the workflow continues.
                 if has_roadside:
                     desc += " FATAL RISK from passing traffic."
                 if has_phone:
                     desc += " DISTRACTED by mobile phone/device."
+                    # Trigger the side effect required for this stage.
                     _add_phone_distraction_risk()
+            # Choose the correct branch before the workflow continues.
             elif 'Hardhat' in violation_types:
                 if context_review_scene:
                     desc = (
@@ -3941,10 +4522,12 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     )
                 else:
                     desc = f"Worker without MS 183 rigid helmet in falling object zone."
+                # Choose the correct branch before the workflow continues.
                 if has_piles:
                     desc += " Violation: BOWEC 1986 Reg. 24 (sun hats do not meet impact requirements)."
                 if has_phone:
                     desc += " DISTRACTED by mobile phone/device."
+                    # Trigger the side effect required for this stage.
                     _add_phone_distraction_risk()
             else:
                 desc = f"Worker observed with PPE status as detailed below."
@@ -3953,6 +4536,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     _add_phone_distraction_risk()
 
 
+            # Trigger the side effect required for this stage.
             person_descriptions.append({
                 'id': i + 1,
                 'description': desc,
@@ -3963,33 +4547,41 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'compliance_status': 'Non-Compliant' if violations else 'Unknown'
             })
 
+        # Prepare report severity for the next step.
         report_severity = str(report_data.get('severity') or '').strip().upper()
         ranked = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
         if report_severity not in ('HIGH', 'MEDIUM', 'LOW'):
+            # Prepare report severity for the next step.
             report_severity = max(
                 [str(info.get('likelihood') or '').strip().upper() for info in risks if isinstance(info, dict)]
                 or ['MEDIUM'],
                 key=lambda value: ranked.get(value, 2),
             )
             if report_severity not in ranked:
+                # Prepare report severity for the next step.
                 report_severity = 'MEDIUM'
+        # Choose the correct branch before the workflow continues.
         if context_review_scene and report_severity == 'HIGH':
             confirmed_high_risk = any(
                 str(info.get('likelihood') or '').strip().upper() == 'HIGH'
                 for info in risks
                 if isinstance(info, dict)
             )
+            # Choose the correct branch before the workflow continues.
             if not confirmed_high_risk:
                 report_severity = 'MEDIUM'
         report_data['severity'] = report_severity
 
         # Situation-Hazard-Standard summary model
+        # Choose the correct branch before the workflow continues.
         if violation_types:
             ppe_list = ' or '.join([f"MS {std}" for std in ['1731 high-visibility vest' if 'Safety Vest' in violation_types else '', '183 helmet' if 'Hardhat' in violation_types else ''] if std])
             if not ppe_list:
+                # Prepare ppe list for the next step.
                 ppe_list = ' and '.join(violation_types)
 
             # Build Situation-Hazard-Standard summary
+            # Prepare situation for the next step.
             situation = f"{report_severity.title()}-severity violation at {env_type.lower()}."
             hazard = f"{person_count} personnel operating"
             if has_slope:
@@ -3999,7 +4591,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             elif has_traffic_interface:
                 hazard += " near vehicle or pedestrian traffic"
             hazard += f" without {ppe_list}."
+            # Choose the correct branch before the workflow continues.
             if env_type == 'Public Area' and not has_work_zone_marker:
+                # Prepare standard for the next step.
                 standard = (
                     "Supervisor review recommended to confirm work-zone status, task context, "
                     "and whether PPE requirements apply before enforcement action."
@@ -4010,8 +4604,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     "mandatory PPE rules apply before stop-work escalation."
                 )
             else:
+                # Prepare standard for the next step.
                 standard = "Stop Work order recommended per BOWEC 1986."
 
+            # Choose the correct branch before the workflow continues.
             if context_review_scene:
                 risk_desc = (
                     "This is a compliance concern; immediate hazard severity depends on confirmed "
@@ -4020,7 +4616,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             elif 'Safety Vest' in violation_types and has_roadside:
                 risk_desc = "This creates an immediate risk of being struck by the lorry or passing traffic."
             elif 'Safety Vest' in violation_types and has_traffic_interface:
+                # Prepare risk desc for the next step.
                 risk_desc = "This creates a visibility risk around vehicle or pedestrian movement if the scene is an active work area."
+            # Choose the correct branch before the workflow continues.
             elif 'Hardhat' in violation_types and has_piles:
                 risk_desc = "This creates an immediate risk of head injury from falling timber/debris."
             else:
@@ -4030,6 +4628,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         else:
             summary = f"Safety observation recorded at {env_type}."
 
+        # Return the prepared result to the caller.
         return {
             'summary': summary,
             'environment_type': env_type,
@@ -4045,9 +4644,12 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
 
 
+    # Section: run the inject interactive tooltips workflow with clear inputs and outputs.
     def _inject_interactive_tooltips(self, text):
         """Wraps standard names in interactive tooltip spans."""
+        # Choose the correct branch before the workflow continues.
         if not text:
+            # Return the prepared result to the caller.
             return text
 
         import re
@@ -4059,12 +4661,15 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             (r'(MS\s?2323(:2010)?|Respirator|Mask|N95|Face Mask)', 'ms2323_mask.png')
         ]
 
+        # Process each item in this collection using the same rule set.
         for pattern, img_file in replacements:
+            # Prepare bounded pattern for the next step.
             bounded_pattern = rf'(?<![A-Za-z0-9-]){pattern}(?![A-Za-z0-9-])'
             text = re.sub(bounded_pattern, f'<span class="ppe-tooltip" data-image="{img_file}">\\g<0></span>', text, flags=re.IGNORECASE)
 
         return text
 
+    # Section: run the generate html report workflow with clear inputs and outputs.
     def _generate_html_report(
         self,
         report_data: Dict[str, Any],
@@ -4076,17 +4681,21 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         Returns:
             Path to HTML report
         """
+        # Prepare report id for the next step.
         report_id = report_data.get('report_id')
         timestamp_raw = report_data.get('timestamp', datetime.now())
         timestamp = timestamp_raw
         if isinstance(timestamp_raw, str):
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare timestamp for the next step.
                 timestamp = datetime.fromisoformat(timestamp_raw.replace('Z', '+00:00'))
             except Exception:
                 timestamp = datetime.now()
         elif not isinstance(timestamp_raw, datetime):
             timestamp = datetime.now()
 
+        # Prepare timestamp display for the next step.
         timestamp_display = timestamp.strftime('%Y-%m-%d %H:%M:%S')
 
         # Clean violation summary (Deduplicate)
@@ -4097,12 +4706,16 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             counts = Counter(parts)
             summary_parts = []
             for vio, count in counts.items():
+                # Choose the correct branch before the workflow continues.
                 if count > 1:
+                    # Trigger the side effect required for this stage.
                     summary_parts.append(f"{vio} (x{count})")
                 else:
                     summary_parts.append(vio)
+            # Prepare values needed by the next step.
             report_data['violation_summary'] = ", ".join(summary_parts)
 
+        # Prepare nlp analysis for the next step.
         nlp_analysis = self._reconcile_person_cards_with_detection_facts(nlp_analysis, report_data)
 
         # Get image paths (relative to violations dir for web viewing)
@@ -4112,7 +4725,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             report_data.get('severity') or nlp_analysis.get('severity_level') or 'MEDIUM'
         ).strip().upper()
         if report_severity not in ('HIGH', 'MEDIUM', 'LOW'):
+            # Prepare report severity for the next step.
             report_severity = 'MEDIUM'
+        # Prepare severity badge class for the next step.
         severity_badge_class = {
             'HIGH': 'badge-danger',
             'MEDIUM': 'badge-warning',
@@ -5338,16 +5953,19 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 </html>"""
 
         # Save to both reports directory and violations directory
+        # Trigger the side effect required for this stage.
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         html_path = self.reports_dir / f'violation_{report_id}.html'
 
         with open(html_path, 'w', encoding='utf-8') as f:
+            # Trigger the side effect required for this stage.
             f.write(html_content)
 
         # Also save to violations directory for web UI
         violations_report_path = self.violations_dir / report_id / 'report.html'
         violations_report_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Open the managed resource only for the block that needs it.
         with open(violations_report_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
 
@@ -5356,6 +5974,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
         return html_path
 
+    # Section: run the write traceability sidecar workflow with clear inputs and outputs.
     def _write_traceability_sidecar(
         self,
         report_data: Dict[str, Any],
@@ -5368,8 +5987,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         report from the local filesystem (offline / pre-sync) so the
         TRACEABILITY widget shows real values instead of nulls.
         """
+        # Prepare report id for the next step.
         report_id = report_data.get('report_id')
         if not report_id:
+            # Return the prepared result to the caller.
             return
 
         detections = report_data.get('detections') or []
@@ -5379,6 +6000,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         def _norm_label(item: Any) -> str:
             if not isinstance(item, dict):
                 return ''
+            # Prepare label for the next step.
             label = item.get('class_name') or item.get('class') or ''
             return str(label).strip().lower().replace('_', '-').replace(' ', '-')
 
@@ -5403,28 +6025,35 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'detections': detections,
         }
 
+        # Prepare sidecar path for the next step.
         sidecar_path = self.violations_dir / report_id / 'metadata.json'
         try:
+            # Trigger the side effect required for this stage.
             sidecar_path.parent.mkdir(parents=True, exist_ok=True)
             with open(sidecar_path, 'w', encoding='utf-8') as f:
+                # Trigger the side effect required for this stage.
                 json.dump(sidecar, f, ensure_ascii=False, indent=2, default=str)
             logger.info(f"Traceability sidecar written: {sidecar_path}")
         except Exception as e:
             logger.warning(f"Could not write traceability sidecar to {sidecar_path}: {e}")
 
+    # Section: run the format summary html workflow with clear inputs and outputs.
     def _format_summary_html(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any] = None) -> str:
         """Format summary as a structured table for 'AT A GLANCE' view."""
         import re
 
+        # Prepare report data for the next step.
         report_data = report_data or {}
         nlp_analysis = self._reconcile_person_cards_with_detection_facts(nlp_analysis, report_data)
         summary_text = str(nlp_analysis.get('summary') or '').strip()
         persons = nlp_analysis.get('persons', [])
         if not isinstance(persons, list):
+            # Prepare persons for the next step.
             persons = []
 
         violation_summary = str(report_data.get('violation_summary') or '').strip()
         caption_text = str(report_data.get('caption') or '').strip()
+        # Prepare visual evidence text for the next step.
         visual_evidence_text = str(nlp_analysis.get('visual_evidence') or '').strip()
 
         placeholder_markers = (
@@ -5436,19 +6065,25 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'processing',
         )
 
+        # Section: run the is meaningful summary workflow with clear inputs and outputs.
         def _is_meaningful_summary(text: str) -> bool:
+            # Prepare clean for the next step.
             clean = str(text or '').strip()
             if len(clean) < 24:
+                # Return the prepared result to the caller.
                 return False
             lower = clean.lower()
             return not any(marker in lower for marker in placeholder_markers)
 
+        # Section: run the clean sentence workflow with clear inputs and outputs.
         def _clean_sentence(text: str, max_len: int = 190) -> str:
             clean = re.sub(r'\s+', ' ', str(text or '')).strip()
             if not clean:
                 return ''
+            # Prepare first for the next step.
             first = re.split(r'(?<=[.!?])\s+', clean)[0].strip()
             if not first:
+                # Prepare first for the next step.
                 first = clean
             if len(first) <= max_len:
                 return first
@@ -5460,6 +6095,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         detected_missing_labels: List[str] = []
 
         for idx, person in enumerate(persons):
+            # Choose the correct branch before the workflow continues.
             if not isinstance(person, dict):
                 continue
 
@@ -5469,14 +6105,19 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             ppe = person.get('ppe', {})
             missing_items: List[str] = []
             if isinstance(ppe, dict):
+                # Process each item in this collection using the same rule set.
                 for item_name, status in ppe.items():
+                    # Prepare status text for the next step.
                     status_text = str(status or '').strip().lower()
                     if 'missing' in status_text or status_text.startswith('no '):
+                        # Prepare pretty item for the next step.
                         pretty_item = str(item_name).replace('_', ' ').strip().title()
                         missing_items.append(pretty_item)
                         if pretty_item and pretty_item not in detected_missing_labels:
+                            # Trigger the side effect required for this stage.
                             detected_missing_labels.append(pretty_item)
 
+            # Prepare hazards for the next step.
             hazards = person.get('hazards_faced', [])
             risks = person.get('risks', [])
             has_risk_signal = bool(missing_items) or bool(hazards) or bool(risks)
@@ -5484,9 +6125,11 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 model_non_compliant_count += 1
 
             if missing_items:
+                # Prepare detail for the next step.
                 detail = f"missing {', '.join(missing_items[:3])}"
                 if len(missing_items) > 3:
                     detail += f" +{len(missing_items) - 3} more"
+            # Choose the correct branch before the workflow continues.
             elif person_desc:
                 detail = person_desc.split('. ')[0]
             else:
@@ -5494,10 +6137,12 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
             model_person_rows.append(f" {person_id}: {detail}")
 
+        # Prepare model person count for the next step.
         model_person_count = len(model_person_rows)
 
         detections = report_data.get('detections')
         if not isinstance(detections, list):
+            # Prepare detections for the next step.
             detections = []
         detected_people = []
         detected_violations = []
@@ -5507,10 +6152,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             label = str(det.get('class_name') or det.get('class') or '').strip().lower()
             label = label.replace('_', '-').replace(' ', '-')
             if label in {'person', 'worker', 'man', 'woman', 'people'}:
+                # Trigger the side effect required for this stage.
                 detected_people.append(det)
+            # Choose the correct branch before the workflow continues.
             if label.startswith('no-'):
                 detected_violations.append(det)
 
+        # Prepare detector missing keys for the next step.
         detector_missing_keys = self._extract_detector_missing_ppe_keys(report_data)
         detected_person_count = len(detected_people) if detections else int(report_data.get('person_count', 0) or 0)
         detected_violation_items = (
@@ -5519,7 +6167,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             else (len(detected_violations) if detections else int(report_data.get('violation_count', 0) or 0))
         )
 
+        # Section: run the infer people count from text workflow with clear inputs and outputs.
         def _infer_people_count_from_text(*texts: str) -> int:
+            # Return the prepared result to the caller.
             return infer_people_count_from_text(*texts)
 
         inferred_person_count = 0
@@ -5531,9 +6181,12 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 violation_summary,
             )
 
+        # Choose the correct branch before the workflow continues.
         if model_person_count > 0:
+            # Prepare preview rows for the next step.
             preview_rows = model_person_rows[:4]
             if model_person_count > 4:
+                # Trigger the side effect required for this stage.
                 preview_rows.append(f" +{model_person_count - 4} more model-identified person entries")
 
             if detected_missing_labels:
@@ -5543,7 +6196,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     f"{', '.join(detected_missing_labels[:5])}."
                 )
             else:
+                # Prepare who header for the next step.
                 who_header = f"Report lists {model_person_count} person(s); no detector-confirmed PPE condition was available."
+            # Prepare count display for the next step.
             count_display = f"{who_header}<br>{'<br>'.join(preview_rows)}"
         else:
             people_count_for_display = detected_person_count if detected_person_count > 0 else inferred_person_count
@@ -5556,12 +6211,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 if detected_person_count > 0
                 else f"{people_count_for_display} Estimated From Scene Text"
             )
+            # Prepare count display for the next step.
             count_display = (
                 f"{people_prefix} "
                 f"({detected_violation_items} Violation Items / {compliant_count} Compliant)"
             )
 
         # Derive additional missing PPE clues from detector summary/caption text.
+        # Prepare source text for the next step.
         source_text = f"{violation_summary} {caption_text}".lower()
         missing_keyword_map = {
             'hard hat': 'Hard Hat',
@@ -5575,8 +6232,11 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'glove': 'Gloves',
             'boot': 'Safety Boots',
         }
+        # Process each item in this collection using the same rule set.
         for keyword, label in missing_keyword_map.items():
+            # Choose the correct branch before the workflow continues.
             if keyword in source_text and label not in detected_missing_labels:
+                # Trigger the side effect required for this stage.
                 detected_missing_labels.append(label)
 
         # WHAT: use model summary when meaningful, otherwise synthesize from evidence.
@@ -5588,6 +6248,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'ppe visibility is not applicable',
             )
         )
+        # Prepare no concrete ppe evidence for the next step.
         no_concrete_ppe_evidence = (
             len(detected_missing_labels) == 0
             and model_non_compliant_count == 0
@@ -5595,9 +6256,11 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         )
 
         if _is_meaningful_summary(summary_text):
+            # Prepare what text for the next step.
             what_text = summary_text
         else:
             if no_concrete_ppe_evidence and caption_safety_neutral:
+                # Prepare what text for the next step.
                 what_text = (
                     'No explicit PPE non-compliance could be confirmed from current visual evidence. '
                     'This event is flagged for manual review before enforcement action.'
@@ -5608,7 +6271,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     + ", ".join(detected_missing_labels[:5])
                     + "."
                 )
+            # Choose the correct branch before the workflow continues.
             elif violation_summary:
+                # Prepare what text for the next step.
                 what_text = _clean_sentence(violation_summary)
             else:
                 what_text = "PPE non-compliance detected from analyzed scene evidence."
@@ -5618,6 +6283,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 what_text += f" Scene context: {context_sentence}"
 
         # Extract environment/risk keywords
+        # Prepare env type for the next step.
         env_type = nlp_analysis.get('environment_type', 'Unknown')
         hazards = self._ensure_list_of_strings(nlp_analysis.get('hazards_detected', []))
 
@@ -5625,16 +6291,22 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         regs = nlp_analysis.get('dosh_regulations_cited', [])
         reg_names = []
         if isinstance(regs, list):
+            # Process each item in this collection using the same rule set.
             for entry in regs:
+                # Choose the correct branch before the workflow continues.
                 if isinstance(entry, dict):
+                    # Prepare reg name for the next step.
                     reg_name = str(entry.get('regulation') or entry.get('technical_standard') or '').strip()
                     if reg_name:
+                        # Trigger the side effect required for this stage.
                         reg_names.append(reg_name)
                 elif isinstance(entry, str):
                     clean_entry = entry.strip()
                     if clean_entry:
                         reg_names.append(clean_entry)
+        # Choose the correct branch before the workflow continues.
         elif isinstance(regs, str):
+            # Prepare reg names for the next step.
             reg_names = [item.strip() for item in re.split(r'[\n;]+', regs) if item.strip()]
 
         # Preserve order while removing duplicates.
@@ -5644,6 +6316,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
         if not hazard_items:
             inferred_hazards: List[str] = []
+            # Prepare risk map for the next step.
             risk_map = {
                 'Hard Hat': 'Head injury risk from falling or struck-by objects',
                 'Helmet': 'Head injury risk from falling or struck-by objects',
@@ -5653,18 +6326,23 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'Gloves': 'Hand injury risk from abrasion, sharp edges, or tool contact',
                 'Safety Boots': 'Foot injury risk from impact, puncture, or slip hazards',
             }
+            # Process each item in this collection using the same rule set.
             for item in detected_missing_labels:
+                # Prepare mapped for the next step.
                 mapped = risk_map.get(item)
                 if mapped and mapped not in inferred_hazards:
+                    # Trigger the side effect required for this stage.
                     inferred_hazards.append(mapped)
             if inferred_hazards:
                 hazard_items = inferred_hazards
             elif detected_violation_items > 0:
                 hazard_items = ['Increased injury/exposure risk due to observed PPE non-compliance']
 
+        # Prepare values needed by the next step.
         what_text, summary_legal_items = self._partition_summary_legal_order_segments(what_text)
 
         if no_concrete_ppe_evidence and caption_safety_neutral:
+            # Prepare hazard text for the next step.
             hazard_text = 'Manual verification required; no concrete PPE hazard could be confirmed from current evidence.'
         else:
             hazard_text = self._format_summary_bullet_list(hazard_items) if hazard_items else 'Unsafe conditions identified; detailed hazard profile unavailable'
@@ -5680,22 +6358,29 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'Gloves': 'OSHA 1994 Section 15 - Duty to provide suitable protective equipment',
                 'Safety Boots': 'OSHA 1994 Section 15 - Foot protection obligations',
             }
+            # Process each item in this collection using the same rule set.
             for item in detected_missing_labels:
+                # Prepare mapped for the next step.
                 mapped = reg_map.get(item)
                 if mapped and mapped not in inferred_regs:
+                    # Trigger the side effect required for this stage.
                     inferred_regs.append(mapped)
             reg_names = inferred_regs or ['BOWEC 1986 - General PPE compliance requirements for construction operations']
 
+        # Choose the correct branch before the workflow continues.
         if no_concrete_ppe_evidence and caption_safety_neutral:
             reg_text = 'No specific citation asserted automatically pending manual verification of PPE non-compliance.'
         else:
+            # Choose the correct branch before the workflow continues.
             if summary_legal_items:
+                # Prepare reg names for the next step.
                 reg_names = [*reg_names, *summary_legal_items]
             reg_text = self._format_summary_bullet_list(reg_names)
 
         parsed_summary = self._format_summary_what_html(what_text)
 
 
+        # Return the prepared result to the caller.
         return f"""
         <div class="card summary-card">
             <div class="card-header summary-card-header">
@@ -5725,19 +6410,24 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         </div>
         """
 
+    # Section: run the clean summary copy text workflow with clear inputs and outputs.
     def _clean_summary_copy_text(self, text: Any) -> str:
         """Normalize markdown-ish model copy before rendering summary cells."""
+        # Prepare clean for the next step.
         clean = re.sub(r'\s+', ' ', str(text or '')).strip()
         clean = re.sub(r'\*\*(.*?)\*\*', r'\1', clean)
         clean = clean.replace('**', '')
         return clean.strip()
 
+    # Section: run the partition summary legal order segments workflow with clear inputs and outputs.
     def _partition_summary_legal_order_segments(self, text: Any) -> Tuple[str, List[str]]:
         """Move model-written legal order text out of WHAT and into LAW."""
         clean = self._clean_summary_copy_text(text)
         if not clean:
+            # Return the prepared result to the caller.
             return '', []
 
+        # Prepare segments for the next step.
         segments = self._split_summary_labeled_segments(clean)
         if not segments:
             return clean, []
@@ -5755,18 +6445,23 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         }
         retained: List[Tuple[str, str]] = []
         legal_items: List[str] = []
+        # Process each item in this collection using the same rule set.
         for label, body in segments:
+            # Prepare label key for the next step.
             label_key = str(label or '').strip().lower()
             body_text = self._clean_summary_copy_text(body)
             if not body_text:
                 continue
             if label_key in legal_labels:
+                # Prepare display label for the next step.
                 display_label = 'Legal order' if label_key == 'legal order' else label
                 legal_items.append(f"{display_label}: {body_text}")
             else:
                 retained.append((label, body_text))
 
+        # Choose the correct branch before the workflow continues.
         if not legal_items:
+            # Return the prepared result to the caller.
             return clean, []
 
         if retained:
@@ -5776,10 +6471,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
         return retained_text, legal_items
 
+    # Section: run the split summary labeled segments workflow with clear inputs and outputs.
     def _split_summary_labeled_segments(self, text: str) -> List[Tuple[str, str]]:
         """Split legacy model summaries like 'CRITICAL RISK: ... Core Violation: ...'."""
+        # Prepare clean for the next step.
         clean = self._clean_summary_copy_text(text)
         if not clean:
+            # Return the prepared result to the caller.
             return []
 
         label_map = {
@@ -5803,27 +6501,34 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'evidence': 'Evidence',
             'summary': 'Summary',
         }
+        # Prepare labels for the next step.
         labels = sorted(label_map.keys(), key=len, reverse=True)
         pattern = re.compile(
             r'(?i)(?:^|\s)(?:\*\*)?\b(' + '|'.join(re.escape(label) for label in labels) + r')\b(?:\*\*)?\s*[:：]\s*'
         )
         matches = list(pattern.finditer(clean))
         if len(matches) < 2:
+            # Return the prepared result to the caller.
             return []
 
         segments: List[Tuple[str, str]] = []
+        # Process each item in this collection using the same rule set.
         for index, match in enumerate(matches):
             label_key = match.group(1).strip().lower()
             body_start = match.end()
             body_end = matches[index + 1].start() if index + 1 < len(matches) else len(clean)
             body = clean[body_start:body_end].strip(' -;')
             if body:
+                # Trigger the side effect required for this stage.
                 segments.append((label_map.get(label_key, label_key.title()), body))
         return segments
 
+    # Section: run the format summary bullet list workflow with clear inputs and outputs.
     def _format_summary_bullet_list(self, items: Any) -> str:
         """Render summary cell line items with clear bullets and row separators."""
+        # Choose the correct branch before the workflow continues.
         if not isinstance(items, list):
+            # Prepare items for the next step.
             items = [items]
         lines = [
             self._clean_summary_copy_text(item)
@@ -5833,22 +6538,28 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         if not lines:
             return ''
 
+        # Prepare rendered items for the next step.
         rendered_items = []
         for item in lines:
+            # Prepare safe item for the next step.
             safe_item = self._inject_interactive_tooltips(self._to_safe_html_text(item))
             rendered_items.append(f"<li>{safe_item}</li>")
         return f"<ul class=\"summary-bullet-list\">{''.join(rendered_items)}</ul>"
 
+    # Section: run the format summary what html workflow with clear inputs and outputs.
     def _format_summary_what_html(self, text: Any) -> str:
         """Render WHAT copy as readable line items without over-bold model prose."""
         clean = self._clean_summary_copy_text(text)
+        # Choose the correct branch before the workflow continues.
         if not clean:
             return '<p class="summary-copy-paragraph">Summary unavailable.</p>'
 
         labeled_segments = self._split_summary_labeled_segments(clean)
         if labeled_segments:
+            # Prepare items for the next step.
             items = []
             for label, body in labeled_segments:
+                # Prepare safe label for the next step.
                 safe_label = self._to_safe_html_text(label)
                 safe_body = self._inject_interactive_tooltips(self._to_safe_html_text(body))
                 items.append(
@@ -5856,6 +6567,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 )
             return f"<ul class=\"summary-bullet-list\">{''.join(items)}</ul>"
 
+        # Prepare raw lines for the next step.
         raw_lines = [line.strip() for line in re.split(r'[\r\n]+', str(text or '')) if line.strip()]
         bullet_lines = [
             self._clean_summary_copy_text(re.sub(r'^\s*[-*•]\s*', '', line))
@@ -5864,51 +6576,64 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         ]
         has_explicit_bullets = any(re.match(r'^\s*[-*•]\s+', line) for line in raw_lines)
         if len(bullet_lines) > 1 or has_explicit_bullets:
+            # Return the prepared result to the caller.
             return self._format_summary_bullet_list(bullet_lines)
 
+        # Prepare safe clean for the next step.
         safe_clean = self._inject_interactive_tooltips(self._to_safe_html_text(clean))
         return f"<p class=\"summary-copy-paragraph\">{safe_clean}</p>"
 
+    # Section: run the get malaysian severity label workflow with clear inputs and outputs.
     def _get_malaysian_severity_label(self, likelihood: str) -> str:
         """Convert likelihood to Malaysian safety severity terminology."""
         lik = likelihood.lower()
         if 'not specified' in lik or 'review' in lik:
+            # Return the prepared result to the caller.
             return "REVIEW REQUIRED (Safety Officer Confirmation Required)"
         if 'very high' in lik or 'fatal' in lik or 'catastrophic' in lik:
             return "CRITICAL (Immediate Danger to Life & Health)"
+        # Choose the correct branch before the workflow continues.
         if 'high' in lik:
             return "MAJOR (High Potential for LTA)"
         if 'medium' in lik:
             return "MODERATE (Standard Risk)"
         return "MINOR (Administrative Follow-up)"
 
+    # Section: run the ensure list of strings workflow with clear inputs and outputs.
     def _ensure_list_of_strings(self, data: Any) -> List[str]:
         """Helper to ensure data is a list of strings, handling parsing of limiters."""
         if not data:
+            # Return the prepared result to the caller.
             return []
 
+        # Choose the correct branch before the workflow continues.
         if isinstance(data, list):
             return data
 
         if isinstance(data, str):
             # Try splitting by common delimiters
             if ';' in data:
+                # Return the prepared result to the caller.
                 return [item.strip() for item in data.split(';') if item.strip()]
             if '\n' in data:
                 return [item.strip() for item in data.split('\n') if item.strip()]
             return [data]
 
+        # Return the prepared result to the caller.
         return [str(data)]
 
+    # Section: run the has high hazard scene evidence workflow with clear inputs and outputs.
     def _has_high_hazard_scene_evidence(self, report_data: Optional[Dict[str, Any]]) -> bool:
         """Return true only when caption/detector evidence supports high-hazard escalation."""
         if not isinstance(report_data, dict):
+            # Return the prepared result to the caller.
             return False
 
         caption_text = " ".join(
             str(report_data.get(field) or '')
             for field in ('caption', 'vlm_caption', 'visual_evidence')
         ).lower()
+        # Prepare high terms for the next step.
         high_terms = (
             'construction', 'road work', 'roadworks', 'work zone', 'traffic',
             'roadside', 'highway', 'lane closure', 'safety cone', 'cone',
@@ -5921,7 +6646,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'cutting', 'dust', 'fume', 'fumes', 'chemical', 'spray', 'smoke',
             'silica', 'asbestos',
         )
+        # Choose the correct branch before the workflow continues.
         if any(self._has_positive_environment_keyword(caption_text, term) for term in high_terms):
+            # Return the prepared result to the caller.
             return True
 
         labels = []
@@ -5931,11 +6658,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             label = str(det.get('class_name') or det.get('class') or '').strip().lower()
             if not label:
                 continue
+            # Prepare canonical for the next step.
             canonical = label.replace('_', ' ').replace('-', ' ')
             if canonical.startswith('no ') or canonical in {'person', 'worker', 'man', 'woman', 'people'}:
                 continue
             labels.append(canonical)
 
+        # Prepare high label terms for the next step.
         high_label_terms = (
             'vehicle', 'truck', 'lorry', 'bus', 'forklift', 'excavator',
             'crane', 'machinery', 'cone', 'barrier', 'scaffold', 'ladder',
@@ -5943,13 +6672,16 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         )
         return any(any(term in label for term in high_label_terms) for label in labels)
 
+    # Section: run the is low severity review context workflow with clear inputs and outputs.
     def _is_low_severity_review_context(
         self,
         report_data: Optional[Dict[str, Any]],
         nlp_analysis: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Identify LOW PPE-only findings where report tone must stay advisory."""
+        # Choose the correct branch before the workflow continues.
         if not isinstance(report_data, dict):
+            # Return the prepared result to the caller.
             return False
 
         analysis = nlp_analysis if isinstance(nlp_analysis, dict) else {}
@@ -5959,7 +6691,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             or analysis.get('severity')
             or ''
         ).strip().upper()
+        # Choose the correct branch before the workflow continues.
         if severity != 'LOW':
+            # Return the prepared result to the caller.
             return False
 
         env = self._normalize_environment_type(
@@ -5968,11 +6702,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             or 'General Workspace'
         )
         low_envs = {'General Workspace', 'Indoor / Office', 'Residential', 'Public Area'}
+        # Choose the correct branch before the workflow continues.
         if env not in low_envs:
+            # Return the prepared result to the caller.
             return False
 
         return not self._has_high_hazard_scene_evidence(report_data)
 
+    # Section: run the low context review hazards workflow with clear inputs and outputs.
     def _low_context_review_hazards(self, missing_keys: List[str]) -> List[str]:
         hazards_by_key = {
             'hardhat': 'Head-protection requirement requires supervisor verification; no overhead, falling-object, construction, or impact exposure is confirmed in the frame.',
@@ -5981,11 +6718,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'gloves': 'Hand-protection requirement requires task verification; no sharp, hot, abrasive, or chemical handling activity is confirmed.',
             'footwear': 'Foot-protection requirement requires task verification; no crushing, puncture, uneven-terrain, or slip hazard is confirmed.',
         }
+        # Prepare hazards for the next step.
         hazards = [hazards_by_key[key] for key in missing_keys if key in hazards_by_key]
         return hazards or [
             'PPE requirement requires supervisor verification; no high-hazard work activity is confirmed in the frame.'
         ]
 
+    # Section: run the low context review actions workflow with clear inputs and outputs.
     def _low_context_review_actions(self, missing_keys: List[str], environment_type: str) -> List[str]:
         ppe_phrase = self._format_missing_ppe_phrase([_ppe_label_for_key(key) for key in missing_keys])
         env = (environment_type or 'general workspace').strip().lower()
@@ -5995,7 +6734,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             "Record the detector evidence, the supervisor review outcome, and any coaching or PPE issue action in the local report file for audit traceability.",
         ]
 
+    # Section: run the low context review regulations workflow with clear inputs and outputs.
     def _low_context_review_regulations(self, missing_keys: List[str], environment_type: str) -> List[Dict[str, str]]:
+        # Prepare ppe phrase for the next step.
         ppe_phrase = self._format_missing_ppe_phrase([_ppe_label_for_key(key) for key in missing_keys])
         env = (environment_type or 'general workspace').strip().lower()
         return [{
@@ -6014,7 +6755,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             ),
         }]
 
+    # Section: run the low context review risks workflow with clear inputs and outputs.
     def _low_context_review_risks(self, missing_keys: List[str], environment_type: str) -> List[Dict[str, Any]]:
+        # Prepare env for the next step.
         env = (environment_type or 'general workspace').strip().lower()
         risk_templates = {
             'hardhat': (
@@ -6044,7 +6787,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             ),
         }
         risks: List[Dict[str, Any]] = []
+        # Process each item in this collection using the same rule set.
         for key in missing_keys or ['ppe']:
+            # Prepare values needed by the next step.
             risk_text, evidence = risk_templates.get(key, (
                 f"The PPE detector flag is a low-likelihood compliance concern in this {env} frame because no matching high-hazard activity is visible. "
                 "The supervisor should verify the assigned task and local zone requirements before escalating the finding.",
@@ -6066,8 +6811,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     "Attach the detector evidence and supervisor decision to the report so the audit trail explains why the severity remains LOW.",
                 ],
             })
+        # Return the prepared result to the caller.
         return risks
 
+    # Section: run the apply low context proportionality guard workflow with clear inputs and outputs.
     def _apply_low_context_proportionality_guard(
         self,
         nlp_analysis: Dict[str, Any],
@@ -6075,7 +6822,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
     ) -> Dict[str, Any]:
         """Keep LOW general-workspace reports from inheriting high-hazard boilerplate."""
         if not isinstance(nlp_analysis, dict):
+            # Return the prepared result to the caller.
             return nlp_analysis
+        # Choose the correct branch before the workflow continues.
         if not self._is_low_severity_review_context(report_data, nlp_analysis):
             return nlp_analysis
 
@@ -6085,6 +6834,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         missing_keys = self._extract_detector_missing_ppe_keys(report_data)
         missing_phrase = self._detector_missing_ppe_phrase(missing_keys)
         hazards = self._low_context_review_hazards(missing_keys)
+        # Prepare actions for the next step.
         actions = self._low_context_review_actions(missing_keys, environment_type)
         risks = self._low_context_review_risks(missing_keys, environment_type)
 
@@ -6096,22 +6846,26 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             f"YOLO flagged {missing_phrase}, but the visual evidence does not confirm active construction, traffic, machinery, dust or fume, work-at-height, or overhead-object exposure. "
             "Supervisor verification is required before treating the finding as a mandatory PPE-zone breach."
         )
+        # Prepare values needed by the next step.
         nlp_analysis['hazards_detected'] = hazards
         nlp_analysis['suggested_actions'] = actions
         nlp_analysis['dosh_regulations_cited'] = self._low_context_review_regulations(missing_keys, environment_type)
 
         persons = nlp_analysis.get('persons')
         if not isinstance(persons, list):
+            # Prepare persons for the next step.
             persons = []
         target_count = self._person_card_target_count([p for p in persons if isinstance(p, dict)], report_data)
         if target_count <= 0 and missing_keys:
             target_count = 1
+        # Keep the loop active only while the runtime condition is true.
         while target_count and len(persons) < target_count:
             persons.append({'id': f'Person {len(persons) + 1}', 'ppe': {}})
 
         for idx, person in enumerate(persons):
             if not isinstance(person, dict):
                 continue
+            # Trigger the side effect required for this stage.
             person.setdefault('id', f'Person {idx + 1}')
             current_desc = self._clean_plain_text_for_report(person.get('description') or '')
             over_escalated = bool(re.search(
@@ -6120,15 +6874,18 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 flags=re.IGNORECASE,
             ))
             if not current_desc or over_escalated:
+                # Prepare values needed by the next step.
                 person['description'] = (
                     f"Person {idx + 1} is visible in the analyzed {environment_type.lower()} frame. "
                     f"Detector-confirmed PPE condition: {missing_phrase}; no matching high-hazard activity is confirmed by the scene evidence."
                 )
+            # Prepare values needed by the next step.
             person['hazards_faced'] = list(hazards)
             person['risks'] = [dict(risk) for risk in risks]
             person['corrective_actions'] = list(actions)
             person['actions'] = list(actions)
 
+        # Prepare values needed by the next step.
         nlp_analysis['persons'] = persons
         nlp_analysis['_low_context_proportionality_guard'] = True
         return nlp_analysis
@@ -6146,19 +6903,25 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
     _SHORT_TEXT_THRESHOLD = 35  # chars; below this we treat the model output as "too terse"
 
+    # Section: run the is text too short workflow with clear inputs and outputs.
     def _is_text_too_short(self, value: str) -> bool:
+        # Return the prepared result to the caller.
         return len(str(value or '').strip()) < self._SHORT_TEXT_THRESHOLD
 
+    # Section: run the format missing ppe phrase workflow with clear inputs and outputs.
     def _format_missing_ppe_phrase(self, missing_ppe: List[str]) -> str:
         items = [str(p).strip() for p in (missing_ppe or []) if str(p).strip()]
         if not items:
+            # Return the prepared result to the caller.
             return 'the required personal protective equipment for this scene'
         if len(items) == 1:
             return items[0]
         if len(items) == 2:
             return f"{items[0]} and {items[1]}"
+        # Return the prepared result to the caller.
         return ', '.join(items[:-1]) + f", and {items[-1]}"
 
+    # Section: run the expand requirement text workflow with clear inputs and outputs.
     def _expand_requirement_text(self, base_text: str, regulation: str,
                                   environment_type: str, missing_ppe: List[str]) -> str:
         base_text = str(base_text or '').strip()
@@ -6170,7 +6933,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             f"while exposed to the hazard, and the site supervisor must verify "
             f"compliance before work resumes."
         )
+        # Choose the correct branch before the workflow continues.
         if not base_text:
+            # Return the prepared result to the caller.
             return (
                 f"{regulation} establishes the baseline duty of care for this category "
                 f"of work."
@@ -6179,7 +6944,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             return base_text + addendum
         return base_text
 
+    # Section: run the expand penalty text workflow with clear inputs and outputs.
     def _expand_penalty_text(self, base_text: str, regulation: str) -> str:
+        # Prepare base text for the next step.
         base_text = str(base_text or '').strip()
         addendum = (
             " Continued non-compliance can lead to a stop-work order, monetary "
@@ -6187,21 +6954,26 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             "and personal liability for the site supervisor under section 19 of OSHA."
         )
         if not base_text:
+            # Return the prepared result to the caller.
             return (
                 f"Breach of {regulation} is enforceable by DOSH inspectors."
             ).strip() + addendum
+        # Choose the correct branch before the workflow continues.
         if self._is_text_too_short(base_text):
             return base_text + addendum
         return base_text
 
+    # Section: run the expand risk text workflow with clear inputs and outputs.
     def _expand_risk_text(self, base_text: str, environment_type: str,
                            missing_ppe: List[str], hazards: List[str]) -> str:
         base_text = str(base_text or '').strip()
         env = (environment_type or 'work').strip().lower() or 'work'
         ppe_phrase = self._format_missing_ppe_phrase(missing_ppe)
+        # Prepare hazard phrase for the next step.
         hazard_phrase = ''
         hazards_clean = [str(h).strip() for h in (hazards or []) if str(h).strip()]
         if hazards_clean:
+            # Prepare hazard phrase for the next step.
             hazard_phrase = f" combined with the {hazards_clean[0].lower()} hazard already present in the scene"
         addendum = (
             f" In a {env} environment, working without {ppe_phrase}{hazard_phrase} "
@@ -6209,15 +6981,19 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             f"laceration, fall-from-height, struck-by) that would trigger a JKKP-7 "
             f"incident notification within seven days."
         )
+        # Choose the correct branch before the workflow continues.
         if not base_text:
             return ("This person is exposed to an immediate safety risk." + addendum)
         if self._is_text_too_short(base_text):
+            # Return the prepared result to the caller.
             return base_text + addendum
         return base_text
 
+    # Section: run the expand mitigation steps workflow with clear inputs and outputs.
     def _expand_mitigation_steps(self, steps: List[str], environment_type: str,
                                   missing_ppe: List[str]) -> List[str]:
         existing = [str(s).strip() for s in (steps or []) if str(s).strip()]
+        # Choose the correct branch before the workflow continues.
         if len(existing) >= 3:
             return existing
         env = (environment_type or 'work').strip().lower() or 'work'
@@ -6227,15 +7003,20 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             f"Brief every operative entering the {env} zone on the specific hazard observed and require them to sign a toolbox-talk attendance sheet before resuming.",
             f"Schedule a follow-up audit within 48 hours and capture photographic evidence of the corrected PPE compliance for the safety file."
         ]
+        # Process each item in this collection using the same rule set.
         for d in defaults:
+            # Choose the correct branch before the workflow continues.
             if d not in existing:
+                # Trigger the side effect required for this stage.
                 existing.append(d)
             if len(existing) >= 3:
                 break
         return existing
 
+    # Section: run the default corrective actions for workflow with clear inputs and outputs.
     def _default_corrective_actions_for(self, environment_type: str,
                                          missing_ppe: List[str]) -> List[str]:
+        # Prepare env for the next step.
         env = (environment_type or 'work').strip().lower() or 'work'
         ppe_phrase = self._format_missing_ppe_phrase(missing_ppe)
         return [
@@ -6244,8 +7025,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             f"Record the incident in the site safety log, brief the crew during the next toolbox talk, and schedule a 48-hour follow-up audit to confirm sustained compliance."
         ]
 
+    # Section: run the expand corrective actions workflow with clear inputs and outputs.
     def _expand_corrective_actions(self, actions: List[str], environment_type: str,
                                     missing_ppe: List[str]) -> List[str]:
+        # Prepare existing for the next step.
         existing = [str(a).strip() for a in (actions or []) if str(a).strip()]
         # Treat trivial chip-style answers ("Stop Work", "Issue PPE") as missing.
         substantive = [a for a in existing if len(a) >= self._SHORT_TEXT_THRESHOLD]
@@ -6255,18 +7038,23 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         out = list(substantive)
         for d in defaults:
             if d not in out:
+                # Trigger the side effect required for this stage.
                 out.append(d)
             if len(out) >= 3:
                 break
+        # Return the prepared result to the caller.
         return out
 
+    # Section: run the clean plain text for report workflow with clear inputs and outputs.
     def _clean_plain_text_for_report(self, value: Any) -> str:
         """Normalize report text without expanding every character."""
         text = str(value or '').strip()
         if not text:
+            # Return the prepared result to the caller.
             return ''
 
         # Best-effort mojibake repair for common UTF-8-as-Latin-1 artifacts.
+        # Choose the correct branch before the workflow continues.
         if any(marker in text for marker in ('\u00c3', '\u00c2', '\u00e2')):
             try:
                 decoded = text.encode('latin1').decode('utf-8')
@@ -6276,6 +7064,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 text = decoded
 
         text = text.replace('\ufeff', '')
+        # Prepare text for the next step.
         text = re.sub(r'[\U0001F300-\U0001FAFF\u2600-\u27BF]', '', text)
         text = re.sub(r'\s*[\u2022\u2023\u2043\u2219\u25e6]+\s*', ', ', text)
         text = re.sub(r'\s*(?:\u2192|\u21d2|\u27f6|\u279c|->)\s*', ' to ', text)
@@ -6283,24 +7072,33 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         text = re.sub(r'\s{2,}', ' ', text)
         return text.strip()
 
+    # Section: run the sanitize nlp analysis workflow with clear inputs and outputs.
     def _sanitize_nlp_analysis(self, nlp_analysis: Any) -> Dict[str, Any]:
         """Normalize model output into a stable schema for robust rendering."""
+        # Choose the correct branch before the workflow continues.
         if not isinstance(nlp_analysis, dict):
+            # Prepare nlp analysis for the next step.
             nlp_analysis = {}
 
+        # Section: run the professionalize text workflow with clear inputs and outputs.
         def _professionalize_text(value: Any) -> str:
             return self._clean_plain_text_for_report(value)
 
+        # Section: run the as clean str workflow with clear inputs and outputs.
         def _as_clean_str(value: Any) -> str:
             return _professionalize_text(value)
 
+        # Section: run the as list workflow with clear inputs and outputs.
         def _as_list(value: Any) -> List[Any]:
+            # Choose the correct branch before the workflow continues.
             if value is None:
+                # Return the prepared result to the caller.
                 return []
             if isinstance(value, list):
                 return value
             return [value]
 
+        # Section: run the action to text workflow with clear inputs and outputs.
         def _action_to_text(value: Any) -> str:
             if isinstance(value, dict):
                 parts = [
@@ -6308,10 +7106,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     _as_clean_str(value.get('owner') or value.get('responsible_party')),
                     _as_clean_str(value.get('timeline') or value.get('due')),
                 ]
+                # Return the prepared result to the caller.
                 return ' | '.join(part for part in parts if part)
+            # Return the prepared result to the caller.
             return _as_clean_str(value)
 
         normalized: Dict[str, Any] = dict(nlp_analysis)
+        # Prepare values needed by the next step.
         normalized['summary'] = _as_clean_str(nlp_analysis.get('summary'))
         normalized['visual_evidence'] = _as_clean_str(nlp_analysis.get('visual_evidence'))
         normalized['environment_type'] = _as_clean_str(nlp_analysis.get('environment_type'))
@@ -6327,7 +7128,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         regs_out: List[Any] = []
         seen_regs = set()
         for reg in _as_list(nlp_analysis.get('dosh_regulations_cited', [])):
+            # Choose the correct branch before the workflow continues.
             if isinstance(reg, dict):
+                # Prepare reg obj for the next step.
                 reg_obj = {
                     'regulation': _as_clean_str(reg.get('regulation') or reg.get('technical_standard')),
                     'requirement': _as_clean_str(reg.get('requirement')),
@@ -6337,14 +7140,17 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 }
                 reg_key = reg_obj['regulation'].lower()
                 if reg_obj['regulation'] and reg_key not in seen_regs:
+                    # Trigger the side effect required for this stage.
                     seen_regs.add(reg_key)
                     regs_out.append(reg_obj)
             else:
+                # Prepare reg text for the next step.
                 reg_text = _as_clean_str(reg)
                 reg_key = reg_text.lower()
                 if reg_text and reg_key not in seen_regs:
                     seen_regs.add(reg_key)
                     regs_out.append(reg_text)
+        # Prepare values needed by the next step.
         normalized['dosh_regulations_cited'] = regs_out
 
         # Persons: enforce list[dict] and normalize nested structures used by hidden sections.
@@ -6359,38 +7165,51 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
             ppe_obj: Dict[str, str] = {}
             ppe_raw = person.get('ppe', {})
+            # Choose the correct branch before the workflow continues.
             if not isinstance(ppe_raw, dict):
+                # Prepare ppe raw for the next step.
                 ppe_raw = person.get('ppe_status', {})
             if isinstance(ppe_raw, dict):
                 for key, value in ppe_raw.items():
+                    # Prepare key str for the next step.
                     key_str = _as_clean_str(key)
                     val_str = _as_clean_str(value)
                     if key_str and val_str:
+                        # Prepare values needed by the next step.
                         ppe_obj[key_str] = val_str
 
             hazards_out: List[Any] = []
+            # Process each item in this collection using the same rule set.
             for hazard in _as_list(person.get('hazards_faced', [])):
+                # Choose the correct branch before the workflow continues.
                 if isinstance(hazard, dict):
                     hz_type = _as_clean_str(hazard.get('type') or hazard.get('hazard'))
+                    # Prepare hz source for the next step.
                     hz_source = _as_clean_str(hazard.get('source'))
                     hz_severity = _as_clean_str(hazard.get('severity'))
                     if hz_type or hz_source or hz_severity:
+                        # Trigger the side effect required for this stage.
                         hazards_out.append({
                             'type': hz_type,
                             'source': hz_source,
                             'severity': hz_severity,
                         })
                 else:
+                    # Prepare hz text for the next step.
                     hz_text = _as_clean_str(hazard)
                     if hz_text:
                         hazards_out.append(hz_text)
 
             risks_out: List[Any] = []
+            # Process each item in this collection using the same rule set.
             for risk in _as_list(person.get('risks', [])):
+                # Choose the correct branch before the workflow continues.
                 if isinstance(risk, dict):
                     risk_text = _as_clean_str(risk.get('risk') or risk.get('description'))
                     likelihood_text = _as_clean_str(risk.get('likelihood'))
+                    # Choose the correct branch before the workflow continues.
                     if not likelihood_text:
+                        # Prepare likelihood text for the next step.
                         likelihood_text = 'REVIEW_REQUIRED'
                     mitigation_steps = [
                         _as_clean_str(step)
@@ -6406,13 +7225,16 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         'legal_regulatory_consequences': _as_clean_str(risk.get('legal_regulatory_consequences')),
                         'mitigation_steps': mitigation_steps,
                     }
+                    # Choose the correct branch before the workflow continues.
                     if any(risk_obj.values()):
+                        # Trigger the side effect required for this stage.
                         risks_out.append(risk_obj)
                 else:
                     risk_text = _as_clean_str(risk)
                     if risk_text:
                         risks_out.append(risk_text)
 
+            # Prepare actions source for the next step.
             actions_source = person.get('corrective_actions', []) or person.get('actions', [])
             actions_out = [
                 action_text
@@ -6431,33 +7253,43 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'actions': actions_out,
             })
 
+        # Prepare values needed by the next step.
         normalized['persons'] = persons_out
         return normalized
 
+    # Section: run the extract detector missing ppe keys workflow with clear inputs and outputs.
     def _extract_detector_missing_ppe_keys(self, report_data: Optional[Dict[str, Any]]) -> List[str]:
         """Return distinct detector-confirmed missing PPE keys in stable display order."""
         if not isinstance(report_data, dict):
+            # Return the prepared result to the caller.
             return []
 
         keys: List[str] = []
 
+        # Section: run the add workflow with clear inputs and outputs.
         def _add(value: Any) -> None:
             key = _canonical_ppe_key(value)
             if key and key not in keys:
+                # Trigger the side effect required for this stage.
                 keys.append(key)
 
         detections = report_data.get('detections')
         if isinstance(detections, list):
+            # Process each item in this collection using the same rule set.
             for det in detections:
                 if not isinstance(det, dict):
                     continue
                 label = str(det.get('class_name') or det.get('class') or '').strip()
                 if label.upper().startswith('NO-'):
+                    # Trigger the side effect required for this stage.
                     _add(label)
 
+        # Process each item in this collection using the same rule set.
         for field in ('missing_ppe', 'ppe_tags', 'violation_types'):
             values = report_data.get(field)
+            # Choose the correct branch before the workflow continues.
             if isinstance(values, list):
+                # Process each item in this collection using the same rule set.
                 for value in values:
                     _add(value)
 
@@ -6470,27 +7302,35 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 text,
                 flags=re.IGNORECASE,
             ):
+                # Trigger the side effect required for this stage.
                 _add(match.group(0))
 
+        # Return the prepared result to the caller.
         return [key for key in _PPE_CANONICAL_ORDER if key in keys] + [
             key for key in keys if key not in _PPE_CANONICAL_ORDER
         ]
 
+    # Section: run the detector missing ppe phrase workflow with clear inputs and outputs.
     def _detector_missing_ppe_phrase(self, missing_keys: List[str]) -> str:
         labels = [_ppe_label_for_key(key) for key in (missing_keys or [])]
         if not labels:
+            # Return the prepared result to the caller.
             return 'no detector-confirmed PPE gap'
         if len(labels) == 1:
             return f"missing {labels[0]}"
+        # Return the prepared result to the caller.
         return "missing " + ", ".join(labels[:-1]) + f" and {labels[-1]}"
 
+    # Section: run the person card target count workflow with clear inputs and outputs.
     def _person_card_target_count(self, persons: List[Dict[str, Any]], report_data: Dict[str, Any]) -> int:
         """Use the same person-count logic for summary rows and card rendering."""
         try:
             target_count = int(report_data.get('person_count') or 0)
         except (TypeError, ValueError):
+            # Prepare target count for the next step.
             target_count = 0
 
+        # Prepare caption text for the next step.
         caption_text = str(report_data.get('caption') or '')
         violation_summary_text = str(report_data.get('violation_summary') or '')
         inferred_from_caption = infer_people_count_from_text(caption_text, violation_summary_text)
@@ -6498,6 +7338,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         yolo_person_count = 0
         detections = report_data.get('detections') if isinstance(report_data.get('detections'), list) else []
         for det in detections:
+            # Choose the correct branch before the workflow continues.
             if not isinstance(det, dict):
                 continue
             label = str(det.get('class_name') or det.get('class') or '').strip().lower()
@@ -6505,14 +7346,17 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             if label in {'person', 'worker', 'man', 'woman', 'people'}:
                 yolo_person_count += 1
 
+        # Choose the correct branch before the workflow continues.
         if inferred_from_caption > 0:
             return inferred_from_caption
         if yolo_person_count > 0:
+            # Return the prepared result to the caller.
             return yolo_person_count
         if target_count > 0:
             return target_count
         return len(persons)
 
+    # Section: run the reconcile person cards with detection facts workflow with clear inputs and outputs.
     def _reconcile_person_cards_with_detection_facts(
         self,
         nlp_analysis: Optional[Dict[str, Any]],
@@ -6522,7 +7366,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         Ground per-person cards in the detector payload so descriptions, PPE
         status grids, and summary counts cannot drift from YOLO metadata.
         """
+        # Choose the correct branch before the workflow continues.
         if not isinstance(nlp_analysis, dict):
+            # Prepare nlp analysis for the next step.
             nlp_analysis = {}
         if not isinstance(report_data, dict):
             report_data = {}
@@ -6532,17 +7378,20 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         persons = nlp_analysis.get('persons')
         if not isinstance(persons, list):
             persons = []
+        # Prepare persons for the next step.
         persons = [p for p in persons if isinstance(p, dict)]
 
         missing_keys = self._extract_detector_missing_ppe_keys(report_data)
         missing_phrase = self._detector_missing_ppe_phrase(missing_keys)
         target_count = self._person_card_target_count(persons, report_data)
         if target_count <= 0 and missing_keys:
+            # Prepare target count for the next step.
             target_count = 1
 
         if target_count and len(persons) > target_count:
             persons = persons[:target_count]
 
+        # Keep the loop active only while the runtime condition is true.
         while target_count and len(persons) < target_count:
             persons.append({
                 'id': f'Person {len(persons) + 1}',
@@ -6555,9 +7404,12 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 '__placeholder__': True,
             })
 
+        # Prepare environment type for the next step.
         environment_type = str(nlp_analysis.get('environment_type') or 'work area').strip() or 'work area'
         if missing_keys:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Prepare values needed by the next step.
                 report_data['violation_count'] = len(missing_keys)
             except Exception:
                 pass
@@ -6567,11 +7419,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             grounded_ppe: Dict[str, str] = {}
             for key in _PPE_CANONICAL_ORDER:
                 if key in missing_keys:
+                    # Prepare values needed by the next step.
                     grounded_ppe[key] = 'Missing'
                 else:
                     model_value = ''
                     for raw_key, raw_value in raw_ppe.items():
+                        # Choose the correct branch before the workflow continues.
                         if _canonical_ppe_key(raw_key) == key:
+                            # Prepare model value for the next step.
                             model_value = str(raw_value or '').strip()
                             break
                     model_lower = model_value.lower()
@@ -6580,37 +7435,46 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     else:
                         grounded_ppe[key] = 'Not Flagged'
 
+            # Prepare original desc for the next step.
             original_desc = self._clean_plain_text_for_report(person.get('description') or '')
             unsupported_missing = False
             if original_desc and missing_keys:
+                # Process each item in this collection using the same rule set.
                 for key, terms in _PPE_CANONICAL_TERMS.items():
+                    # Choose the correct branch before the workflow continues.
                     if key in missing_keys:
                         continue
                     if any(
                         re.search(rf'\b(?:missing|without|no|lack of|not wearing)\s+(?:\w+\s+){{0,2}}{re.escape(term)}\b', original_desc, re.IGNORECASE)
                         for term in terms
                     ):
+                        # Prepare unsupported missing for the next step.
                         unsupported_missing = True
                         break
 
+            # Prepare exact sentence for the next step.
             exact_sentence = (
                 f"Person {idx + 1} is visible in the analyzed {environment_type.lower()} frame. "
                 f"Detector-confirmed PPE conditions: {missing_phrase}."
             )
             if not missing_keys:
+                # Prepare exact sentence for the next step.
                 exact_sentence = (
                     f"Person {idx + 1} is visible in the analyzed {environment_type.lower()} frame. "
                     "No detector-confirmed missing PPE condition was available for this card."
                 )
 
+            # Choose the correct branch before the workflow continues.
             if original_desc and not unsupported_missing:
                 person['description'] = f"{exact_sentence} Scene note: {original_desc}"
             else:
                 person['description'] = exact_sentence
             person['ppe'] = grounded_ppe
             if missing_keys:
+                # Prepare values needed by the next step.
                 person['compliance_status'] = 'Non-Compliant'
 
+        # Prepare values needed by the next step.
         nlp_analysis['persons'] = persons
         nlp_analysis['_detector_missing_ppe'] = [_ppe_label_for_key(key) for key in missing_keys]
         nlp_analysis['_person_card_count'] = len(persons)
@@ -6618,10 +7482,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         nlp_analysis['_person_card_detection_reconciled'] = True
         return nlp_analysis
 
+    # Section: run the content tokens workflow with clear inputs and outputs.
     def _content_tokens(self, text: str) -> List[str]:
         """Extract lightweight content tokens for lexical grounding checks."""
+        # Prepare text for the next step.
         text = str(text or '').lower()
         if not text:
+            # Return the prepared result to the caller.
             return []
 
         tokens = re.findall(r'[a-z0-9]+', text)
@@ -6632,8 +7499,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'observed', 'detected', 'safety', 'risk', 'risks', 'hazard', 'hazards', 'summary', 'law',
             'what', 'who', 'danger', 'compliance', 'non', 'ppe'
         }
+        # Return the prepared result to the caller.
         return [tok for tok in tokens if len(tok) >= 3 and tok not in stopwords]
 
+    # Section: run the has grounding overlap workflow with clear inputs and outputs.
     def _has_grounding_overlap(
         self,
         candidate_text: str,
@@ -6642,25 +7511,31 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         min_ratio: float = 0.1,
     ) -> bool:
         """Check whether candidate text is grounded in reference evidence using token overlap."""
+        # Prepare candidate tokens for the next step.
         candidate_tokens = set(self._content_tokens(candidate_text))
         reference_tokens = set(self._content_tokens(reference_text))
 
         if not candidate_tokens:
+            # Return the prepared result to the caller.
             return False
         if not reference_tokens:
             return True
 
         overlap = candidate_tokens & reference_tokens
+        # Prepare overlap count for the next step.
         overlap_count = len(overlap)
         overlap_ratio = overlap_count / max(1, len(candidate_tokens))
         return overlap_count >= min_overlap or (overlap_count >= 1 and overlap_ratio >= min_ratio)
 
+    # Section: run the is caption placeholder text workflow with clear inputs and outputs.
     def _is_caption_placeholder_text(self, caption: str) -> bool:
         """Detect non-usable caption outputs (errors/alerts/placeholders)."""
         text = str(caption or '').strip()
         if not text:
+            # Return the prepared result to the caller.
             return True
 
+        # Prepare lower for the next step.
         lower = text.lower()
         markers = (
             'alert_local_mode_unavailable',
@@ -6675,16 +7550,21 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'provider unavailable',
             'traceback',
         )
+        # Choose the correct branch before the workflow continues.
         if any(marker in lower for marker in markers):
+            # Return the prepared result to the caller.
             return True
 
         return lower.startswith('error:')
 
+    # Section: run the build caption quality floor workflow with clear inputs and outputs.
     def _build_caption_quality_floor(self, report_data: Dict[str, Any], seed_caption: str) -> str:
         """Build a grounded, high-detail caption floor from available evidence."""
         detections = report_data.get('detections', []) if isinstance(report_data.get('detections', []), list) else []
         clean_seed = str(seed_caption or '').strip()
+        # Choose the correct branch before the workflow continues.
         if self._is_caption_placeholder_text(clean_seed):
+            # Prepare clean seed for the next step.
             clean_seed = ''
 
         violation_labels: List[str] = []
@@ -6695,23 +7575,29 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             cls = str(det.get('class_name') or det.get('class') or '').strip()
             if not cls:
                 continue
+            # Prepare cls lower for the next step.
             cls_lower = cls.lower()
             if cls_lower in ('person', 'worker', 'people'):
                 person_count += 1
             if cls.startswith('NO-'):
+                # Prepare pretty for the next step.
                 pretty = cls.replace('NO-', '').replace('_', ' ').strip().title()
                 if pretty and pretty not in violation_labels:
+                    # Trigger the side effect required for this stage.
                     violation_labels.append(pretty)
 
+        # Prepare seed lower for the next step.
         seed_lower = clean_seed.lower()
         mentions_person = any(token in seed_lower for token in ('person', 'worker', 'people', 'individual', 'man', 'woman'))
         if person_count <= 0 and (mentions_person or violation_labels):
+            # Prepare person count for the next step.
             person_count = 1
         if person_count <= 0:
             person_count = 1
 
         env_seed = clean_seed or str(report_data.get('violation_summary') or '')
         environment_type = self._extract_environment_from_caption(env_seed)
+        # Choose the correct branch before the workflow continues.
         if environment_type == 'General Workspace' and violation_labels:
             environment_type = 'Construction Site'
 
@@ -6725,11 +7611,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
         sentences: List[str] = [f"The scene depicts a {environment_type.lower()} setting."]
 
+        # Choose the correct branch before the workflow continues.
         if clean_seed:
+            # Prepare seed sentence for the next step.
             seed_sentence = re.sub(r'\s+', ' ', clean_seed).strip()
             if seed_sentence and not seed_sentence.endswith(('.', '!', '?')):
                 seed_sentence += '.'
             if seed_sentence:
+                # Trigger the side effect required for this stage.
                 sentences.append(seed_sentence)
         else:
             if person_count == 1:
@@ -6739,7 +7628,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 sentences.append(f'{person_count} people are visible in the frame, positioned across the active work area.')
                 sentences.append('Workers are visible at upper-body level with limited lower-body framing, requiring conservative PPE visibility interpretation.')
 
+        # Choose the correct branch before the workflow continues.
         if violation_labels:
+            # Trigger the side effect required for this stage.
             sentences.append('No compliant PPE is clearly visible on the person; PPE visibility on the head, hands, and torso is absent or insufficient for safe compliance confirmation.')
 
         hazard_sentence = hazard_by_env.get(environment_type)
@@ -6752,6 +7643,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 f"YOLO detection identified {person_count} person(s) in the frame with the following PPE deficiencies: {deficiencies}."
             )
         else:
+            # Prepare summary text for the next step.
             summary_text = str(report_data.get('violation_summary') or '').strip()
             normalized_summary = re.sub(r'\s+', ' ', summary_text).strip()
             deficiency_seed = normalized_summary.lower().replace('_', ' ')
@@ -6761,19 +7653,24 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 f"YOLO detection identified {person_count} person(s) in the frame with the following PPE deficiencies: {deficiencies}."
             )
             if normalized_summary:
+                # Choose the correct branch before the workflow continues.
                 if not normalized_summary.endswith(('.', '!', '?')):
                     normalized_summary += '.'
                 sentences.append(normalized_summary)
 
+        # Return the prepared result to the caller.
         return ' '.join(part for part in sentences if part).strip()
 
+    # Section: run the ensure caption quality floor workflow with clear inputs and outputs.
     def _ensure_caption_quality_floor(self, report_data: Dict[str, Any]) -> str:
         """Return model caption text, using detection text only for real failures."""
         raw_caption = str(report_data.get('caption') or report_data.get('vlm_caption') or '').strip()
 
         if self._is_caption_placeholder_text(raw_caption):
+            # Return the prepared result to the caller.
             return self._build_caption_quality_floor(report_data, raw_caption)
 
+        # Prepare raw caption clean for the next step.
         raw_caption_clean = re.sub(r'\s+', ' ', raw_caption).strip()
 
         # Keep all non-placeholder VLM text. YOLO facts are injected into the
@@ -6783,6 +7680,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 
     def _rebuild_scene_from_malaysian_context(self, report_data: Dict[str, Any], env_type: str) -> str:
         """Helper to inject Malaysian regulatory terminology into scene description."""
+        # Prepare caption for the next step.
         caption = report_data.get('caption', '')
         detections = report_data.get('detections', [])
 
@@ -6793,11 +7691,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         if violation_classes := list(dict.fromkeys(violation_labels)):
             desc += f" Non-compliance with DOSH guidelines detected for: {', '.join(violation_classes)}."
 
+        # Return the prepared result to the caller.
         return desc
 
+    # Section: run the build grounded summary text workflow with clear inputs and outputs.
     def _build_grounded_summary_text(self, report_data: Dict[str, Any], nlp_analysis: Dict[str, Any]) -> str:
         """Build concise grounded summary when model summary is unrelated to visual evidence."""
         if self._is_low_severity_review_context(report_data, nlp_analysis):
+            # Prepare env for the next step.
             env = self._normalize_environment_type(nlp_analysis.get('environment_type') or 'General Workspace') or 'General Workspace'
             missing_phrase = self._detector_missing_ppe_phrase(self._extract_detector_missing_ppe_keys(report_data))
             return (
@@ -6806,23 +7707,30 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 "Supervisor verification is required before treating the finding as a mandatory PPE-zone breach."
             )
 
+        # Prepare detections for the next step.
         detections = report_data.get('detections', []) if isinstance(report_data.get('detections', []), list) else []
         missing_items: List[str] = []
         for det in detections:
+            # Choose the correct branch before the workflow continues.
             if not isinstance(det, dict):
                 continue
             cls = str(det.get('class_name') or det.get('class') or '').strip()
             if cls.startswith('NO-'):
+                # Prepare pretty for the next step.
                 pretty = cls.replace('NO-', '').replace('_', ' ').strip()
                 if pretty and pretty not in missing_items:
+                    # Trigger the side effect required for this stage.
                     missing_items.append(pretty)
 
+        # Prepare env for the next step.
         env = str(nlp_analysis.get('environment_type') or 'General Workspace').strip() or 'General Workspace'
         context_source = str(nlp_analysis.get('visual_evidence') or report_data.get('caption') or '').strip()
         context_sentence = ''
         if context_source:
+            # Prepare context sentence for the next step.
             context_sentence = re.split(r'(?<=[.!?])\s+', context_source)[0].strip()
             if len(context_sentence) > 180:
+                # Prepare context sentence for the next step.
                 context_sentence = context_sentence[:177].rstrip(' ,;') + '...'
 
         if missing_items:
@@ -6830,8 +7738,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             if len(missing_items) > 4:
                 issue_text += f" (+{len(missing_items) - 4} more)"
         else:
+            # Prepare issue text for the next step.
             issue_text = str(report_data.get('violation_summary') or 'observed PPE non-compliance').strip()
 
+        # Prepare summary parts for the next step.
         summary_parts = [
             f"Incident: {env} safety violation.",
             f"Critical gap: Missing {', '.join(missing_items[:3]) if missing_items else 'PPE compliance'}.",
@@ -6841,15 +7751,19 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         summary_parts.append("Directive: Halt work and enforce PPE per OSHA 1994.")
         return '\n'.join(summary_parts)
 
+    # Section: run the build nlp integrity snapshot workflow with clear inputs and outputs.
     def _build_nlp_integrity_snapshot(self, raw_nlp: Any, sanitized_nlp: Dict[str, Any]) -> Dict[str, Any]:
         """Build compact diagnostics comparing raw model payload and sanitized structure."""
+        # Prepare raw dict for the next step.
         raw_dict = raw_nlp if isinstance(raw_nlp, dict) else {}
         sanitized_dict = sanitized_nlp if isinstance(sanitized_nlp, dict) else {}
 
         raw_keys = set(raw_dict.keys())
         sanitized_keys = set(sanitized_dict.keys())
 
+        # Section: run the safe len list workflow with clear inputs and outputs.
         def _safe_len_list(value: Any) -> int:
+            # Return the prepared result to the caller.
             return len(value) if isinstance(value, list) else 0
 
         raw_person_count = _safe_len_list(raw_dict.get('persons'))
@@ -6875,13 +7789,17 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             'visual_evidence_length_sanitized': len(str(sanitized_dict.get('visual_evidence') or '')),
         }
 
+    # Section: run the to safe html text workflow with clear inputs and outputs.
     def _to_safe_html_text(self, value: Any) -> str:
         """Escape user/model text for safe HTML rendering and preserve line breaks."""
+        # Choose the correct branch before the workflow continues.
         if value is None:
+            # Return the prepared result to the caller.
             return ""
         safe_text = self._clean_plain_text_for_report(value)
         return html.escape(safe_text, quote=True).replace('\n', '<br>')
 
+    # Section: run the generate caption history section workflow with clear inputs and outputs.
     def _generate_caption_history_section(self, report_data: Dict[str, Any]) -> str:
         """Generate caption history section if available."""
         history = report_data.get('caption_history', [])
@@ -6898,6 +7816,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         for entry in sorted_history:
             version = entry.get('version', '?')
             timestamp = entry.get('timestamp', '')
+            # Prepare caption for the next step.
             caption = entry.get('caption', '')
             model = entry.get('model', 'Unknown')
 
@@ -6905,14 +7824,18 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             ts_str = timestamp
             try:
                 # datetime is already imported at module level
+                # Choose the correct branch before the workflow continues.
                 if isinstance(timestamp, str):
+                    # Prepare dt for the next step.
                     dt = datetime.fromisoformat(timestamp)
                     ts_str = dt.strftime('%Y-%m-%d %H:%M:%S')
                 elif isinstance(timestamp, datetime):
+                     # Prepare ts str for the next step.
                      ts_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
             except:
                 pass
 
+            # Trigger the side effect required for this stage.
             items.append(f"""
                 <div class="card" style="margin-bottom: 1rem; border-left: 4px solid var(--secondary-color);">
                     <div class="card-header" style="background: var(--background); color: var(--text-color); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
@@ -6928,6 +7851,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 </div>
             """)
 
+        # Return the prepared result to the caller.
         return f"""
             <div class="section">
                 <h2 class="section-title"><i class="fas fa-history"></i> Caption Development History</h2>
@@ -6940,10 +7864,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             </div>
         """
 
+    # Section: run the generate hazards section workflow with clear inputs and outputs.
     def _generate_hazards_section(self, nlp_analysis: Dict[str, Any]) -> str:
         """Generate hazards HTML section."""
+        # Prepare hazards for the next step.
         hazards = self._ensure_list_of_strings(nlp_analysis.get('hazards_detected', []))
         if not hazards:
+            # Return the prepared result to the caller.
             return ""
 
         items = "".join([f"<li style=\"white-space: normal; word-break: break-word;\">{self._to_safe_html_text(h)}</li>" for h in hazards if str(h).strip()])
@@ -6956,10 +7883,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             </div>
         """
 
+    # Section: run the generate dosh regulations section workflow with clear inputs and outputs.
     def _generate_dosh_regulations_section(self, nlp_analysis: Dict[str, Any]) -> str:
         """Generate DOSH regulations section with cited regulations (Text Only - No External Links)."""
+        # Prepare regulations raw for the next step.
         regulations_raw = nlp_analysis.get('dosh_regulations_cited', [])
         if not regulations_raw:
+            # Return the prepared result to the caller.
             return ""
 
         regulations = regulations_raw if isinstance(regulations_raw, list) else [regulations_raw]
@@ -6969,22 +7899,29 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         for person in (nlp_analysis.get('persons') or []):
             if not isinstance(person, dict):
                 continue
+            # Prepare ppe map for the next step.
             ppe_map = person.get('ppe') or {}
             if not isinstance(ppe_map, dict):
                 continue
             for ppe_name, status in ppe_map.items():
+                # Choose the correct branch before the workflow continues.
                 if not str(status or '').strip():
                     continue
                 if 'missing' in str(status).lower() or str(status).lower().startswith('no '):
+                    # Prepare label for the next step.
                     label = str(ppe_name).replace('_', ' ').title()
                     if label not in scene_missing_ppe:
+                        # Trigger the side effect required for this stage.
                         scene_missing_ppe.append(label)
 
+        # Prepare reg items for the next step.
         reg_items = []
         seen_regulations = set()
 
         for reg in regulations:
+            # Choose the correct branch before the workflow continues.
             if isinstance(reg, dict):
+                # Prepare regulation for the next step.
                 regulation = str(reg.get('regulation') or reg.get('technical_standard') or '').strip()
                 requirement = str(reg.get('requirement') or '').strip()
                 explanation = str(reg.get('explanation') or '').strip()
@@ -6995,6 +7932,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 explanation = ""
                 penalty = ""
 
+            # Choose the correct branch before the workflow continues.
             if not regulation:
                 continue
 
@@ -7016,6 +7954,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             safe_explanation = self._to_safe_html_text(explanation)
             safe_penalty = self._to_safe_html_text(penalty)
 
+            # Prepare explanation block for the next step.
             explanation_block = (
                 f'<p><strong>Why this applies here:</strong> {safe_explanation}</p>'
             ) if safe_explanation else ''
@@ -7034,6 +7973,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             """)
 
 
+        # Return the prepared result to the caller.
         return f"""
             <section class="section section-expanded">
                 <h2 class="section-title section-title-expanded">
@@ -7058,12 +7998,15 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             </section>
         """
 
+    # Section: run the generate person cards section workflow with clear inputs and outputs.
     def _generate_person_cards_section(self, nlp_analysis: Dict[str, Any], report_data: Dict[str, Any]) -> str:
         """Generate per-person analysis cards (inspired by NLP_CASM)."""
+        # Prepare report data for the next step.
         report_data = report_data or {}
         nlp_analysis = self._reconcile_person_cards_with_detection_facts(nlp_analysis, report_data)
         persons = nlp_analysis.get('persons', [])
         if not isinstance(persons, list):
+            # Prepare persons for the next step.
             persons = []
         persons = [p for p in persons if isinstance(p, dict)]
 
@@ -7109,6 +8052,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
         if len(persons) > target_count:
             persons = persons[:target_count]
 
+        # Choose the correct branch before the workflow continues.
         if target_count > len(persons):
             # Identify what the first fully-analysed person looks like so
             # placeholders inherit real scene context (PPE, hazards, risks,
@@ -7116,6 +8060,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             reference_person = persons[0] if persons else {}
             ref_ppe = reference_person.get('ppe') or {}
             if not isinstance(ref_ppe, dict):
+                # Prepare ref ppe for the next step.
                 ref_ppe = {}
             ref_hazards = list(reference_person.get('hazards_faced') or [])
             ref_risks = list(reference_person.get('risks') or [])
@@ -7125,7 +8070,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 []
             )
 
+            # Process each item in this collection using the same rule set.
             for idx in range(len(persons), target_count):
+                # Prepare ph for the next step.
                 ph = {
                     'id': f'Person {idx + 1}',
                     'description': (
@@ -7143,14 +8090,17 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     'corrective_actions': list(ref_actions),
                     '__placeholder__': True,
                 }
+                # Trigger the side effect required for this stage.
                 persons.append(ph)
 
         # Apply Malaysian terminology to person count heading if needed
+        # Prepare person header suffix for the next step.
         person_header_suffix = "Individual Analysis"
         if len(persons) > 0:
             person_header_suffix += f" ({len(persons)} Operative{'s' if len(persons) > 1 else ''} Identified)"
 
         if not persons:
+            # Return the prepared result to the caller.
             return f"""
             <div class="section">
                 <h2 class="section-title"><i class="fas fa-users"></i> {person_header_suffix}</h2>
@@ -7163,6 +8113,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             """
 
         # Generate card for each person
+        # Prepare person cards for the next step.
         person_cards = []
         for i, person in enumerate(persons):
             person_id_raw = str(person.get('id') or f'Person {i + 1}').strip()
@@ -7175,6 +8126,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             ppe = person.get('ppe', {})
             if not isinstance(ppe, dict):
                 ppe = {}
+            # Prepare ppe items for the next step.
             ppe_items = []
             has_missing_ppe = False
 
@@ -7185,13 +8137,16 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             ]
 
             person_missing_ppe: List[str] = []
+            # Prepare environment type for the next step.
             environment_type = str(nlp_analysis.get('environment_type') or 'work').strip() or 'work'
 
             for ppe_type in ppe_keys:
+                # Prepare status for the next step.
                 status = str(ppe.get(ppe_type, '') or '').strip() or 'Not specified'
                 status_lower = status.lower()
 
                 if 'missing' in status_lower or status_lower.startswith('no '):
+                    # Prepare status class for the next step.
                     status_class = 'ppe-status-missing'
                     has_missing_ppe = True
                     person_missing_ppe.append(ppe_type.replace('_', ' ').title())
@@ -7200,6 +8155,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 else:
                     status_class = 'ppe-status-not-mentioned'
 
+                # Prepare ppe label for the next step.
                 ppe_label = ppe_type.replace('_', ' ').title()
                 ppe_items.append(f"""
                     <div class="ppe-item">
@@ -7208,7 +8164,9 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     </div>
                 """)
 
+            # Choose the correct branch before the workflow continues.
             if not ppe_items:
+                # Trigger the side effect required for this stage.
                 ppe_items.append("""
                     <div class="ppe-item">
                         <span class="ppe-label">PPE:</span>
@@ -7217,6 +8175,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 """)
 
             # Keep model compliance when provided; infer only when absent.
+            # Choose the correct branch before the workflow continues.
             if not compliance and has_missing_ppe:
                 compliance = 'NON-COMPLIANT (Breach of Regulation)'
             elif not compliance:
@@ -7226,10 +8185,14 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             hazards_faced = person.get('hazards_faced', [])
             if not isinstance(hazards_faced, list):
                 hazards_faced = [hazards_faced]
+            # Prepare hazards html for the next step.
             hazards_html = ""
             if hazards_faced:
+                # Process each item in this collection using the same rule set.
                 for h in hazards_faced:
+                    # Choose the correct branch before the workflow continues.
                     if isinstance(h, dict):
+                        # Prepare hazard text for the next step.
                         hazard_text = str(h.get('type') or h.get('hazard') or '').strip()
                         source = str(h.get('source') or '').strip()
                         if source:
@@ -7239,16 +8202,20 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                     if hazard_text:
                         hazards_html += f'<div class="hazard-chip"><i class="fas fa-exclamation-circle"></i> {self._to_safe_html_text(hazard_text)}</div>'
             else:
+                # Prepare hazards html for the next step.
                 hazards_html = '<div class="hazard-chip">No hazards provided by model</div>'
 
             # Risks list - Use _format_risk_item style (likelihood badge)
+            # Prepare risks for the next step.
             risks = person.get('risks', [])
             if not isinstance(risks, list):
                 risks = [risks]
             risks_html = ""
             if risks:
                 for r in risks:
+                    # Choose the correct branch before the workflow continues.
                     if isinstance(r, dict):
+                        # Prepare risk category for the next step.
                         risk_category = str(r.get('risk_category') or r.get('category') or r.get('type') or '').strip()
                         risk_desc = str(r.get('risk') or r.get('description') or '').strip()
                         likelihood = str(r.get('likelihood') or '').strip()
@@ -7268,38 +8235,46 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                         hazard_labels = []
                         for h in (person.get('hazards_faced') or []):
                             if isinstance(h, dict):
+                                # Trigger the side effect required for this stage.
                                 hazard_labels.append(str(h.get('type') or h.get('hazard') or '').strip())
                             else:
                                 hazard_labels.append(str(h).strip())
                         risk_desc = self._expand_risk_text(
                             risk_desc, environment_type, person_missing_ppe, hazard_labels
                         )
+                        # Prepare legal consequence for the next step.
                         legal_consequence = self._expand_penalty_text(
                             legal_consequence, regulation_citation or 'the cited regulation'
                         )
                         if not likelihood:
+                            # Prepare likelihood for the next step.
                             likelihood = 'REVIEW_REQUIRED'
 
                         lik_lower = likelihood.lower()
                         lik_class = 'likelihood-medium'
                         bar_width = '60%'
+                        # Choose the correct branch before the workflow continues.
                         if 'very high' in lik_lower or lik_lower == 'high':
                             lik_class = 'likelihood-high'
                             bar_width = '100%'
                         elif lik_lower == 'low':
+                            # Prepare lik class for the next step.
                             lik_class = 'likelihood-low'
                             bar_width = '30%'
                         elif 'not specified' in lik_lower:
                             lik_class = 'likelihood-medium'
                             bar_width = '45%'
+                        # Choose the correct branch before the workflow continues.
                         elif 'review' in lik_lower:
                             lik_class = 'likelihood-medium'
                             bar_width = '45%'
 
                         risk_meta_html = ''
                         if risk_category or evidence:
+                            # Prepare meta items for the next step.
                             meta_items = []
                             if risk_category:
+                                # Trigger the side effect required for this stage.
                                 meta_items.append(
                                     '<div class="risk-meta-pill"><strong>Category:</strong> '
                                     f'{self._to_safe_html_text(risk_category)}</div>'
@@ -7309,8 +8284,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                                     '<div class="risk-meta-pill"><strong>Evidence:</strong> '
                                     f'{self._to_safe_html_text(evidence)}</div>'
                                 )
+                            # Prepare risk meta html for the next step.
                             risk_meta_html = f'<div class="risk-meta-grid">{"".join(meta_items)}</div>'
 
+                        # Prepare mitigation html for the next step.
                         mitigation_html = ''
                         if mitigation_steps:
                             mitigation_items = ''.join(
@@ -7354,6 +8331,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 risks_html = '<div class="risk-item"><div class="risk-content">No risks provided by model</div></div>'
 
             # Correction Actions - Use action-chip style (check both 'corrective_actions' and 'actions')
+            # Prepare actions for the next step.
             actions = self._ensure_list_of_strings(
                 person.get('corrective_actions', []) or person.get('actions', [])
             )
@@ -7363,8 +8341,10 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             actions = self._expand_corrective_actions(
                 actions, environment_type, person_missing_ppe
             )
+            # Prepare actions html for the next step.
             actions_html = ""
             if actions:
+                # Process each item in this collection using the same rule set.
                 for a in actions:
                     actions_html += f'<div class="action-chip"><i class="fas fa-check"></i> {self._to_safe_html_text(a)}</div>'
             else:
@@ -7375,6 +8355,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             if 'non' in comp_lower or 'fail' in comp_lower:
                 comp_badge = '<span class="badge badge-danger"><i class="fas fa-times-circle"></i> Non-Compliant</span>'
             elif 'compliant' in comp_lower or 'pass' in comp_lower:
+                # Prepare comp badge for the next step.
                 comp_badge = '<span class="badge badge-success"><i class="fas fa-check-circle"></i> Compliant</span>'
             else:
                 comp_badge = f'<span class="badge badge-warning">{self._to_safe_html_text(compliance)}</span>'
@@ -7383,6 +8364,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             person_id_display = self._to_safe_html_text(
                 person_id_raw.replace('Person ', '').replace('Personnel ', '').strip() or str(i + 1)
             )
+            # Prepare is placeholder for the next step.
             is_placeholder = bool(person.get('__placeholder__'))
             placeholder_banner = (
                 '<div class="scene-level-banner">'
@@ -7392,6 +8374,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 'that apply to all personnel in the frame. '
                 'Regenerate the report for a full per-person breakdown.</div>'
             ) if is_placeholder else ''
+            # Prepare open attr for the next step.
             open_attr = ' open' if i == 0 else ''
             person_cards.append(f"""
                 <details class="person-card person-details"{open_attr}>
@@ -7436,6 +8419,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
                 </details>
             """)
 
+        # Return the prepared result to the caller.
         return f"""
             <section class="section section-expanded">
                 <h2 class="section-title section-title-expanded">
@@ -7453,10 +8437,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             </section>
         """
 
+    # Section: run the generate recommendations section workflow with clear inputs and outputs.
     def _generate_recommendations_section(self, nlp_analysis: Dict[str, Any]) -> str:
         """Generate recommendations HTML section."""
+        # Prepare recommendations for the next step.
         recommendations = self._ensure_list_of_strings(nlp_analysis.get('suggested_actions', []))
         if not recommendations:
+            # Return the prepared result to the caller.
             return ""
 
         items = "".join([
@@ -7472,11 +8459,13 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             </div>
         """
 
+    # Section: run the format risk item workflow with clear inputs and outputs.
     def _format_risk_item(self, risk_text: str) -> str:
         """
         Format a risk item with visual likelihood badge.
         Parses 'Likelihood: High/Medium/Low' from the text.
         """
+        # Prepare likelihood for the next step.
         likelihood = 'REVIEW_REQUIRED'
         risk_desc = risk_text
 
@@ -7493,15 +8482,18 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             if risk_desc.endswith(','): risk_desc = risk_desc[:-1]
 
         # Determine badge class (case-insensitive)
+        # Prepare lik lower for the next step.
         lik_lower = likelihood.lower()
         badge_class = 'likelihood-high'  # Default for safety risks
         if 'high' in lik_lower:
+            # Prepare badge class for the next step.
             badge_class = 'likelihood-high'
         elif 'medium' in lik_lower:
             badge_class = 'likelihood-medium'
         elif 'low' in lik_lower:
             badge_class = 'likelihood-low'
 
+        # Return the prepared result to the caller.
         return f"""
             <div class="risk-item">
                 <div class="risk-main">
@@ -7522,6 +8514,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             </div>
         """
 
+    # Section: run the generate pdf report workflow with clear inputs and outputs.
     def _generate_pdf_report(self, html_path: Path, report_id: str) -> Optional[Path]:
         """
         Generate PDF from HTML report (to be implemented).
@@ -7530,6 +8523,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
             Path to PDF report or None if failed
         """
         # Will use WeasyPrint or ReportLab
+        # Prepare pdf path for the next step.
         pdf_path = self.reports_dir / f'violation_{report_id}.pdf'
         logger.info(f"PDF report path: {pdf_path}")
         return pdf_path
@@ -7542,6 +8536,7 @@ Use missing PPE phrase where needed: {missing_phrase}."""
 if __name__ == '__main__':
     import sys
     from pathlib import Path
+    # Trigger the side effect required for this stage.
     sys.path.insert(0, str(Path(__file__).parent.parent.parent.absolute()))
     from config import OLLAMA_CONFIG, RAG_CONFIG, REPORT_CONFIG, BRAND_COLORS, REPORTS_DIR, VIOLATIONS_DIR
 
@@ -7551,6 +8546,7 @@ if __name__ == '__main__':
     )
 
     print("=" * 70)
+    # Trigger the side effect required for this stage.
     print("REPORT GENERATOR TEST")
     print("=" * 70)
 
@@ -7565,6 +8561,7 @@ if __name__ == '__main__':
     }
 
     # Create generator
+    # Prepare generator for the next step.
     generator = ReportGenerator(config)
 
     print(f"\n[OK] Report Generator initialized")
@@ -7575,11 +8572,13 @@ if __name__ == '__main__':
     print(f"Report format: {generator.format}")
 
     # Test RAG
+    # Trigger the side effect required for this stage.
     print("\n--- Testing RAG ---")
     test_desc = "worker fell from ladder without safety harness"
     similar = generator._find_similar_incidents(test_desc, 2)
     print(f"Similar incidents found: {len(similar)}")
     if similar:
+        # Trigger the side effect required for this stage.
         print(f"First incident keywords: {similar[0].get('Keywords', 'N/A')[:100]}...")
 
     print("\n[OK] All tests completed!")

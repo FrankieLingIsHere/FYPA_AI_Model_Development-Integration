@@ -1,8 +1,10 @@
+# Readability: Test setup: document the contract this file protects.
 import os
 import sys
 from pathlib import Path
 
 
+# Prepare root for the next step.
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -12,6 +14,7 @@ os.environ.setdefault("STARTUP_MODEL_WARMUP_ENABLED", "false")
 import casm_app
 
 
+# Section: run the test report severity uses config for single ppe violations workflow with clear inputs and outputs.
 def test_report_severity_uses_config_for_single_ppe_violations():
     assert casm_app._classify_violation_severity(violation_types=["NO-Hardhat"]) == "HIGH"
     assert casm_app._classify_violation_severity(violation_types=["NO-Safety Vest"]) == "HIGH"
@@ -20,6 +23,7 @@ def test_report_severity_uses_config_for_single_ppe_violations():
     assert casm_app._classify_violation_severity(violation_types=["NO-Safety Shoes"]) == "MEDIUM"
 
 
+# Section: run the test report severity uses environment context for ppe risk workflow with clear inputs and outputs.
 def test_report_severity_uses_environment_context_for_ppe_risk():
     assert casm_app._classify_violation_severity(
         violation_types=["NO-Safety Vest"],
@@ -51,6 +55,7 @@ def test_report_severity_uses_environment_context_for_ppe_risk():
     ) == "HIGH"
 
 
+# Section: run the test report severity escalates medium ppe only when matching hazard exists workflow with clear inputs and outputs.
 def test_report_severity_escalates_medium_ppe_only_when_matching_hazard_exists():
     assert casm_app._classify_violation_severity(
         violation_types=["NO-Mask"],
@@ -90,6 +95,7 @@ def test_report_severity_escalates_medium_ppe_only_when_matching_hazard_exists()
     ) == "MEDIUM"
 
 
+# Section: run the test removed goggles class is ignored by active violation taxonomy workflow with clear inputs and outputs.
 def test_removed_goggles_class_is_ignored_by_active_violation_taxonomy():
     assert casm_app._is_violation_label("NO-Goggles") is False
     assert casm_app._normalize_violation_type_label("NO-Goggles") == ""
@@ -99,6 +105,7 @@ def test_removed_goggles_class_is_ignored_by_active_violation_taxonomy():
     ) == "LOW"
 
 
+# Section: run the test report severity uses detection and summary fallbacks workflow with clear inputs and outputs.
 def test_report_severity_uses_detection_and_summary_fallbacks():
     assert casm_app._classify_violation_severity(
         detections=[{"class_name": "Person"}, {"class_name": "NO-Mask"}],
@@ -110,6 +117,7 @@ def test_report_severity_uses_detection_and_summary_fallbacks():
     ) == "HIGH"
 
 
+# Section: run the test multiple medium only violations escalate but generic count does not default high workflow with clear inputs and outputs.
 def test_multiple_medium_only_violations_escalate_but_generic_count_does_not_default_high():
     assert casm_app._classify_violation_severity(
         violation_types=["NO-Mask", "NO-Gloves", "NO-Safety Shoes"],

@@ -5,6 +5,7 @@ Supabase Database Manager
 Handles database operations with Supabase Postgres.
 Manages violations in detection_events, violations, and flood_logs tables.
 """
+# Readability: Backend core: coordinate detection, persistence, and report workflow concerns.
 
 import logging
 import os
@@ -20,6 +21,7 @@ import psycopg2
 from psycopg2 import extensions
 from psycopg2.extras import RealDictCursor, Json
 
+# Prepare logger for the next step.
 logger = logging.getLogger(__name__)
 
 _LIST_DETECTION_DATA_SQL = """
@@ -46,6 +48,7 @@ END AS detection_data
 """
 
 
+# Section: group supabase database manager state and behaviour in one readable unit.
 class SupabaseDatabaseManager:
     """
     Manages database operations with Supabase Postgres.
@@ -56,6 +59,7 @@ class SupabaseDatabaseManager:
     - flood_logs: System event logging
     """
     
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, db_url: str, connect_timeout: Optional[int] = None):
         """
         Initialize Supabase Database Manager.
@@ -63,6 +67,7 @@ class SupabaseDatabaseManager:
         Args:
             db_url: Postgres connection URL (from Supabase dashboard)
         """
+        # Prepare db url for the next step.
         self.db_url = db_url
         self.connect_timeout = int(connect_timeout if connect_timeout is not None else os.getenv('SUPABASE_DB_CONNECT_TIMEOUT_SECONDS', '10'))
         self.conn = None
@@ -71,15 +76,19 @@ class SupabaseDatabaseManager:
         self._reconnect_retry_after_epoch = 0.0
         
         try:
+            # Trigger the side effect required for this stage.
             self._connect()
             logger.info("Supabase Database Manager initialized")
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
             raise
     
+    # Section: run the connect workflow with clear inputs and outputs.
     def _connect(self):
         """Establish database connection."""
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare conn for the next step.
             self.conn = psycopg2.connect(
                 self.db_url,
                 cursor_factory=RealDictCursor,
@@ -93,12 +102,15 @@ class SupabaseDatabaseManager:
             _stmt_ms = max(1000, int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '8000')))
             _lock_ms = max(500, int(os.getenv('SUPABASE_DB_LOCK_TIMEOUT_MS', '3000')))
             try:
+                # Open the managed resource only for the block that needs it.
                 with self.conn.cursor() as _cur:
+                    # Trigger the side effect required for this stage.
                     _cur.execute("SET statement_timeout = %s", (_stmt_ms,))
                     _cur.execute("SET lock_timeout = %s", (_lock_ms,))
                 self.conn.commit()
             except Exception:
                 pass  # Non-fatal: some PG editions may reject SET before a tx
+            # Prepare reconnect retry after epoch for the next step.
             self._reconnect_retry_after_epoch = 0.0
             logger.info(f"Connected to Supabase Postgres (connect_timeout={self.connect_timeout}s, stmt_timeout={_stmt_ms}ms)")
         except Exception as e:
@@ -106,59 +118,82 @@ class SupabaseDatabaseManager:
             logger.error(f"Failed to connect to database: {e}")
             raise
     
+    # Section: run the ensure connection workflow with clear inputs and outputs.
     def _ensure_connection(self):
         """Ensure database connection is active."""
+        # Choose the correct branch before the workflow continues.
         if self.conn is None or self.conn.closed:
+            # Prepare now epoch for the next step.
             now_epoch = time.time()
             if now_epoch < float(self._reconnect_retry_after_epoch or 0.0):
+                # Prepare remaining for the next step.
                 remaining = max(0, int(self._reconnect_retry_after_epoch - now_epoch))
                 raise ConnectionError(f"Database reconnect backoff active ({remaining}s remaining)")
             logger.warning("Database connection lost, reconnecting...")
             self._connect()
 
+    # Section: run the safe rollback workflow with clear inputs and outputs.
     def _safe_rollback(self) -> None:
         """Rollback current transaction if connection is still usable."""
+        # Prepare lock for the next step.
         lock = getattr(self, '_operation_lock', None)
         if lock is not None:
+            # Open the managed resource only for the block that needs it.
             with lock:
+                # Trigger the side effect required for this stage.
                 self._safe_rollback_unlocked()
             return
 
         self._safe_rollback_unlocked()
 
+    # Section: run the safe rollback unlocked workflow with clear inputs and outputs.
     def _safe_rollback_unlocked(self) -> None:
         """Rollback current transaction without acquiring the operation lock."""
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Choose the correct branch before the workflow continues.
             if self.conn is not None and not self.conn.closed:
+                # Trigger the side effect required for this stage.
                 self.conn.rollback()
         except Exception:
             pass
 
+    # Section: run the cleanup transaction state workflow with clear inputs and outputs.
     def _cleanup_transaction_state(self) -> None:
         """Leave the shared psycopg2 connection out of any open/aborted transaction."""
         lock = getattr(self, '_operation_lock', None)
+        # Choose the correct branch before the workflow continues.
         if lock is not None:
+            # Open the managed resource only for the block that needs it.
             with lock:
+                # Trigger the side effect required for this stage.
                 self._cleanup_transaction_state_unlocked()
             return
 
         self._cleanup_transaction_state_unlocked()
 
+    # Section: run the cleanup transaction state unlocked workflow with clear inputs and outputs.
     def _cleanup_transaction_state_unlocked(self) -> None:
         """Leave the shared psycopg2 connection out of any open tx without locking."""
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Choose the correct branch before the workflow continues.
             if self.conn is None or self.conn.closed:
+                # Return the prepared result to the caller.
                 return
             if self.conn.get_transaction_status() != extensions.TRANSACTION_STATUS_IDLE:
                 self.conn.rollback()
         except Exception:
             pass
 
+    # Section: run the is connection failure workflow with clear inputs and outputs.
     @staticmethod
     def _is_connection_failure(raw_error: Any) -> bool:
         """Return True when an error indicates network/connection loss."""
+        # Prepare normalized for the next step.
         normalized = str(raw_error or '').strip().lower()
         if not normalized:
+            # Return the prepared result to the caller.
             return False
 
         markers = (
@@ -179,43 +214,55 @@ class SupabaseDatabaseManager:
             'ssl syscall error',
             'eof detected',
         )
+        # Return the prepared result to the caller.
         return any(marker in normalized for marker in markers)
 
+    # Section: run the raise if connection failure workflow with clear inputs and outputs.
     def _raise_if_connection_failure(self, raw_error: Any, context: str) -> None:
         """Raise ConnectionError and arm reconnect backoff for transport-level failures."""
         if not self._is_connection_failure(raw_error):
+            # Return the prepared result to the caller.
             return
 
         try:
             if self.conn is not None and not self.conn.closed:
+                # Trigger the side effect required for this stage.
                 self.conn.close()
         except Exception:
             pass
 
+        # Prepare conn for the next step.
         self.conn = None
         self._reconnect_retry_after_epoch = time.time() + float(self.reconnect_backoff_seconds)
         wrapped = ConnectionError(f"{context}: {raw_error}")
         if isinstance(raw_error, Exception):
+            # Surface the failure with enough context for the caller.
             raise wrapped from raw_error
         raise wrapped
 
+    # Section: run the is unique constraint violation workflow with clear inputs and outputs.
     @staticmethod
     def _is_unique_constraint_violation(raw_error: Any) -> bool:
         """True when Postgres reports duplicate-key unique-constraint violation."""
+        # Choose the correct branch before the workflow continues.
         if str(getattr(raw_error, 'pgcode', '') or '').strip() == '23505':
             return True
 
         normalized = str(raw_error or '').strip().lower()
         if not normalized:
+            # Return the prepared result to the caller.
             return False
         return 'duplicate key value violates unique constraint' in normalized
 
+    # Section: run the get existing detection event report id workflow with clear inputs and outputs.
     def _get_existing_detection_event_report_id(self, report_id: str) -> Optional[str]:
         """Fetch existing detection-event report_id for idempotent insert retries."""
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
 
         try:
             with self.conn.cursor() as cur:
+                # Trigger the side effect required for this stage.
                 cur.execute(
                     """
                     SELECT report_id
@@ -225,9 +272,11 @@ class SupabaseDatabaseManager:
                     """,
                     (report_id,),
                 )
+                # Prepare row for the next step.
                 row = cur.fetchone()
                 return str((row or {}).get('report_id') or '') if row else None
         except Exception as lookup_error:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(
                 lookup_error,
@@ -235,12 +284,16 @@ class SupabaseDatabaseManager:
             )
             return None
 
+    # Section: run the get existing violation id workflow with clear inputs and outputs.
     def _get_existing_violation_id(self, report_id: str) -> Optional[str]:
         """Fetch existing violations.id for idempotent insert retries."""
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
 
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Trigger the side effect required for this stage.
                 cur.execute(
                     """
                     SELECT id
@@ -250,9 +303,11 @@ class SupabaseDatabaseManager:
                     """,
                     (report_id,),
                 )
+                # Prepare row for the next step.
                 row = cur.fetchone()
                 return str((row or {}).get('id') or '') if row else None
         except Exception as lookup_error:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(
                 lookup_error,
@@ -260,19 +315,25 @@ class SupabaseDatabaseManager:
             )
             return None
 
+    # Section: run the normalize device id workflow with clear inputs and outputs.
     def _normalize_device_id(self, device_id: Optional[str]) -> Optional[str]:
         """Normalize and validate camera device IDs before DB writes."""
+        # Prepare normalized for the next step.
         normalized = str(device_id or '').strip()
         if not normalized:
+            # Return the prepared result to the caller.
             return None
         if not re.fullmatch(r'[A-Za-z0-9._:-]{1,120}', normalized):
             return None
         return normalized
 
+    # Section: run the upsert device presence workflow with clear inputs and outputs.
     def _upsert_device_presence(self, device_id: str, status: str = 'active') -> None:
         """Best-effort heartbeat into public.devices for known camera device IDs."""
+        # Prepare normalized device id for the next step.
         normalized_device_id = self._normalize_device_id(device_id)
         if not normalized_device_id:
+            # Return the prepared result to the caller.
             return
 
         normalized_status = str(status or 'active').strip().lower()
@@ -281,8 +342,11 @@ class SupabaseDatabaseManager:
 
         self._ensure_connection()
 
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Trigger the side effect required for this stage.
                 cur.execute(
                     """
                     INSERT INTO public.devices (device_id, name, status, last_seen, config)
@@ -301,15 +365,19 @@ class SupabaseDatabaseManager:
                     ),
                 )
 
+            # Trigger the side effect required for this stage.
             self.conn.commit()
         except Exception as device_err:
             self.conn.rollback()
             logger.debug(f"Could not upsert device presence for {normalized_device_id}: {device_err}")
     
+    # Section: run the close workflow with clear inputs and outputs.
     def close(self):
         """Close database connection."""
+        # Choose the correct branch before the workflow continues.
         if self.conn and not self.conn.closed:
             self.conn.close()
+            # Trigger the side effect required for this stage.
             logger.info("Database connection closed")
     
     # =========================================================================
@@ -341,12 +409,14 @@ class SupabaseDatabaseManager:
         Returns:
             Report ID if successful, None otherwise
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         normalized_device_id = self._normalize_device_id(device_id)
         insert_attempts = []
 
         if normalized_device_id:
+            # Trigger the side effect required for this stage.
             insert_attempts.append((
                 """
                 INSERT INTO public.detection_events
@@ -356,6 +426,7 @@ class SupabaseDatabaseManager:
                 """,
                 (report_id, timestamp, normalized_device_id, person_count, violation_count, severity, status),
             ))
+            # Trigger the side effect required for this stage.
             insert_attempts.append((
                 """
                 INSERT INTO public.detection_events
@@ -366,6 +437,7 @@ class SupabaseDatabaseManager:
                 (report_id, timestamp, normalized_device_id, person_count, violation_count, severity),
             ))
 
+        # Trigger the side effect required for this stage.
         insert_attempts.append((
             """
             INSERT INTO public.detection_events
@@ -375,6 +447,7 @@ class SupabaseDatabaseManager:
             """,
             (report_id, timestamp, person_count, violation_count, severity, status),
         ))
+        # Trigger the side effect required for this stage.
         insert_attempts.append((
             """
             INSERT INTO public.detection_events
@@ -385,11 +458,15 @@ class SupabaseDatabaseManager:
             (report_id, timestamp, person_count, violation_count, severity),
         ))
 
+        # Prepare result for the next step.
         result = None
         last_error = None
         for query, params in insert_attempts:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Open the managed resource only for the block that needs it.
                 with self.conn.cursor() as cur:
+                    # Trigger the side effect required for this stage.
                     cur.execute(query, params)
                     result = cur.fetchone()
                 self.conn.commit()
@@ -399,15 +476,19 @@ class SupabaseDatabaseManager:
                 if self._is_unique_constraint_violation(attempt_error):
                     existing_report_id = self._get_existing_detection_event_report_id(report_id)
                     if existing_report_id:
+                        # Trigger the side effect required for this stage.
                         logger.info(
                             f"Detection event already exists for {report_id}; "
                             "using existing row"
                         )
                         return existing_report_id
+                # Prepare last error for the next step.
                 last_error = attempt_error
                 result = None
 
+        # Choose the correct branch before the workflow continues.
         if not result:
+            # Trigger the side effect required for this stage.
             self._raise_if_connection_failure(last_error, 'insert_detection_event')
             logger.error(f"Failed to insert detection event: {last_error}")
             return None
@@ -419,8 +500,10 @@ class SupabaseDatabaseManager:
             f"Inserted detection event: {report_id} "
             f"(status: {status}, device_id: {normalized_device_id or 'n/a'})"
         )
+        # Return the prepared result to the caller.
         return result['report_id'] if result else None
     
+    # Section: run the update detection status workflow with clear inputs and outputs.
     def update_detection_status(
         self,
         report_id: str,
@@ -438,11 +521,15 @@ class SupabaseDatabaseManager:
         Returns:
             True if successful, False otherwise
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Choose the correct branch before the workflow continues.
                 if error_message:
+                    # Trigger the side effect required for this stage.
                     cur.execute("""
                         UPDATE public.detection_events 
                         SET status = %s, error_message = %s, updated_at = NOW()
@@ -451,6 +538,7 @@ class SupabaseDatabaseManager:
                 else:
                     # Clear stale error_message when transitioning to healthy/in-progress states.
                     if str(status).lower() in ('pending', 'generating', 'completed', 'partial', 'skipped'):
+                        # Trigger the side effect required for this stage.
                         cur.execute("""
                             UPDATE public.detection_events 
                             SET status = %s, error_message = NULL, updated_at = NOW()
@@ -463,16 +551,19 @@ class SupabaseDatabaseManager:
                             WHERE report_id = %s
                         """, (status, report_id))
                 
+                # Trigger the side effect required for this stage.
                 self.conn.commit()
                 logger.info(f"Updated detection status: {report_id} -> {status}")
                 return True
                 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'update_detection_status')
             logger.warning(f"Could not update detection status (column may not exist): {e}")
             return False
     
+    # Section: run the update detection event workflow with clear inputs and outputs.
     def update_detection_event(
         self,
         report_id: str,
@@ -494,13 +585,16 @@ class SupabaseDatabaseManager:
         Returns:
             True if successful, False otherwise
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         try:
+            # Prepare updates for the next step.
             updates = []
             params = []
             
             if person_count is not None:
+                # Trigger the side effect required for this stage.
                 updates.append("person_count = %s")
                 params.append(person_count)
             
@@ -508,8 +602,10 @@ class SupabaseDatabaseManager:
                 updates.append("violation_count = %s")
                 params.append(violation_count)
             
+            # Choose the correct branch before the workflow continues.
             if severity is not None:
                 updates.append("severity = %s")
+                # Trigger the side effect required for this stage.
                 params.append(severity)
             
             if status is not None:
@@ -519,10 +615,12 @@ class SupabaseDatabaseManager:
             if not updates:
                 return False
             
+            # Trigger the side effect required for this stage.
             updates.append("updated_at = NOW()")
             params.append(report_id)
             
             with self.conn.cursor() as cur:
+                # Prepare query for the next step.
                 query = f"""
                     UPDATE public.detection_events
                     SET {', '.join(updates)}
@@ -532,14 +630,17 @@ class SupabaseDatabaseManager:
                 self.conn.commit()
                 
                 logger.info(f"Updated detection event: {report_id}")
+                # Return the prepared result to the caller.
                 return cur.rowcount > 0
                 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'update_detection_event')
             logger.error(f"Failed to update detection event: {e}")
             return False
     
+    # Section: run the fix stuck reports workflow with clear inputs and outputs.
     def fix_stuck_reports(self) -> int:
         """
         Fix reports stuck in pending/generating status by checking actual data.
@@ -556,6 +657,7 @@ class SupabaseDatabaseManager:
         Returns:
             Number of reports fixed
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         fixed_count = 0
         statement_timeout_ms = int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '10000'))
@@ -568,8 +670,10 @@ class SupabaseDatabaseManager:
         stuck_age_minutes = max(5, int(os.getenv('STUCK_REPORT_AGE_MINUTES', '20') or 20))
 
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
                 # Avoid blocking startup indefinitely on locks/slow queries.
+                # Trigger the side effect required for this stage.
                 cur.execute("SET LOCAL statement_timeout = %s", (statement_timeout_ms,))
                 cur.execute("SET LOCAL lock_timeout = %s", (lock_timeout_ms,))
 
@@ -579,8 +683,10 @@ class SupabaseDatabaseManager:
                     "SELECT pg_try_advisory_xact_lock(%s, %s) AS lock_acquired",
                     (4240006, 260507),
                 )
+                # Prepare lock row for the next step.
                 lock_row = cur.fetchone() or {}
                 if not bool(lock_row.get('lock_acquired')):
+                    # Trigger the side effect required for this stage.
                     self.conn.rollback()
                     logger.info("Skipped stuck report sweep because another backend holds the repair lock")
                     return 0
@@ -638,9 +744,11 @@ class SupabaseDatabaseManager:
                     (stuck_age_minutes, stuck_age_minutes, stuck_age_minutes, sweep_limit),
                 )
 
+                # Prepare updated rows for the next step.
                 updated_rows = cur.fetchall()
                 fixed_count = len(updated_rows)
                 for row in updated_rows[:20]:
+                    # Trigger the side effect required for this stage.
                     logger.info(
                         f"Fixed stuck report {row['report_id']}: "
                         f"{row['old_status']} -> {row['new_status']}"
@@ -648,18 +756,22 @@ class SupabaseDatabaseManager:
                 if fixed_count > 20:
                     logger.info(f"Fixed {fixed_count - 20} additional stuck reports")
 
+                # Trigger the side effect required for this stage.
                 self.conn.commit()
                 logger.info(f"Fixed {fixed_count} stuck reports")
 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'fix_stuck_reports')
             logger.warning(f"Could not fix stuck reports: {e}")
         finally:
             self._cleanup_transaction_state()
 
+        # Return the prepared result to the caller.
         return fixed_count
 
+    # Section: run the get cloud pending recovery candidates workflow with clear inputs and outputs.
     def get_cloud_pending_recovery_candidates(
         self,
         min_age_minutes: int = 20,
@@ -680,13 +792,16 @@ class SupabaseDatabaseManager:
             List of dicts with keys: report_id, original_image_key,
             annotated_image_key, detection_data, timestamp, status.
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         statement_timeout_ms = int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '10000'))
         lock_timeout_ms = int(os.getenv('SUPABASE_DB_LOCK_TIMEOUT_MS', '5000'))
         safe_limit = max(1, min(50, int(limit)))
 
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Trigger the side effect required for this stage.
                 cur.execute("SET LOCAL statement_timeout = %s", (statement_timeout_ms,))
                 cur.execute("SET LOCAL lock_timeout = %s", (lock_timeout_ms,))
                 cur.execute("""
@@ -738,14 +853,17 @@ class SupabaseDatabaseManager:
                     ORDER BY de.timestamp ASC
                     LIMIT %s
                 """, (min_age_minutes, safe_limit))
+                # Prepare rows for the next step.
                 rows = cur.fetchall()
                 return [dict(row) for row in rows]
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'get_cloud_pending_recovery_candidates')
             logger.warning(f"get_cloud_pending_recovery_candidates failed: {e}")
             return []
     
+    # Section: run the get detection event workflow with clear inputs and outputs.
     def get_detection_event(self, report_id: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve a detection event by report_id.
@@ -756,10 +874,13 @@ class SupabaseDatabaseManager:
         Returns:
             Detection event dictionary or None
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Trigger the side effect required for this stage.
                 cur.execute("""
                     SELECT
                         report_id,
@@ -777,15 +898,18 @@ class SupabaseDatabaseManager:
                     LIMIT 1
                 """, (report_id,))
                 
+                # Prepare result for the next step.
                 result = cur.fetchone()
                 return dict(result) if result else None
                 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, f'get_detection_event:{report_id}')
             logger.error(f"Failed to get detection event {report_id}: {e}")
             return None
 
+    # Section: run the get report status bundle workflow with clear inputs and outputs.
     def get_report_status_bundle(self, report_id: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve detection-event and violation status fields in a single query.
@@ -793,11 +917,14 @@ class SupabaseDatabaseManager:
         This lightweight bundle powers report status/view endpoints that would
         otherwise issue two sequential queries for the same report_id.
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         _stmt_ms = max(1000, int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '8000')))
 
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Trigger the side effect required for this stage.
                 cur.execute("SET LOCAL statement_timeout = %s", (_stmt_ms,))
                 cur.execute("SET LOCAL lock_timeout = %s", (max(500, _stmt_ms // 2),))
                 cur.execute("""
@@ -827,15 +954,18 @@ class SupabaseDatabaseManager:
                     LIMIT 1
                 """, (report_id,))
 
+                # Prepare result for the next step.
                 result = cur.fetchone()
                 return dict(result) if result else None
 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, f'get_report_status_bundle:{report_id}')
             logger.error(f"Failed to get report status bundle {report_id}: {e}")
             return None
     
+    # Section: run the get recent detection events workflow with clear inputs and outputs.
     def get_recent_detection_events(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Retrieve recent detection events.
@@ -846,10 +976,13 @@ class SupabaseDatabaseManager:
         Returns:
             List of detection event dictionaries
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         _stmt_ms = max(1000, int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '8000')))
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Trigger the side effect required for this stage.
                 cur.execute("SET LOCAL statement_timeout = %s", (_stmt_ms,))
                 cur.execute("""
                     SELECT
@@ -868,15 +1001,18 @@ class SupabaseDatabaseManager:
                     LIMIT %s
                 """, (limit,))
                 
+                # Prepare results for the next step.
                 results = cur.fetchall()
                 return [dict(row) for row in results]
                 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'get_recent_detection_events')
             logger.error(f"Failed to get recent detection events: {e}")
             return []
     
+    # Section: run the get all violations with status workflow with clear inputs and outputs.
     def get_all_violations_with_status(self, limit: int = 100) -> List[Dict[str, Any]]:
         """
         Retrieve ALL detection events with their violation data (including pending).
@@ -894,11 +1030,15 @@ class SupabaseDatabaseManager:
         Returns:
             List of violation dictionaries with status
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         _stmt_ms = max(1000, int(os.getenv('SUPABASE_DB_STATEMENT_TIMEOUT_MS', '8000')))
         try:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Open the managed resource only for the block that needs it.
                 with self.conn.cursor() as cur:
+                    # Trigger the side effect required for this stage.
                     cur.execute("SET LOCAL statement_timeout = %s", (_stmt_ms,))
                     cur.execute("SET LOCAL lock_timeout = %s", (max(500, _stmt_ms // 2),))
                     cur.execute(f"""
@@ -924,15 +1064,18 @@ class SupabaseDatabaseManager:
                         ORDER BY de.timestamp DESC
                         LIMIT %s
                     """, (limit,))
+                    # Prepare results for the next step.
                     results = cur.fetchall()
                     return [dict(row) for row in results]
             except Exception as primary_query_error:
+                # Trigger the side effect required for this stage.
                 self._safe_rollback()
                 self._raise_if_connection_failure(
                     primary_query_error,
                     'get_all_violations_with_status.primary_query'
                 )
                 with self.conn.cursor() as fallback_cur:
+                    # Trigger the side effect required for this stage.
                     fallback_cur.execute("SET LOCAL statement_timeout = %s", (_stmt_ms,))
                     fallback_cur.execute(f"""
                         SELECT 
@@ -957,10 +1100,12 @@ class SupabaseDatabaseManager:
                         ORDER BY de.timestamp DESC
                         LIMIT %s
                     """, (limit,))
+                    # Prepare results for the next step.
                     results = fallback_cur.fetchall()
                     return [dict(row) for row in results]
 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'get_all_violations_with_status')
             logger.error(f"Failed to get violations with status: {e}")
@@ -1001,12 +1146,14 @@ class SupabaseDatabaseManager:
         Returns:
             UUID of inserted violation or None
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         normalized_device_id = self._normalize_device_id(device_id)
 
         insert_attempts = []
         if normalized_device_id:
+            # Trigger the side effect required for this stage.
             insert_attempts.append((
                 """
                 INSERT INTO public.violations
@@ -1029,6 +1176,7 @@ class SupabaseDatabaseManager:
                 ),
             ))
 
+        # Trigger the side effect required for this stage.
         insert_attempts.append((
             """
             INSERT INTO public.violations
@@ -1050,11 +1198,15 @@ class SupabaseDatabaseManager:
             ),
         ))
 
+        # Prepare result for the next step.
         result = None
         last_error = None
         for query, params in insert_attempts:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Open the managed resource only for the block that needs it.
                 with self.conn.cursor() as cur:
+                    # Trigger the side effect required for this stage.
                     cur.execute(query, params)
                     result = cur.fetchone()
                 self.conn.commit()
@@ -1064,16 +1216,21 @@ class SupabaseDatabaseManager:
                 if self._is_unique_constraint_violation(attempt_error):
                     existing_violation_id = self._get_existing_violation_id(report_id)
                     if existing_violation_id:
+                        # Trigger the side effect required for this stage.
                         logger.info(
                             f"Violation already exists for {report_id}; using existing row"
                         )
                         if normalized_device_id:
+                            # Trigger the side effect required for this stage.
                             self._upsert_device_presence(normalized_device_id)
                         return existing_violation_id
+                # Prepare last error for the next step.
                 last_error = attempt_error
                 result = None
 
+        # Choose the correct branch before the workflow continues.
         if not result:
+            # Trigger the side effect required for this stage.
             self._raise_if_connection_failure(last_error, 'insert_violation')
             logger.error(f"Failed to insert violation: {last_error}")
             return None
@@ -1085,8 +1242,10 @@ class SupabaseDatabaseManager:
             f"Inserted violation: {report_id} "
             f"(device_id: {normalized_device_id or 'n/a'})"
         )
+        # Return the prepared result to the caller.
         return str(result['id']) if result else None
     
+    # Section: run the get violation workflow with clear inputs and outputs.
     def get_violation(self, report_id: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve violation by report_id.
@@ -1097,10 +1256,13 @@ class SupabaseDatabaseManager:
         Returns:
             Violation dictionary or None
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Trigger the side effect required for this stage.
                 cur.execute("""
                     SELECT
                         v.id,
@@ -1128,15 +1290,18 @@ class SupabaseDatabaseManager:
                     LIMIT 1
                 """, (report_id,))
                 
+                # Prepare result for the next step.
                 result = cur.fetchone()
                 return dict(result) if result else None
                 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, f'get_violation:{report_id}')
             logger.error(f"Failed to get violation {report_id}: {e}")
             return None
     
+    # Section: run the get recent violations workflow with clear inputs and outputs.
     def get_recent_violations(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
         Retrieve recent violations with detection event data.
@@ -1147,10 +1312,13 @@ class SupabaseDatabaseManager:
         Returns:
             List of violation dictionaries
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Trigger the side effect required for this stage.
                 cur.execute("""
                     SELECT
                         v.id,
@@ -1178,15 +1346,18 @@ class SupabaseDatabaseManager:
                     LIMIT %s
                 """, (limit,))
                 
+                # Prepare results for the next step.
                 results = cur.fetchall()
                 return [dict(row) for row in results]
                 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'get_recent_violations')
             logger.error(f"Failed to get recent violations: {e}")
             return []
 
+    # Section: run the get recent violation refs workflow with clear inputs and outputs.
     def get_recent_violation_refs(
         self,
         limit: int = 100,
@@ -1199,12 +1370,16 @@ class SupabaseDatabaseManager:
         scripts can page through IDs without pulling every report's NLP and
         detection blobs through the pooler.
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         safe_limit = max(1, min(10000, int(limit or 100)))
 
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Choose the correct branch before the workflow continues.
                 if since is not None:
+                    # Trigger the side effect required for this stage.
                     cur.execute("""
                         SELECT de.report_id, de.timestamp
                         FROM public.detection_events de
@@ -1214,6 +1389,7 @@ class SupabaseDatabaseManager:
                         LIMIT %s
                     """, (since, safe_limit))
                 else:
+                    # Trigger the side effect required for this stage.
                     cur.execute("""
                         SELECT de.report_id, de.timestamp
                         FROM public.detection_events de
@@ -1222,15 +1398,18 @@ class SupabaseDatabaseManager:
                         LIMIT %s
                     """, (safe_limit,))
 
+                # Prepare results for the next step.
                 results = cur.fetchall()
                 return [dict(row) for row in results]
 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'get_recent_violation_refs')
             logger.error(f"Failed to get recent violation refs: {e}")
             return []
     
+    # Section: run the update violation storage keys workflow with clear inputs and outputs.
     def update_violation_storage_keys(
         self,
         report_id: str,
@@ -1252,13 +1431,16 @@ class SupabaseDatabaseManager:
         Returns:
             True if successful, False otherwise
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         try:
+            # Prepare updates for the next step.
             updates = []
             params = []
             
             if original_image_key is not None:
+                # Trigger the side effect required for this stage.
                 updates.append("original_image_key = %s")
                 params.append(original_image_key)
             
@@ -1266,8 +1448,10 @@ class SupabaseDatabaseManager:
                 updates.append("annotated_image_key = %s")
                 params.append(annotated_image_key)
             
+            # Choose the correct branch before the workflow continues.
             if report_html_key is not None:
                 updates.append("report_html_key = %s")
+                # Trigger the side effect required for this stage.
                 params.append(report_html_key)
             
             if report_pdf_key is not None:
@@ -1277,10 +1461,12 @@ class SupabaseDatabaseManager:
             if not updates:
                 return False
             
+            # Trigger the side effect required for this stage.
             updates.append("updated_at = NOW()")
             params.append(report_id)
             
             with self.conn.cursor() as cur:
+                # Prepare query for the next step.
                 query = f"""
                     UPDATE public.violations
                     SET {', '.join(updates)}
@@ -1290,14 +1476,17 @@ class SupabaseDatabaseManager:
                 self.conn.commit()
                 
                 logger.info(f"Updated storage keys for: {report_id}")
+                # Return the prepared result to the caller.
                 return cur.rowcount > 0
                 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'update_violation_storage_keys')
             logger.error(f"Failed to update storage keys: {e}")
             return False
     
+    # Section: run the update violation workflow with clear inputs and outputs.
     def update_violation(
         self,
         report_id: str,
@@ -1327,13 +1516,16 @@ class SupabaseDatabaseManager:
         Returns:
             True if successful, False otherwise
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         try:
+            # Prepare updates for the next step.
             updates = []
             params = []
             
             if violation_summary is not None:
+                # Trigger the side effect required for this stage.
                 updates.append("violation_summary = %s")
                 params.append(violation_summary)
             
@@ -1341,8 +1533,10 @@ class SupabaseDatabaseManager:
                 updates.append("caption = %s")
                 params.append(caption)
             
+            # Choose the correct branch before the workflow continues.
             if nlp_analysis is not None:
                 updates.append("nlp_analysis = %s")
+                # Trigger the side effect required for this stage.
                 params.append(Json(nlp_analysis))
             
             if detection_data is not None:
@@ -1353,7 +1547,9 @@ class SupabaseDatabaseManager:
                 updates.append("original_image_key = %s")
                 params.append(original_image_key)
             
+            # Choose the correct branch before the workflow continues.
             if annotated_image_key is not None:
+                # Trigger the side effect required for this stage.
                 updates.append("annotated_image_key = %s")
                 params.append(annotated_image_key)
             
@@ -1363,8 +1559,10 @@ class SupabaseDatabaseManager:
             
             if report_pdf_key is not None:
                 updates.append("report_pdf_key = %s")
+                # Trigger the side effect required for this stage.
                 params.append(report_pdf_key)
             
+            # Choose the correct branch before the workflow continues.
             if not updates:
                 return False
             
@@ -1372,6 +1570,7 @@ class SupabaseDatabaseManager:
             params.append(report_id)
             
             with self.conn.cursor() as cur:
+                # Prepare query for the next step.
                 query = f"""
                     UPDATE public.violations
                     SET {', '.join(updates)}
@@ -1381,14 +1580,17 @@ class SupabaseDatabaseManager:
                 self.conn.commit()
                 
                 logger.info(f"Updated violation: {report_id}")
+                # Return the prepared result to the caller.
                 return cur.rowcount > 0
                 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'update_violation')
             logger.error(f"Failed to update violation: {e}")
             return False
     
+    # Section: run the delete violation workflow with clear inputs and outputs.
     def delete_violation(self, report_id: str) -> bool:
         """
         Delete a violation and its detection event (cascade).
@@ -1399,11 +1601,14 @@ class SupabaseDatabaseManager:
         Returns:
             True if successful, False otherwise
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
                 # Delete detection event (cascade will delete violation)
+                # Trigger the side effect required for this stage.
                 cur.execute("""
                     DELETE FROM public.detection_events
                     WHERE report_id = %s
@@ -1414,6 +1619,7 @@ class SupabaseDatabaseManager:
                 return cur.rowcount > 0
                 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'delete_violation')
             logger.error(f"Failed to delete violation: {e}")
@@ -1444,12 +1650,14 @@ class SupabaseDatabaseManager:
         Returns:
             True if successful, False otherwise
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         normalized_device_id = self._normalize_device_id(device_id)
 
         insert_attempts = []
         if normalized_device_id:
+            # Trigger the side effect required for this stage.
             insert_attempts.append((
                 """
                 INSERT INTO public.flood_logs
@@ -1465,6 +1673,7 @@ class SupabaseDatabaseManager:
                 ),
             ))
 
+        # Trigger the side effect required for this stage.
         insert_attempts.append((
             """
             INSERT INTO public.flood_logs
@@ -1479,10 +1688,14 @@ class SupabaseDatabaseManager:
             ),
         ))
 
+        # Prepare last error for the next step.
         last_error = None
         for query, params in insert_attempts:
+            # Protect this step so expected failures can fall back cleanly.
             try:
+                # Open the managed resource only for the block that needs it.
                 with self.conn.cursor() as cur:
+                    # Trigger the side effect required for this stage.
                     cur.execute(query, params)
                 self.conn.commit()
                 logger.debug(
@@ -1491,21 +1704,26 @@ class SupabaseDatabaseManager:
                 )
                 if normalized_device_id:
                     self._upsert_device_presence(normalized_device_id)
+                # Return the prepared result to the caller.
                 return True
             except Exception as attempt_error:
                 self._safe_rollback()
                 last_error = attempt_error
 
+        # Trigger the side effect required for this stage.
         self._raise_if_connection_failure(last_error, 'log_event')
         logger.error(f"Failed to log event: {last_error}")
         return False
 
+    # Section: run the get device stats workflow with clear inputs and outputs.
     def get_device_stats(self, device_id: str) -> Dict[str, Any]:
         """Get aggregated status/severity counters for one camera device_id."""
         self._ensure_connection()
 
         normalized_device_id = self._normalize_device_id(device_id)
+        # Choose the correct branch before the workflow continues.
         if not normalized_device_id:
+            # Return the prepared result to the caller.
             return {
                 'device_id': str(device_id or '').strip(),
                 'total': 0,
@@ -1518,9 +1736,13 @@ class SupabaseDatabaseManager:
                 'error': 'Invalid device_id format',
             }
 
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Trigger the side effect required for this stage.
                     cur.execute(
                         """
                         SELECT
@@ -1537,12 +1759,14 @@ class SupabaseDatabaseManager:
                         (normalized_device_id,),
                     )
                 except Exception as primary_query_error:
+                    # Trigger the side effect required for this stage.
                     self._safe_rollback()
                     self._raise_if_connection_failure(
                         primary_query_error,
                         f'get_device_stats.primary_query:{normalized_device_id}'
                     )
                     with self.conn.cursor() as fallback_cur:
+                        # Trigger the side effect required for this stage.
                         fallback_cur.execute(
                             """
                             SELECT
@@ -1558,6 +1782,7 @@ class SupabaseDatabaseManager:
                             """,
                             (normalized_device_id,),
                         )
+                        # Prepare row for the next step.
                         row = fallback_cur.fetchone() or {}
                         return {
                             'device_id': normalized_device_id,
@@ -1570,6 +1795,7 @@ class SupabaseDatabaseManager:
                             'last_detection': row.get('last_detection').isoformat() if row.get('last_detection') else None,
                         }
 
+                # Prepare row for the next step.
                 row = cur.fetchone() or {}
                 return {
                     'device_id': normalized_device_id,
@@ -1582,6 +1808,7 @@ class SupabaseDatabaseManager:
                     'last_detection': row.get('last_detection').isoformat() if row.get('last_detection') else None,
                 }
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, f'get_device_stats:{normalized_device_id}')
             logger.error(f"Failed to get device stats for {normalized_device_id}: {e}")
@@ -1597,6 +1824,7 @@ class SupabaseDatabaseManager:
                 'error': str(e),
             }
     
+    # Section: run the get recent logs workflow with clear inputs and outputs.
     def get_recent_logs(self, limit: int = 50, event_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Retrieve recent event logs.
@@ -1608,11 +1836,15 @@ class SupabaseDatabaseManager:
         Returns:
             List of log dictionaries
         """
+        # Trigger the side effect required for this stage.
         self._ensure_connection()
         
         try:
+            # Open the managed resource only for the block that needs it.
             with self.conn.cursor() as cur:
+                # Choose the correct branch before the workflow continues.
                 if event_type:
+                    # Trigger the side effect required for this stage.
                     cur.execute("""
                         SELECT
                             id,
@@ -1630,6 +1862,7 @@ class SupabaseDatabaseManager:
                         LIMIT %s
                     """, (event_type, limit))
                 else:
+                    # Trigger the side effect required for this stage.
                     cur.execute("""
                         SELECT
                             id,
@@ -1646,26 +1879,33 @@ class SupabaseDatabaseManager:
                         LIMIT %s
                     """, (limit,))
                 
+                # Prepare results for the next step.
                 results = cur.fetchall()
                 return [dict(row) for row in results]
                 
         except Exception as e:
+            # Trigger the side effect required for this stage.
             self._safe_rollback()
             self._raise_if_connection_failure(e, 'get_recent_logs')
             logger.error(f"Failed to get recent logs: {e}")
             return []
 
 
+# Section: run the serialize db operation workflow with clear inputs and outputs.
 def _serialize_db_operation(method):
     """Serialize access to the shared psycopg2 connection and clean aborted tx state."""
+    # Section: run the wrapped workflow with clear inputs and outputs.
     @wraps(method)
     def _wrapped(self, *args, **kwargs):
+        # Prepare lock for the next step.
         lock = getattr(self, '_operation_lock', None)
         if lock is None:
+            # Return the prepared result to the caller.
             return method(self, *args, **kwargs)
 
         with lock:
             try:
+                # Return the prepared result to the caller.
                 return method(self, *args, **kwargs)
             except Exception:
                 self._safe_rollback()
@@ -1673,9 +1913,11 @@ def _serialize_db_operation(method):
             finally:
                 self._cleanup_transaction_state()
 
+    # Return the prepared result to the caller.
     return _wrapped
 
 
+# Process each item in this collection using the same rule set.
 for _db_method_name in (
     '_get_existing_detection_event_report_id',
     '_get_existing_violation_id',
@@ -1699,6 +1941,7 @@ for _db_method_name in (
     'get_device_stats',
     'get_recent_logs',
 ):
+    # Trigger the side effect required for this stage.
     setattr(
         SupabaseDatabaseManager,
         _db_method_name,
@@ -1720,6 +1963,7 @@ def create_db_manager_from_env() -> SupabaseDatabaseManager:
     Returns:
         SupabaseDatabaseManager instance
     """
+    # Prepare db url for the next step.
     db_url = os.getenv('SUPABASE_DB_URL')
 
     normalized = str(db_url or '').strip().lower()
@@ -1729,7 +1973,9 @@ def create_db_manager_from_env() -> SupabaseDatabaseManager:
         'example.supabase.co',
     )
 
+    # Choose the correct branch before the workflow continues.
     if not db_url or any(marker in normalized for marker in placeholder_markers):
+        # Surface the failure with enough context for the caller.
         raise ValueError("SUPABASE_DB_URL must be set to a real project connection string")
     
     connect_timeout = int(os.getenv('SUPABASE_DB_CONNECT_TIMEOUT_SECONDS', '10'))
@@ -1744,6 +1990,7 @@ if __name__ == '__main__':
     import sys
     from dotenv import load_dotenv
     
+    # Trigger the side effect required for this stage.
     logging.basicConfig(level=logging.INFO)
     
     # Load environment variables
@@ -1753,7 +2000,9 @@ if __name__ == '__main__':
     print("SUPABASE DATABASE MANAGER TEST")
     print("=" * 70)
     
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare manager for the next step.
         manager = create_db_manager_from_env()
         print(f"\n[OK] Database manager initialized")
         
@@ -1769,7 +2018,9 @@ if __name__ == '__main__':
             severity='HIGH'
         )
         
+        # Choose the correct branch before the workflow continues.
         if result:
+            # Trigger the side effect required for this stage.
             print(f"[OK] Inserted detection event: {result}")
             
             # Test violation
@@ -1782,16 +2033,20 @@ if __name__ == '__main__':
                 detection_data={"test": "detections"}
             )
             
+            # Choose the correct branch before the workflow continues.
             if violation_id:
+                # Trigger the side effect required for this stage.
                 print(f"[OK] Inserted violation: {violation_id}")
                 
                 # Test retrieval
                 print(f"\n--- Testing Retrieval ---")
                 violation = manager.get_violation(test_report_id)
                 if violation:
+                    # Trigger the side effect required for this stage.
                     print(f"[OK] Retrieved violation: {violation['report_id']}")
                 
                 # Test log
+                # Trigger the side effect required for this stage.
                 print(f"\n--- Testing Log ---")
                 manager.log_event('test', 'Test event', test_report_id, {'test': 'metadata'})
                 print(f"[OK] Logged event")
@@ -1801,6 +2056,7 @@ if __name__ == '__main__':
                 if manager.delete_violation(test_report_id):
                     print(f"[OK] Deleted test violation")
         
+        # Trigger the side effect required for this stage.
         manager.close()
         print("\n[OK] All tests passed!")
         
@@ -1810,4 +2066,5 @@ if __name__ == '__main__':
         traceback.print_exc()
         sys.exit(1)
     
+    # Trigger the side effect required for this stage.
     print("=" * 70)

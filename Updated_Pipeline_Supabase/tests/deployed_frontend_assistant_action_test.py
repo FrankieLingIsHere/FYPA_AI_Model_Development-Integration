@@ -1,3 +1,4 @@
+# Readability: Test setup: document the contract this file protects.
 import base64
 import csv
 import json
@@ -12,17 +13,21 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 
+# Prepare app url for the next step.
 APP_URL = os.environ.get("CASM_ASSISTANT_APP_URL", "http://127.0.0.1:5001").rstrip("/")
 STARTUP_WAIT_MS = int(os.environ.get("CASM_ASSISTANT_STARTUP_WAIT_MS", "120000"))
 ADMIN_USERNAME = os.environ.get("CASM_ASSISTANT_ADMIN_USERNAME", "")
 ADMIN_PASSWORD = os.environ.get("CASM_ASSISTANT_ADMIN_PASSWORD", "")
 
 
+# Section: run the fail workflow with clear inputs and outputs.
 def fail(message: str, code: int = 2) -> int:
+    # Trigger the side effect required for this stage.
     print(f"FAIL: assistant action-test issue: {message}")
     return code
 
 
+# Section: run the wait until ready workflow with clear inputs and outputs.
 def wait_until_ready(page):
     page.goto(f"{APP_URL}/", wait_until="domcontentloaded", timeout=90000)
     page.wait_for_selector("#assistantLauncher", state="visible", timeout=STARTUP_WAIT_MS)
@@ -30,11 +35,14 @@ def wait_until_ready(page):
         "() => !document.body.classList.contains('startup-loading')",
         timeout=STARTUP_WAIT_MS,
     )
+    # Trigger the side effect required for this stage.
     page.wait_for_timeout(900)
 
 
+# Section: run the assert boxes do not overlap workflow with clear inputs and outputs.
 def assert_boxes_do_not_overlap(a, b, label_a: str, label_b: str):
     if not a or not b:
+        # Surface the failure with enough context for the caller.
         raise RuntimeError(f"Missing bounding box for {label_a} or {label_b}")
     overlaps = not (
         a["x"] + a["width"] <= b["x"]
@@ -42,37 +50,47 @@ def assert_boxes_do_not_overlap(a, b, label_a: str, label_b: str):
         or a["y"] + a["height"] <= b["y"]
         or b["y"] + b["height"] <= a["y"]
     )
+    # Choose the correct branch before the workflow continues.
     if overlaps:
         raise RuntimeError(f"{label_a} overlaps {label_b}")
 
 
+# Section: run the read csv rows workflow with clear inputs and outputs.
 def read_csv_rows(path: Path):
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        # Return the prepared result to the caller.
         return list(csv.DictReader(handle))
 
 
+# Section: run the fetch json workflow with clear inputs and outputs.
 def fetch_json(path: str, *, username: str = "", password: str = ""):
+    # Prepare url for the next step.
     url = f"{APP_URL}{path}"
     request = Request(url, headers={"Accept": "application/json"})
     if username or password:
         token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
         request.add_header("Authorization", f"Basic {token}")
     with urlopen(request, timeout=30) as response:
+        # Prepare payload for the next step.
         payload = response.read().decode("utf-8")
     return json.loads(payload)
 
 
+# Section: run the choose reports export case workflow with clear inputs and outputs.
 def choose_reports_export_case():
+    # Prepare payload for the next step.
     payload = fetch_json("/api/violations?limit=200")
     if isinstance(payload, dict):
         rows = payload.get("violations") or payload.get("reports") or payload.get("items") or []
     elif isinstance(payload, list):
+        # Prepare rows for the next step.
         rows = payload
     else:
         rows = []
     if not isinstance(rows, list) or not rows:
         raise RuntimeError("Violations API did not return rows for assistant export testing")
 
+    # Prepare candidates for the next step.
     candidates = [
         (
             "export high local synced reports csv",
@@ -98,33 +116,43 @@ def choose_reports_export_case():
         ),
     ]
 
+    # Process each item in this collection using the same rule set.
     for prompt, predicate, expected in candidates:
+        # Prepare matched for the next step.
         matched = [row for row in rows if isinstance(row, dict) and predicate(row)]
         if matched:
+            # Return the prepared result to the caller.
             return prompt, expected, matched
 
     raise RuntimeError("Could not find a real assistant export filter case from the live violations API")
 
 
+# Section: run the build analytics prompt workflow with clear inputs and outputs.
 def build_analytics_prompt(export_expectations):
+    # Prepare source scope for the next step.
     source_scope = str(export_expectations.get("source_scope") or "").strip().lower()
     severity = str(export_expectations.get("severity") or "").strip().lower()
     parts = ["show analytics"]
     if severity:
+        # Trigger the side effect required for this stage.
         parts.append(f"for {severity}")
     else:
         parts.append("for")
     if source_scope == "synced_local":
         parts.append("local synced")
+    # Choose the correct branch before the workflow continues.
     elif source_scope:
         parts.append(source_scope.replace("_", " "))
     parts.append("this month")
     return " ".join(part for part in parts if part).replace("for this", "for this")
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main() -> int:
     try:
+        # Open the managed resource only for the block that needs it.
         with sync_playwright() as p:
+            # Prepare browser for the next step.
             browser = p.chromium.launch(headless=True)
             export_prompt, export_expectations, _source_rows = choose_reports_export_case()
             analytics_prompt = build_analytics_prompt(export_expectations)
@@ -134,6 +162,7 @@ def main() -> int:
             desktop_page.on("dialog", lambda dialog: dialog.accept())
             wait_until_ready(desktop_page)
 
+            # Prepare launcher for the next step.
             launcher = desktop_page.locator("#assistantLauncher")
             bell = desktop_page.locator("#notifBellHost")
             assistant_panel = desktop_page.locator("#assistantPanel")
@@ -144,15 +173,18 @@ def main() -> int:
             assert_boxes_do_not_overlap(launcher_box, bell_box, "assistant launcher", "notification bell")
             print("PASS: desktop launcher is visible and clear of the bell")
 
+            # Trigger the side effect required for this stage.
             launcher.click()
             assistant_panel.wait_for(state="visible", timeout=15000)
             desktop_page.wait_for_timeout(400)
             assistant_title = desktop_page.locator("#assistantTitle").inner_text()
             if "Mira" not in assistant_title:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError(f"Assistant title did not update to the chatbot name: {assistant_title}")
             panel_box = assistant_panel.bounding_box()
             if not panel_box or panel_box["width"] > 1120 or panel_box["height"] > 760:
                 raise RuntimeError(f"Assistant panel no longer fits the laptop viewport: {panel_box}")
+            # Choose the correct branch before the workflow continues.
             if panel_box["width"] < 1000 or panel_box["height"] < 700:
                 raise RuntimeError(f"Assistant panel has become too cramped for tutorial content: {panel_box}")
             placement = desktop_page.evaluate(
@@ -175,7 +207,9 @@ def main() -> int:
                 }
                 """
             )
+            # Choose the correct branch before the workflow continues.
             if not placement.get("ok"):
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError(f"Assistant panel is not centered in the desktop content dock: {placement}")
             if not desktop_page.locator("#assistantInput").is_visible():
                 raise RuntimeError("Assistant input is not visible after opening the panel")
@@ -184,8 +218,10 @@ def main() -> int:
             if not desktop_page.locator(".assistant-composer-guide").is_visible():
                 raise RuntimeError("Assistant composer guide is not visible")
             starter_mode = desktop_page.locator("#assistantPromptDeck [data-prompt-mode]").get_attribute("data-prompt-mode")
+            # Prepare starter text for the next step.
             starter_text = desktop_page.locator("#assistantPromptDeck").inner_text()
             if starter_mode != "starter" or "I'm new here" not in starter_text or "Open camera" not in starter_text or "Check image" not in starter_text:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Assistant did not render the expected starter prompt deck")
             print("PASS: assistant input and starter prompts are visible")
 
@@ -193,8 +229,10 @@ def main() -> int:
             assistant_input.press("Enter")
             desktop_page.wait_for_selector("text=If you are new here", timeout=20000)
             onboarding_mode = desktop_page.locator("#assistantPromptDeck [data-prompt-mode]").get_attribute("data-prompt-mode")
+            # Prepare onboarding text for the next step.
             onboarding_text = desktop_page.locator("#assistantPromptDeck").inner_text()
             if onboarding_mode != "onboarding" or "Start live monitoring" not in onboarding_text or "Recommend settings" not in onboarding_text:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Adaptive prompt deck did not switch into the onboarding guidance mode")
             print("PASS: onboarding prompt deck helps first-time users")
 
@@ -211,6 +249,7 @@ def main() -> int:
                 }
                 """
             )
+            # Trigger the side effect required for this stage.
             desktop_page.wait_for_timeout(500)
             notification_box = desktop_page.locator("#notification-container").bounding_box()
             panel_box = assistant_panel.bounding_box()
@@ -220,15 +259,18 @@ def main() -> int:
             assistant_input.fill("show cloud tutorial")
             assistant_input.press("Enter")
             desktop_page.wait_for_selector("text=Cloud tutorial loaded.", timeout=20000)
+            # Trigger the side effect required for this stage.
             desktop_page.wait_for_selector("text=Cloud Pipeline", timeout=20000)
             tutorial_cards_before = desktop_page.locator(".assistant-tutorial-card").count()
             if tutorial_cards_before != 1:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError(f"Expected one slideshow tutorial card, found {tutorial_cards_before}")
             tutorial_mode = desktop_page.locator("#assistantPromptDeck [data-prompt-mode]").get_attribute("data-prompt-mode")
             tutorial_text = desktop_page.locator("#assistantPromptDeck").inner_text()
             if tutorial_mode != "tutorial-cloud" or "Next tutorial step" not in tutorial_text:
                 raise RuntimeError("Prompt deck did not adapt to the cloud tutorial flow")
             desktop_page.wait_for_timeout(350)
+            # Prepare tutorial fit for the next step.
             tutorial_fit = desktop_page.evaluate(
                 """
                 () => {
@@ -254,7 +296,9 @@ def main() -> int:
                 }
                 """
             )
+            # Choose the correct branch before the workflow continues.
             if not tutorial_fit.get("ok"):
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError(f"Cloud tutorial card is clipped inside the assistant panel: {tutorial_fit}")
             print("PASS: tutorial card appears in chat")
 
@@ -263,6 +307,7 @@ def main() -> int:
             tutorial_cards_after = desktop_page.locator(".assistant-tutorial-card").count()
             if tutorial_cards_after != 1:
                 raise RuntimeError("Tutorial slideshow started stacking extra cards instead of updating in place")
+            # Trigger the side effect required for this stage.
             print("PASS: tutorial step controls advance in a single slideshow card")
 
             assistant_input.fill("help me start live monitoring")
@@ -272,7 +317,9 @@ def main() -> int:
             desktop_page.wait_for_selector("#startLiveBtn", timeout=15000)
             desktop_page.wait_for_timeout(450)
             if assistant_panel.is_visible():
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Assistant should collapse after opening live monitoring so the controls stay usable")
+            # Prepare live mode active for the next step.
             live_mode_active = desktop_page.locator("#liveModeBtn.active").count() > 0
             if not live_mode_active:
                 raise RuntimeError("Live Monitor did not land in camera stream mode from the assistant handoff")
@@ -282,7 +329,9 @@ def main() -> int:
             launcher.click()
             assistant_panel.wait_for(state="visible", timeout=15000)
             if desktop_page.locator("text=Open Live Monitor").count() == 0:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Assistant did not preserve the live-monitor guidance message after reopening")
+            # Trigger the side effect required for this stage.
             print("PASS: live monitoring handoff routes correctly and preserves the chat session")
 
             assistant_input.fill("can you check if this image has violations")
@@ -291,7 +340,9 @@ def main() -> int:
             desktop_page.locator(".assistant-action-btn", has_text="Open Image Analysis").last.click()
             desktop_page.wait_for_timeout(500)
             if assistant_panel.is_visible():
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Assistant should collapse after opening image analysis so the upload flow stays usable")
+            # Prepare upload mode active for the next step.
             upload_mode_active = desktop_page.locator("#uploadModeBtn.active").count() > 0
             upload_container_visible = desktop_page.evaluate(
                 "() => { const el = document.querySelector('#uploadContainer'); return !!(el && getComputedStyle(el).display !== 'none'); }"
@@ -302,6 +353,7 @@ def main() -> int:
             assistant_panel.wait_for(state="visible", timeout=15000)
             print("PASS: image-analysis handoff routes to the upload workflow")
 
+            # Trigger the side effect required for this stage.
             assistant_input.fill("recommend settings")
             assistant_input.press("Enter")
             desktop_page.wait_for_selector(".assistant-action-btn:has-text('Use recommended settings')", timeout=15000)
@@ -311,8 +363,10 @@ def main() -> int:
 
             assistant_input.fill(analytics_prompt)
             assistant_input.press("Enter")
+            # Trigger the side effect required for this stage.
             desktop_page.wait_for_selector("text=Here is the live analytics snapshot", timeout=20000)
             if desktop_page.locator(".assistant-metric-card").count() < 4:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Analytics question did not render metrics directly inside the assistant")
             desktop_page.locator(".assistant-action-btn", has_text="Open filtered analytics").last.click()
             desktop_page.wait_for_timeout(600)
@@ -322,7 +376,9 @@ def main() -> int:
             banner_visible = desktop_page.evaluate(
                 "() => { const el = document.querySelector('#analyticsAssistantFilterBanner'); return !!(el && getComputedStyle(el).display !== 'none'); }"
             )
+            # Choose the correct branch before the workflow continues.
             if not banner_visible:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Analytics page did not show the assistant-applied filter banner")
             launcher.click()
             assistant_panel.wait_for(state="visible", timeout=15000)
@@ -331,9 +387,11 @@ def main() -> int:
             report_review_prompt = export_prompt.replace("export", "show", 1).replace(" csv", " as slideshow")
             assistant_input.fill(report_review_prompt)
             assistant_input.press("Enter")
+            # Trigger the side effect required for this stage.
             desktop_page.wait_for_selector(".assistant-report-card", timeout=20000)
             report_card_text = desktop_page.locator(".assistant-report-card").last.inner_text()
             if "Report 1 of" not in report_card_text:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError(f"Assistant report slideshow did not show a report position: {report_card_text}")
             if not desktop_page.locator(".assistant-action-btn", has_text="Previous report").last.is_visible():
                 raise RuntimeError("Assistant report slideshow did not expose Previous report control")
@@ -341,6 +399,7 @@ def main() -> int:
                 raise RuntimeError("Assistant report slideshow did not expose Next report control")
             if not desktop_page.locator(".assistant-action-btn", has_text="Explain this report").last.is_visible():
                 raise RuntimeError("Assistant report slideshow did not expose Explain this report control")
+            # Trigger the side effect required for this stage.
             desktop_page.locator(".assistant-action-btn", has_text="Explain this report").last.click()
             desktop_page.wait_for_selector("text=Here is a fuller read of report", timeout=20000)
             desktop_page.wait_for_selector("text=What happened:", timeout=15000)
@@ -350,6 +409,7 @@ def main() -> int:
             assistant_input.fill("!!!")
             assistant_input.press("Enter")
             desktop_page.wait_for_selector("text=I did not get a usable request from that yet.", timeout=15000)
+            # Trigger the side effect required for this stage.
             assistant_input.fill("write a poem about bananas")
             assistant_input.press("Enter")
             desktop_page.wait_for_selector("text=outside the monitoring assistant scope", timeout=15000)
@@ -366,7 +426,9 @@ def main() -> int:
                 }
                 """
             )
+            # Choose the correct branch before the workflow continues.
             if "Open reports" in negative_reply or "Open Reports" in negative_reply:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError(f"Negative report preference still offered a reports action: {negative_reply}")
 
             assistant_input.fill("fxxk this reports page is confusing")
@@ -376,9 +438,11 @@ def main() -> int:
 
             for prompt in ("what does local synced mean", "system overview", "show cloud tutorial"):
                 assistant_input.fill(prompt)
+                # Trigger the side effect required for this stage.
                 assistant_input.press("Enter")
                 desktop_page.wait_for_timeout(450)
 
+            # Prepare scroll metrics for the next step.
             scroll_metrics = desktop_page.evaluate(
                 """
                 () => {
@@ -395,7 +459,9 @@ def main() -> int:
                 }
                 """
             )
+            # Choose the correct branch before the workflow continues.
             if scroll_metrics["messagesScrollHeight"] <= scroll_metrics["messagesClientHeight"]:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Assistant conversation did not create a real scrollable message region on laptop viewport")
             if abs(scroll_metrics["shellHeight"] - scroll_metrics["panelHeight"]) > 8:
                 raise RuntimeError("Assistant panel shell no longer fits inside the visible panel height")
@@ -404,21 +470,26 @@ def main() -> int:
             if not prompt_box:
                 raise RuntimeError("Missing prompt deck box for scroll relay test")
             desktop_page.mouse.move(prompt_box["x"] + 24, prompt_box["y"] + 18)
+            # Trigger the side effect required for this stage.
             desktop_page.mouse.wheel(0, 1200)
             desktop_page.wait_for_timeout(350)
             scrolled_after_wheel = desktop_page.evaluate(
                 "() => { const messages = document.querySelector('#assistantMessages'); return messages ? messages.scrollTop : 0; }"
             )
             if scrolled_after_wheel <= 0:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Assistant conversation did not scroll when wheeling over the panel")
             print("PASS: assistant behaves like a scrollable chat on laptop viewport")
 
+            # Open the managed resource only for the block that needs it.
             with tempfile.TemporaryDirectory() as temp_dir:
                 temp_path = Path(temp_dir)
 
                 with desktop_page.expect_download(timeout=30000) as download_info:
+                    # Trigger the side effect required for this stage.
                     assistant_input.fill("export analytics csv")
                     assistant_input.press("Enter")
+                # Prepare analytics download for the next step.
                 analytics_download = download_info.value
                 analytics_name = analytics_download.suggested_filename
                 if "analytics" not in analytics_name.lower():
@@ -427,7 +498,9 @@ def main() -> int:
                 analytics_download.save_as(str(analytics_path))
                 analytics_rows = read_csv_rows(analytics_path)
                 if not any(str(row.get("metric") or "").strip() == "ready_rate_percent" for row in analytics_rows):
+                    # Surface the failure with enough context for the caller.
                     raise RuntimeError("Analytics export did not include ready_rate_percent")
+                # Prepare analytics mode for the next step.
                 analytics_mode = desktop_page.locator("#assistantPromptDeck [data-prompt-mode]").get_attribute("data-prompt-mode")
                 analytics_text = desktop_page.locator("#assistantPromptDeck").inner_text()
                 if analytics_mode != "analytics-export" or "Open analytics" not in analytics_text:
@@ -437,8 +510,10 @@ def main() -> int:
                 assistant_input.fill(export_prompt)
                 assistant_input.press("Enter")
                 desktop_page.wait_for_selector(".assistant-action-btn:has-text('Download CSV')", timeout=30000)
+                # Prepare preview text for the next step.
                 preview_text = desktop_page.locator("#assistantMessages").inner_text()
                 if "Reports CSV is prepared" not in preview_text:
+                    # Surface the failure with enough context for the caller.
                     raise RuntimeError("Assistant reports export did not show a preview before download")
                 with desktop_page.expect_download(timeout=30000) as download_info:
                     desktop_page.locator(".assistant-action-btn", has_text="Download CSV").last.click()
@@ -446,15 +521,19 @@ def main() -> int:
                 reports_name = reports_download.suggested_filename
                 if "reports" not in reports_name.lower():
                     raise RuntimeError(f"Unexpected reports export filename: {reports_name}")
+                # Prepare reports path for the next step.
                 reports_path = temp_path / reports_name
                 reports_download.save_as(str(reports_path))
                 report_rows = read_csv_rows(reports_path)
                 if not report_rows:
+                    # Surface the failure with enough context for the caller.
                     raise RuntimeError("Assistant reports export returned an empty CSV")
                 for row in report_rows:
                     if "source_scope" in export_expectations:
+                        # Prepare actual scope for the next step.
                         actual_scope = str(row.get("source_scope") or "").strip().lower()
                         if actual_scope != export_expectations["source_scope"]:
+                            # Surface the failure with enough context for the caller.
                             raise RuntimeError(
                                 f"Reports export broke source filtering: expected {export_expectations['source_scope']}, got {actual_scope}"
                             )
@@ -464,8 +543,10 @@ def main() -> int:
                             raise RuntimeError(
                                 f"Reports export broke severity filtering: expected {export_expectations['severity']}, got {actual_severity}"
                             )
+                # Trigger the side effect required for this stage.
                 print(f"PASS: reports CSV export honors natural-language filters via '{export_prompt}'")
 
+            # Trigger the side effect required for this stage.
             assistant_input.fill("find docs about wifi reconnect local sync")
             assistant_input.press("Enter")
             desktop_page.wait_for_selector(".assistant-doc-card", timeout=15000)
@@ -475,7 +556,9 @@ def main() -> int:
                 raise RuntimeError("Prompt deck did not adapt after handbook search")
             desktop_page.locator(".assistant-doc-card .assistant-inline-link").first.click()
             desktop_page.wait_for_timeout(400)
+            # Choose the correct branch before the workflow continues.
             if "hidden" in (desktop_page.get_attribute("#handbookModal", "class") or ""):
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Handbook did not open from assistant documentation result")
             active_workflow = desktop_page.locator("#handbook-workflow.active")
             if active_workflow.count() == 0:
@@ -484,6 +567,7 @@ def main() -> int:
                 raise RuntimeError("Assistant should collapse when handing the user into the handbook")
             print("PASS: assistant docs results open the handbook section")
 
+            # Trigger the side effect required for this stage.
             desktop_page.click("#closeHandbook")
             desktop_page.wait_for_timeout(300)
             launcher.click()
@@ -493,7 +577,9 @@ def main() -> int:
             desktop_page.wait_for_timeout(500)
             session_chips_after = desktop_page.locator(".assistant-session-chip").count()
             if session_chips_after <= session_chips_before:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Creating a new assistant session did not add another session entry")
+            # Trigger the side effect required for this stage.
             print("PASS: session history is available and a new session can be created")
 
             desktop_page.wait_for_timeout(1400)
@@ -502,12 +588,15 @@ def main() -> int:
                     "() => window.localStorage.getItem('casm.assistant.clientId.v1') || ''"
                 )
                 try:
+                    # Trigger the side effect required for this stage.
                     fetch_json("/admin/assistant-sessions?format=json")
                 except HTTPError as exc:
                     if exc.code != 401:
+                        # Surface the failure with enough context for the caller.
                         raise RuntimeError(f"Admin assistant sessions endpoint returned {exc.code} instead of 401 without auth")
                 else:
                     raise RuntimeError("Admin assistant sessions endpoint was readable without credentials")
+                # Prepare admin payload for the next step.
                 admin_payload = fetch_json(
                     "/admin/assistant-sessions?format=json",
                     username=ADMIN_USERNAME,
@@ -518,7 +607,9 @@ def main() -> int:
                     entry for entry in (entries or [])
                     if str(entry.get("client_id") or "").strip() == str(client_id).strip()
                 ]
+                # Choose the correct branch before the workflow continues.
                 if not matching:
+                    # Surface the failure with enough context for the caller.
                     raise RuntimeError("Admin assistant session log did not contain the current browser client")
                 if int(matching[0].get("session_count") or 0) < 1:
                     raise RuntimeError("Admin assistant session log stored zero sessions for the current client")
@@ -526,6 +617,7 @@ def main() -> int:
             else:
                 print("INFO: skipped admin session sync readback because assistant admin credentials were not provided")
 
+            # Prepare mobile for the next step.
             mobile = browser.new_context(
                 viewport={"width": 390, "height": 844},
                 is_mobile=True,
@@ -537,6 +629,7 @@ def main() -> int:
                     "Mobile/15E148 Safari/604.1"
                 ),
             )
+            # Prepare mobile page for the next step.
             mobile_page = mobile.new_page()
             mobile_page.on("dialog", lambda dialog: dialog.accept())
             wait_until_ready(mobile_page)
@@ -546,7 +639,9 @@ def main() -> int:
             mobile_launcher_box = mobile_launcher.bounding_box()
             mobile_nav_box = mobile_nav.bounding_box()
             if not mobile_launcher_box or not mobile_nav_box:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Missing mobile bounding boxes for launcher or bottom nav")
+            # Choose the correct branch before the workflow continues.
             if mobile_launcher_box["y"] + mobile_launcher_box["height"] >= mobile_nav_box["y"]:
                 raise RuntimeError("Mobile assistant launcher overlaps the bottom navigation")
 
@@ -568,6 +663,7 @@ def main() -> int:
                 }
                 """
             )
+            # Trigger the side effect required for this stage.
             mobile_page.wait_for_timeout(450)
             mobile_notification_box = mobile_page.locator("#notification-container").bounding_box()
             mobile_panel_box = mobile_page.locator("#assistantPanel").bounding_box()
@@ -577,12 +673,14 @@ def main() -> int:
                 "mobile notification container",
                 "mobile assistant panel",
             )
+            # Trigger the side effect required for this stage.
             print("PASS: mobile assistant launcher clears the bottom nav and panel fits")
 
             mobile.close()
             desktop.close()
             browser.close()
 
+        # Trigger the side effect required for this stage.
         print("PASS: assistant action checks")
         return 0
     except PlaywrightTimeoutError as exc:
@@ -591,5 +689,7 @@ def main() -> int:
         return fail(f"assistant action-test unhandled error: {exc}", 41)
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
+    # Trigger the side effect required for this stage.
     sys.exit(main())

@@ -1,3 +1,4 @@
+// Readability: Page module: organise rendering, user events, and API updates for this view.
 // Reports Page Component
 const ReportsPage = {
     violations: [],
@@ -128,6 +129,7 @@ const ReportsPage = {
     },
 
     async mount() {
+        // Choose the correct browser state branch before continuing.
         if (this.timezoneChangeHandler) {
             window.removeEventListener('ppe-timezone:changed', this.timezoneChangeHandler);
         }
@@ -144,6 +146,7 @@ const ReportsPage = {
         this.syncFallbackPolling();
 
         this.realtimeHandler = (event) => {
+            // Choose the correct browser state branch before continuing.
             if (this.realtimeRefreshTimer) return;
             this.realtimeRefreshTimer = setTimeout(async () => {
                 this.realtimeRefreshTimer = null;
@@ -156,6 +159,7 @@ const ReportsPage = {
         window.addEventListener('ppe-realtime:connection', this.realtimeConnectionHandler);
 
         this.dashboardWarmupHandler = (event) => {
+            // Prepare detail for the next UI or data step.
             const detail = (event && event.detail) || {};
             if (detail.violations || detail.pending) {
                 this.loadReports({ noCache: false }).catch(() => {});
@@ -183,6 +187,7 @@ const ReportsPage = {
         this.stopModalPolling();
         this.stopModalCooldown();
         this.pendingFocusRequest = null;
+        // Choose the correct browser state branch before continuing.
         if (this.pendingFocusRetryTimer) {
             clearTimeout(this.pendingFocusRetryTimer);
             this.pendingFocusRetryTimer = null;
@@ -195,6 +200,7 @@ const ReportsPage = {
             clearTimeout(this.localCacheReconcileTimer);
             this.localCacheReconcileTimer = null;
         }
+        // Choose the correct browser state branch before continuing.
         if (this.visualStatusTimers && typeof this.visualStatusTimers.forEach === 'function') {
             this.visualStatusTimers.forEach((timer) => clearTimeout(timer));
             this.visualStatusTimers.clear();
@@ -207,6 +213,7 @@ const ReportsPage = {
             window.removeEventListener('ppe-realtime:update', this.realtimeHandler);
             this.realtimeHandler = null;
         }
+        // Choose the correct browser state branch before continuing.
         if (this.realtimeRefreshTimer) {
             clearTimeout(this.realtimeRefreshTimer);
             this.realtimeRefreshTimer = null;
@@ -219,6 +226,7 @@ const ReportsPage = {
             window.removeEventListener('ppe-dashboard:warmup', this.dashboardWarmupHandler);
             this.dashboardWarmupHandler = null;
         }
+        // Choose the correct browser state branch before continuing.
         if (this.runtimeTransitionHandler) {
             window.removeEventListener('ppe-runtime:cloud-transition-cleared', this.runtimeTransitionHandler);
             this.runtimeTransitionHandler = null;
@@ -231,6 +239,7 @@ const ReportsPage = {
             window.removeEventListener('ppe-report-queue:update', this.reportQueueHandler);
             this.reportQueueHandler = null;
         }
+        // Choose the correct browser state branch before continuing.
         if (this.reportStatusHandler) {
             window.removeEventListener('ppe-report-status:update', this.reportStatusHandler);
             this.reportStatusHandler = null;
@@ -248,6 +257,7 @@ const ReportsPage = {
     },
 
     startAutoRefresh() {
+        // Choose the correct browser state branch before continuing.
         if (this.refreshInterval) return;
 
         // Egress guard:
@@ -260,6 +270,7 @@ const ReportsPage = {
             this.autoRefreshTick += 1;
             const hasPending = this.violations.some((v) => {
                 const status = this.normalizeStatus(v);
+                // Return the prepared value to the caller.
                 return status === 'pending' || status === 'queued' || status === 'processing' || status === 'generating';
             });
             const realtimeConnected = typeof RealtimeSync !== 'undefined' && !!RealtimeSync.isConnected;
@@ -268,6 +279,7 @@ const ReportsPage = {
                 && ViolationMonitor.isMonitoring
                 && typeof ViolationMonitor.hasTrackedInFlightReports === 'function'
                 && ViolationMonitor.hasTrackedInFlightReports();
+            // Choose the correct browser state branch before continuing.
             if (hasPending) {
                 if (!monitorWatchingInFlight && (this.autoRefreshTick % 2) === 0) {
                     await this.pollInFlightReportStatuses();
@@ -279,6 +291,7 @@ const ReportsPage = {
     },
 
     stopAutoRefresh() {
+        // Choose the correct browser state branch before continuing.
         if (this.refreshInterval) {
             clearInterval(this.refreshInterval);
             this.refreshInterval = null;
@@ -307,6 +320,7 @@ const ReportsPage = {
                 previousById.get(String((item && item.report_id) || '').trim())
             ));
         this.hasLoadedOnce = true;
+        // Choose the correct browser state branch before continuing.
         if (targetedReportId) {
             await this.hydrateFocusedReport(targetedReportId, { noCache: true });
         }
@@ -317,6 +331,7 @@ const ReportsPage = {
 
     shouldRunLocalCacheReconcile() {
         try {
+            // Choose the correct browser state branch before continuing.
             if (typeof API === 'undefined' || typeof API.isLocalBackendBase !== 'function') return false;
             const activeBase = (typeof API_CONFIG !== 'undefined' && API_CONFIG.BASE_URL) || (window.location && window.location.origin) || '';
             return API.isLocalBackendBase(activeBase || (window.location && window.location.origin) || '');
@@ -326,6 +341,7 @@ const ReportsPage = {
     },
 
     scheduleLocalCacheReconcile(reason = 'local-cache-reconcile') {
+        // Choose the correct browser state branch before continuing.
         if (!this.shouldRunLocalCacheReconcile()) return;
         if (this.localCacheReconcileTimer) return;
         this.localCacheReconcileTimer = setTimeout(() => {
@@ -342,6 +358,7 @@ const ReportsPage = {
 
     applyRealtimePayload(payload = {}) {
         const reports = Array.isArray(payload && payload.reports) ? payload.reports : [];
+        // Choose the correct browser state branch before continuing.
         if (reports.length) {
             this.applyReportQueueUpdate({ reports, realtime: true });
         }
@@ -350,6 +367,7 @@ const ReportsPage = {
         const reportId = String((progress && progress.current) || '').trim();
         const progressStatus = this.normalizeStatusValue(progress && progress.status, false);
         if (!reportId || !progressStatus || progressStatus === 'idle' || progressStatus === 'unknown') {
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -367,22 +385,26 @@ const ReportsPage = {
     },
 
     async pollInFlightReportStatuses() {
+        // Choose the correct browser state branch before continuing.
         if (this.inFlightStatusPollRunning) return false;
         if (typeof API === 'undefined' || typeof API.getReportStatus !== 'function') return false;
 
         const candidates = this.violations
             .filter((violation) => {
                 const status = this.normalizeStatus(violation);
+                // Return the prepared value to the caller.
                 return status === 'pending' || status === 'queued' || status === 'processing' || status === 'generating';
             })
             .slice(0, 3);
         if (!candidates.length) return false;
 
         this.inFlightStatusPollRunning = true;
+        // Prepare changed for the next UI or data step.
         let changed = false;
         try {
             await Promise.allSettled(candidates.map(async (violation) => {
                 const reportId = String((violation && violation.report_id) || '').trim();
+                // Choose the correct browser state branch before continuing.
                 if (!reportId) return;
 
                 const data = await API.getReportStatus(reportId, {
@@ -398,6 +420,7 @@ const ReportsPage = {
                 const nextStatus = this.normalizeStatusValue(data.status, nextHasReport);
                 const statusChanged = nextStatus && nextStatus !== currentStatus;
                 const reportReadyChanged = nextHasReport !== this.hasReadableReportEvidence(violation);
+                // Choose the correct browser state branch before continuing.
                 if (!statusChanged && !reportReadyChanged) return;
 
                 const updated = this.upsertReportRuntimeState(reportId, {
@@ -409,8 +432,10 @@ const ReportsPage = {
                 }, violation);
                 changed = true;
 
+                // Choose the correct browser state branch before continuing.
                 if (updated && this.isReportReady(updated)) {
                     this.prefetchReport(reportId, updated).catch(() => {});
+                    // Choose the correct browser state branch before continuing.
                     if (!wasReady) {
                         this.notifyReportReady(reportId, updated);
                     }
@@ -419,6 +444,7 @@ const ReportsPage = {
         } finally {
             this.inFlightStatusPollRunning = false;
         }
+        // Return the prepared value to the caller.
         return changed;
     },
 
@@ -439,8 +465,10 @@ const ReportsPage = {
             source_label: String(detail.source_label || '').trim() || this.sourceLabelForScope(sourceScope)
         }, existing || detail);
 
+        // Choose the correct browser state branch before continuing.
         if (updated && this.isReportReady(updated)) {
             this.prefetchReport(reportId, updated).catch(() => {});
+            // Choose the correct browser state branch before continuing.
             if (!wasReady) {
                 this.notifyReportReady(reportId, updated);
             }
@@ -449,11 +477,13 @@ const ReportsPage = {
 
     applyReportQueueUpdate(detail = {}) {
         const rows = [];
+        // Choose the correct browser state branch before continuing.
         if (detail && detail.report && typeof detail.report === 'object') {
             rows.push(detail.report);
         }
         if (detail && Array.isArray(detail.reports)) {
             detail.reports.forEach((report) => {
+                // Choose the correct browser state branch before continuing.
                 if (report && typeof report === 'object') rows.push(report);
             });
         }
@@ -464,6 +494,7 @@ const ReportsPage = {
         const seen = new Set();
         rows.forEach((row) => {
             const reportId = String((row && row.report_id) || '').trim();
+            // Choose the correct browser state branch before continuing.
             if (!reportId || seen.has(reportId)) return;
             seen.add(reportId);
             const sourceScope = this.inferSourceScope(row) || 'cloud';
@@ -477,6 +508,7 @@ const ReportsPage = {
             }, row);
         });
 
+        // Choose the correct browser state branch before continuing.
         if (!seen.size && detail && detail.success) {
             setTimeout(() => this.loadReports({ noCache: false }), 700);
         }
@@ -488,14 +520,18 @@ const ReportsPage = {
                 .map((id) => String(id || '').trim())
                 .filter(Boolean)
         ));
+        // Choose the correct browser state branch before continuing.
         if (queuedReportIds.length) {
             const queuedSet = new Set(queuedReportIds);
+            // Prepare queued changed for the next UI or data step.
             let queuedChanged = false;
             this.violations = this.violations.map((violation) => {
                 const reportId = String((violation && violation.report_id) || '').trim();
+                // Choose the correct browser state branch before continuing.
                 if (!queuedSet.has(reportId)) return violation;
                 const sourceScope = this.inferSourceScope(violation);
                 if (sourceScope === 'cloud' || sourceScope === 'synced_local' || !this.hasLocalOriginEvidence(violation)) {
+                    // Return the prepared value to the caller.
                     return violation;
                 }
                 queuedChanged = true;
@@ -509,6 +545,7 @@ const ReportsPage = {
                     updated_at: new Date().toISOString()
                 };
             });
+            // Choose the correct browser state branch before continuing.
             if (queuedChanged) {
                 this.renderReports();
             }
@@ -520,7 +557,9 @@ const ReportsPage = {
             ...(detail.completed === true && detail.report_id ? [detail.report_id] : [])
         ].map((id) => String(id || '').trim()).filter(Boolean)));
 
+        // Choose the correct browser state branch before continuing.
         if (!reportIds.length) {
+            // Choose the correct browser state branch before continuing.
             if (detail && detail.success) {
                 setTimeout(() => this.loadReports({ noCache: false }), 1200);
             }
@@ -532,21 +571,25 @@ const ReportsPage = {
         const completedSyncState = detailSyncState && !/queued|pending|retry/i.test(detailSyncState)
             ? detailSyncState
             : 'cloud_completed';
+        // Prepare changed for the next UI or data step.
         let changed = false;
         let changedCount = 0;
         const changedReportIds = [];
         this.violations = this.violations.map((violation) => {
             const reportId = String((violation && violation.report_id) || '').trim();
+            // Choose the correct browser state branch before continuing.
             if (!idSet.has(reportId)) return violation;
             const sourceScope = this.inferSourceScope(violation);
             const cloudAnchored = sourceScope === 'cloud'
                 || this.sourceLabelMatchesScope(violation && violation.source_label, 'cloud');
             if (cloudAnchored || !this.hasLocalOriginEvidence(violation)) {
+                // Return the prepared value to the caller.
                 return violation;
             }
             changed = true;
             changedCount += 1;
             changedReportIds.push(reportId);
+            // Return the prepared value to the caller.
             return {
                 ...violation,
                 status: this.normalizeStatusValue(violation.status, true),
@@ -569,11 +612,13 @@ const ReportsPage = {
             ? changedReportIds
             : reportIds.filter((reportId) => {
                 const violation = this.violations.find((item) => String((item && item.report_id) || '').trim() === reportId);
+                // Return the prepared value to the caller.
                 return violation
                     && this.inferSourceScope(violation) === 'synced_local'
                     && this.hasSyncedLocalEvidence(violation);
             });
 
+        // Choose the correct browser state branch before continuing.
         if (changed) {
             this.renderReports();
         }
@@ -585,13 +630,16 @@ const ReportsPage = {
         }
 
         changedReportIds.slice(0, 8).forEach((reportId, index) => {
+            // Prepare warm cache for the next UI or data step.
             const warmCache = async (attempt = 1) => {
+                // Choose the correct browser state branch before continuing.
                 if (typeof API !== 'undefined' && typeof API.cacheReportHtml === 'function') {
                     const cached = await API.cacheReportHtml(reportId, {
                         source_scope: 'synced_local',
                         origin: 'local_synced',
                         sync_source: 'sync_local_cache'
                     });
+                    // Choose the correct browser state branch before continuing.
                     if (!cached && attempt < 3) {
                         setTimeout(() => warmCache(attempt + 1), 2500 * attempt);
                     }
@@ -605,6 +653,7 @@ const ReportsPage = {
 
     hasReportInList(reportId) {
         const rid = String(reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!rid) return false;
         return this.violations.some((v) => String((v && v.report_id) || '').trim() === rid);
     },
@@ -615,6 +664,7 @@ const ReportsPage = {
 
     async hydrateFocusedReport(reportId, options = {}) {
         const rid = String(reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!rid || this.hasReportInList(rid)) return;
         if (!this.isLikelyRuntimeReportId(rid)) return;
 
@@ -623,7 +673,9 @@ const ReportsPage = {
                 noCache: !!options.noCache,
                 timeoutMs: 12000
             });
+            // Choose the correct browser state branch before continuing.
             if (!statusData || typeof statusData !== 'object') {
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -659,6 +711,7 @@ const ReportsPage = {
             };
 
             const existingIndex = this.violations.findIndex((v) => String(v.report_id) === rid);
+            // Choose the correct browser state branch before continuing.
             if (existingIndex >= 0) {
                 this.violations[existingIndex] = {
                     ...this.violations[existingIndex],
@@ -674,9 +727,11 @@ const ReportsPage = {
             this.violations.sort((a, b) => {
                 const aTime = Date.parse(a.timestamp || '') || 0;
                 const bTime = Date.parse(b.timestamp || '') || 0;
+                // Return the prepared value to the caller.
                 return bTime - aTime;
             });
 
+            // Choose the correct browser state branch before continuing.
             if (this.isReportReady(hydrated)) {
                 void this.prefetchReport(rid, hydrated);
             }
@@ -686,6 +741,7 @@ const ReportsPage = {
     },
 
     schedulePendingFocusHydration(delayMs = 550) {
+        // Choose the correct browser state branch before continuing.
         if (this.pendingFocusRetryTimer) return;
         this.pendingFocusRetryTimer = setTimeout(async () => {
             this.pendingFocusRetryTimer = null;
@@ -696,8 +752,10 @@ const ReportsPage = {
     async executePendingFocusHydration() {
         const req = this.pendingFocusRequest;
         if (!req || !req.reportId) return;
+        // Choose the correct browser state branch before continuing.
         if (!this.isLikelyRuntimeReportId(req.reportId)) {
             this.pendingFocusRequest = null;
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -712,6 +770,7 @@ const ReportsPage = {
         req.attempts = attempts + 1;
         await this.loadReports({ noCache: true, targetedReportId: req.reportId });
 
+        // Choose the correct browser state branch before continuing.
         if (this.pendingFocusRequest && this.pendingFocusRequest.reportId === req.reportId) {
             this.schedulePendingFocusHydration(900 + (req.attempts * 350));
         }
@@ -723,6 +782,7 @@ const ReportsPage = {
     },
 
     hasReadableReportEvidence(record = {}) {
+        // Choose the correct browser state branch before continuing.
         if (!record || typeof record !== 'object') return false;
         return !!(
             record.has_report
@@ -741,11 +801,13 @@ const ReportsPage = {
 
     isDowngradeRuntimeStatus(status) {
         const normalized = this.normalizeStatusValue(status, false);
+        // Return the prepared value to the caller.
         return normalized === 'pending' || normalized === 'generating';
     },
 
     reconcileReportRuntimeContinuity(record = {}, previous = {}) {
         if (!record || typeof record !== 'object' || !previous || typeof previous !== 'object') {
+            // Return the prepared value to the caller.
             return record;
         }
 
@@ -753,6 +815,7 @@ const ReportsPage = {
         if (!previousReady) return record;
 
         const nextStatus = this.normalizeStatus(record);
+        // Choose the correct browser state branch before continuing.
         if (nextStatus === 'failed' || nextStatus === 'skipped') {
             return record;
         }
@@ -779,6 +842,7 @@ const ReportsPage = {
             local_image_url: record.local_image_url || previous.local_image_url
         };
 
+        // Choose the correct browser state branch before continuing.
         if (!record.sync_state && previous.sync_state) {
             reconciled.sync_state = previous.sync_state;
         }
@@ -796,6 +860,7 @@ const ReportsPage = {
 
     upsertReportRuntimeState(reportId, patch = {}, sourceHint = null) {
         const rid = String(reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!rid) return null;
 
         const existingIndex = this.violations.findIndex((v) => String((v && v.report_id) || '').trim() === rid);
@@ -830,6 +895,7 @@ const ReportsPage = {
         const patchHasReport = Object.prototype.hasOwnProperty.call(patch, 'has_report')
             ? (!!patch.has_report || patchHasReadableReport)
             : anyReadableReport;
+        // Prepare next status for the next UI or data step.
         let nextStatus = this.normalizeStatusValue(
             patch.status || existing.status || sourceRecord.status || 'pending',
             patchHasReport
@@ -853,6 +919,7 @@ const ReportsPage = {
             ...(hadExistingRecord ? [existingStatus] : []),
             nextStatus
         ]);
+        // Prepare display status for the next UI or data step.
         let displayStatus = existing.display_status;
         let displayStatusUntil = Number(existing.display_status_until || 0);
         const sawInFlightBeforeCompleted = statusSequence.includes('generating')
@@ -868,6 +935,7 @@ const ReportsPage = {
             && existingStatus !== 'generating'
             && (!displayStatusUntil || displayStatusUntil < nowMs)
         );
+        // Choose the correct browser state branch before continuing.
         if (existingHasReadableReport && !explicitTerminalFailure) {
             displayStatus = '';
             displayStatusUntil = 0;
@@ -875,12 +943,14 @@ const ReportsPage = {
         if (fastCompletedAfterGenerating) {
             displayStatus = 'generating';
             displayStatusUntil = nowMs + Math.max(300, Number(this.modalRuntime.minGeneratingDisplayMs || 650));
+            // Choose the correct browser state branch before continuing.
             if (this.visualStatusTimers.has(rid)) {
                 clearTimeout(this.visualStatusTimers.get(rid));
             }
             this.visualStatusTimers.set(rid, setTimeout(() => {
                 this.visualStatusTimers.delete(rid);
                 const index = this.violations.findIndex((v) => String((v && v.report_id) || '').trim() === rid);
+                // Choose the correct browser state branch before continuing.
                 if (index >= 0) {
                     this.violations[index] = {
                         ...this.violations[index],
@@ -955,8 +1025,10 @@ const ReportsPage = {
             updated_at: patch.updated_at || nowIso
         };
 
+        // Choose the correct browser state branch before continuing.
         if (sourceScope === 'cloud') {
             const deviceKey = String(next.device_id || '').trim().toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (deviceKey === 'local_cache' || deviceKey === 'offline_local_cache' || deviceKey.startsWith('local_') || deviceKey.startsWith('offline_')) {
                 next.device_id = null;
             }
@@ -965,6 +1037,7 @@ const ReportsPage = {
             next.source = '';
         }
 
+        // Choose the correct browser state branch before continuing.
         if (existingIndex >= 0) {
             this.violations.splice(existingIndex, 1, next);
         } else {
@@ -975,6 +1048,7 @@ const ReportsPage = {
         if (listEl) {
             this.renderReports();
         }
+        // Return the prepared value to the caller.
         return next;
     },
 
@@ -985,6 +1059,7 @@ const ReportsPage = {
 
         base.forEach((item) => {
             const reportId = String((item && item.report_id) || '').trim();
+            // Choose the correct browser state branch before continuing.
             if (!reportId) return;
             const normalized = { ...item, report_id: reportId };
             normalized.status = this.normalizeStatus(normalized);
@@ -999,6 +1074,7 @@ const ReportsPage = {
 
         pending.forEach((item) => {
             const reportId = String((item && item.report_id) || '').trim();
+            // Choose the correct browser state branch before continuing.
             if (!reportId) return;
 
             const itemHasReport = this.hasReadableReportEvidence(item);
@@ -1013,12 +1089,14 @@ const ReportsPage = {
                 : this.sourceLabelForScope(pendingScope);
             const existing = byId.get(reportId);
 
+            // Choose the correct browser state branch before continuing.
             if (existing) {
                 const existingScope = this.inferSourceScope(existing);
                 const existingStatus = this.normalizeStatus(existing);
                 const existingHasReport = this.hasReadableReportEvidence(existing);
                 const pendingPriority = this.getStatusPriority(pendingStatus);
                 const existingPriority = this.getStatusPriority(existingStatus);
+                // Choose the correct browser state branch before continuing.
                 if (pendingPriority > existingPriority && !existingHasReport) {
                     existing.status = pendingStatus;
                 }
@@ -1028,10 +1106,12 @@ const ReportsPage = {
                 if (!existing.device_id && item.device_id) {
                     const pendingDevice = String(item.device_id || '').trim().toLowerCase();
                     const isLocalCacheSeed = pendingScope === 'local' && (pendingDevice === 'local_cache' || pendingDevice === 'offline_local_cache');
+                    // Choose the correct browser state branch before continuing.
                     if (!(existingScope === 'cloud' && isLocalCacheSeed)) {
                         existing.device_id = item.device_id;
                     }
                 }
+                // Choose the correct browser state branch before continuing.
                 if (!existing.severity && item.severity) {
                     existing.severity = item.severity;
                 }
@@ -1042,9 +1122,11 @@ const ReportsPage = {
                 existing.has_cloud_artifacts = !!existing.has_cloud_artifacts || !!item.has_cloud_artifacts;
                 existing.report_html_key = existing.report_html_key || item.report_html_key;
                 existing.report_pdf_key = existing.report_pdf_key || item.report_pdf_key;
+                // Choose the correct browser state branch before continuing.
                 if (item.sync_state || item.syncState || item.cloud_sync_state || item.cloudSyncState) {
                     const nextSyncState = item.sync_state || item.syncState || item.cloud_sync_state || item.cloudSyncState;
                     const queuedSyncState = /queued|pending|retry/i.test(String(nextSyncState || ''));
+                    // Choose the correct browser state branch before continuing.
                     if (!(existingScope === 'synced_local' && queuedSyncState)) {
                         existing.sync_state = nextSyncState;
                     }
@@ -1054,6 +1136,7 @@ const ReportsPage = {
                     existing.source = item.source || existing.source || '';
                 }
 
+                // Prepare merged scope for the next UI or data step.
                 let mergedScope = existingScope || pendingScope || 'cloud';
                 if (existingScope === 'synced_local' && pendingScope === 'cloud') {
                     mergedScope = this.hasSyncedLocalEvidence(existing) ? 'synced_local' : 'cloud';
@@ -1072,6 +1155,7 @@ const ReportsPage = {
                 }
 
                 existing.source_scope = mergedScope;
+                // Choose the correct browser state branch before continuing.
                 if (mergedScope === 'synced_local') {
                     existing.source_label = 'Local Synced';
                 } else if (mergedScope === pendingScope && pendingLabel) {
@@ -1112,9 +1196,11 @@ const ReportsPage = {
         merged.sort((a, b) => {
             const aTime = Date.parse(a.timestamp || '') || 0;
             const bTime = Date.parse(b.timestamp || '') || 0;
+            // Return the prepared value to the caller.
             return bTime - aTime;
         });
 
+        // Return the prepared value to the caller.
         return merged;
     },
 
@@ -1130,6 +1216,7 @@ const ReportsPage = {
             .filter((v) => this.isReportReady(v))
             .filter((v) => {
                 const reportId = String((v && v.report_id) || '').trim();
+                // Choose the correct browser state branch before continuing.
                 if (!reportId || seen.has(reportId)) return false;
                 seen.add(reportId);
                 const scope = this.inferSourceScope(v);
@@ -1137,17 +1224,20 @@ const ReportsPage = {
             })
             .slice(0, Math.max(8, Math.min(Number(options.limit || 60), 120)));
 
+        // Prepare index for the next UI or data step.
         let index = 0;
         const pump = () => {
             const batch = ready.slice(index, index + 4);
             batch.forEach((v, batchIndex) => {
                 const reportId = String(v.report_id || '').trim();
+                // Choose the correct browser state branch before continuing.
                 if (!reportId) return;
                 setTimeout(() => {
                     this.prefetchReport(reportId, v);
                 }, 120 * batchIndex);
             });
             index += batch.length;
+            // Choose the correct browser state branch before continuing.
             if (index < ready.length) {
                 this.cacheWarmTimer = setTimeout(pump, 1500);
             } else {
@@ -1155,6 +1245,7 @@ const ReportsPage = {
             }
         };
 
+        // Choose the correct browser state branch before continuing.
         if (ready.length) {
             this.cacheWarmTimer = setTimeout(pump, 250);
         }
@@ -1166,6 +1257,7 @@ const ReportsPage = {
         const prefetchKey = options && options.offlineComplete === true
             ? `${rid}:offline-complete`
             : rid;
+        // Choose the correct browser state branch before continuing.
         if (this.prefetchState.completed.has(prefetchKey)) return;
         if (this.prefetchState.inFlight.has(prefetchKey)) return;
 
@@ -1176,6 +1268,7 @@ const ReportsPage = {
                 offlineComplete: options && options.offlineComplete === true,
                 inlineImages: options && options.inlineImages === true
             });
+            // Choose the correct browser state branch before continuing.
             if (result && result.success) {
                 this.prefetchState.completed.add(prefetchKey);
             }
@@ -1195,6 +1288,7 @@ const ReportsPage = {
 
     setProviderBadgeText(text, state = 'info') {
         const badge = document.getElementById('reportsProviderBadge');
+        // Choose the correct browser state branch before continuing.
         if (!badge) return;
 
         badge.textContent = text;
@@ -1206,8 +1300,10 @@ const ReportsPage = {
     },
 
     async updateProviderRuntimeBadge() {
+        // Keep this browser operation recoverable if it fails.
         try {
             const data = await API.getProviderRuntimeStatus();
+            // Choose the correct browser state branch before continuing.
             if (!data || data.success === false) {
                 throw new Error((data && data.error) || 'runtime unavailable');
             }
@@ -1222,6 +1318,7 @@ const ReportsPage = {
             const estimate = capacity.estimate_reports_remaining;
             const estimateText = estimate == null ? 'unknown' : String(estimate);
 
+            // Prepare state for the next UI or data step.
             let state = 'info';
             if (capacity.status === 'depleted') state = 'error';
             else if (capacity.status === 'limited') state = 'warn';
@@ -1249,6 +1346,7 @@ const ReportsPage = {
     },
 
     getFilteredViolations() {
+        // Prepare filtered for the next UI or data step.
         let filtered = [...this.violations];
 
         // Search filter
@@ -1261,9 +1359,11 @@ const ReportsPage = {
         }
 
         // Severity filter
+        // Choose the correct browser state branch before continuing.
         if (this.filters.severity !== 'all') {
             filtered = filtered.filter(v => {
                 const severity = (v.severity || 'HIGH').toLowerCase();
+                // Return the prepared value to the caller.
                 return severity === this.filters.severity;
             });
         }
@@ -1276,8 +1376,10 @@ const ReportsPage = {
             filtered = filtered.filter(v => {
                 const vDate = new Date(v.timestamp);
 
+                // Route the current value to the matching UI behaviour.
                 switch(this.filters.dateRange) {
                     case 'today':
+                        // Return the prepared value to the caller.
                         return vDate >= today;
                     case 'week':
                         const weekAgo = new Date(today);
@@ -1288,12 +1390,14 @@ const ReportsPage = {
                         monthAgo.setMonth(monthAgo.getMonth() - 1);
                         return vDate >= monthAgo;
                     default:
+                        // Return the prepared value to the caller.
                         return true;
                 }
             });
         }
 
         // Source filter
+        // Choose the correct browser state branch before continuing.
         if (this.filters.source !== 'all') {
             filtered = filtered.filter((v) => this.inferSourceScope(v) === this.filters.source);
         }
@@ -1304,7 +1408,9 @@ const ReportsPage = {
     exportFilteredCsv() {
         try {
             const rows = this.getFilteredViolations();
+            // Choose the correct browser state branch before continuing.
             if (!rows.length) {
+                // Choose the correct browser state branch before continuing.
                 if (typeof notifyApp === 'function') {
                     notifyApp('No reports match the current filters.', 'warning');
                 } else {
@@ -1315,6 +1421,7 @@ const ReportsPage = {
 
             const escapeCell = (v) => {
                 if (v === null || v === undefined) return '';
+                // Prepare s for the next UI or data step.
                 let s = String(v);
                 // Strip line breaks for CSV row safety
                 s = s.replace(/\r?\n/g, ' ');
@@ -1353,6 +1460,7 @@ const ReportsPage = {
             document.body.removeChild(a);
             setTimeout(() => URL.revokeObjectURL(url), 1000);
 
+            // Choose the correct browser state branch before continuing.
             if (typeof notifyApp === 'function') {
                 notifyApp(`Exported ${rows.length} report${rows.length === 1 ? '' : 's'} to CSV.`, 'success');
             }
@@ -1366,7 +1474,9 @@ const ReportsPage = {
 
     normalizeStatusValue(status, hasReport = false) {
         const raw = String(status || '').trim().toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (!raw) {
+            // Return the prepared value to the caller.
             return hasReport ? 'completed' : 'pending';
         }
 
@@ -1376,7 +1486,9 @@ const ReportsPage = {
         if (raw === 'partial' || raw === 'degraded') {
             return 'partial';
         }
+        // Choose the correct browser state branch before continuing.
         if (raw === 'failed' || raw === 'error' || raw === 'errored') {
+            // Return the prepared value to the caller.
             return 'failed';
         }
         if (raw === 'skipped' || raw === 'cancelled' || raw === 'canceled') {
@@ -1398,9 +1510,11 @@ const ReportsPage = {
                 || raw === 'enqueued'
             )
         ) {
+            // Return the prepared value to the caller.
             return 'completed';
         }
 
+        // Choose the correct browser state branch before continuing.
         if (
             raw === 'generating'
             || raw === 'processing'
@@ -1408,6 +1522,7 @@ const ReportsPage = {
             || raw === 'in-progress'
             || raw === 'running'
         ) {
+            // Return the prepared value to the caller.
             return 'generating';
         }
         if (
@@ -1420,7 +1535,9 @@ const ReportsPage = {
             return 'pending';
         }
 
+        // Choose the correct browser state branch before continuing.
         if (hasReport) {
+            // Return the prepared value to the caller.
             return 'completed';
         }
         return raw;
@@ -1431,11 +1548,13 @@ const ReportsPage = {
         const normalized = [];
         values.forEach((value) => {
             const status = this.normalizeStatusValue(value, false);
+            // Choose the correct browser state branch before continuing.
             if (!status || status === 'unknown') return;
             if (!normalized.length || normalized[normalized.length - 1] !== status) {
                 normalized.push(status);
             }
         });
+        // Return the prepared value to the caller.
         return normalized.slice(-6);
     },
 
@@ -1446,6 +1565,7 @@ const ReportsPage = {
         if (normalized === 'generating') return 30;
         if (normalized === 'pending') return 20;
         if (normalized === 'unknown') return 10;
+        // Return the prepared value to the caller.
         return 0;
     },
 
@@ -1460,12 +1580,14 @@ const ReportsPage = {
     getDisplayStatus(violation) {
         const displayStatus = this.normalizeStatusValue(violation && violation.display_status, false);
         const displayUntil = Number(violation && violation.display_status_until);
+        // Choose the correct browser state branch before continuing.
         if (
             displayStatus
             && displayStatus !== 'unknown'
             && Number.isFinite(displayUntil)
             && displayUntil > Date.now()
         ) {
+            // Return the prepared value to the caller.
             return displayStatus;
         }
         return this.normalizeStatus(violation);
@@ -1473,6 +1595,7 @@ const ReportsPage = {
 
     normalizeSourceScope(scope) {
         const normalized = String(scope || '').trim().toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (normalized === 'local' || normalized === 'cloud' || normalized === 'shared' || normalized === 'synced_local') {
             return normalized;
         }
@@ -1482,11 +1605,14 @@ const ReportsPage = {
     inferSourceScope(violation) {
         const explicit = this.normalizeSourceScope(violation && violation.source_scope);
         if (explicit === 'synced_local') {
+            // Choose the correct browser state branch before continuing.
             if (this.hasSyncedLocalEvidence(violation)) {
+                // Return the prepared value to the caller.
                 return 'synced_local';
             }
             return this.hasStrictLocalArtifactOrigin(violation) ? 'local' : 'cloud';
         }
+        // Choose the correct browser state branch before continuing.
         if (explicit === 'local' && this.hasCloudArtifactEvidence(violation) && !this.hasDurableLocalOriginEvidence(violation)) {
             return 'cloud';
         }
@@ -1498,9 +1624,11 @@ const ReportsPage = {
             || sourceMarker === 'local_cache_sync'
             || sourceMarker === 'offline_local_cache_sync'
         ) {
+            // Choose the correct browser state branch before continuing.
             if (this.hasSyncedLocalEvidence(violation)) return 'synced_local';
             return this.hasStrictLocalArtifactOrigin(violation) ? 'local' : 'cloud';
         }
+        // Choose the correct browser state branch before continuing.
         if (sourceMarker === 'local_synced') {
             if (this.hasSyncedLocalEvidence(violation)) return 'synced_local';
             return this.hasStrictLocalArtifactOrigin(violation) ? 'local' : 'cloud';
@@ -1511,7 +1639,9 @@ const ReportsPage = {
         }
 
         const deviceId = this.getDeviceKey(violation);
+        // Choose the correct browser state branch before continuing.
         if (deviceId === 'local_cache_sync' || deviceId === 'sync_local_cache') {
+            // Choose the correct browser state branch before continuing.
             if (this.hasSyncedLocalEvidence(violation)) return 'synced_local';
             return this.hasStrictLocalArtifactOrigin(violation) ? 'local' : 'cloud';
         }
@@ -1521,6 +1651,7 @@ const ReportsPage = {
 
     sourceLabelForScope(scope) {
         if (scope === 'local') return 'Local';
+        // Choose the correct browser state branch before continuing.
         if (scope === 'synced_local') return 'Local Synced';
         if (scope === 'shared') return 'Shared';
         return 'Cloud';
@@ -1531,6 +1662,7 @@ const ReportsPage = {
         if (!normalized) return false;
         if (scope === 'local') return normalized === 'local';
         if (scope === 'synced_local') return normalized.includes('local synced');
+        // Choose the correct browser state branch before continuing.
         if (scope === 'shared') return normalized.includes('shared');
         return normalized.includes('cloud');
     },
@@ -1542,6 +1674,7 @@ const ReportsPage = {
     },
 
     getSourceMarkers(record = {}) {
+        // Return the prepared value to the caller.
         return [
             record && record.origin,
             record && record.sync_source,
@@ -1556,6 +1689,7 @@ const ReportsPage = {
 
     hasLocalArtifactOriginDevice(deviceId = '') {
         const normalized = String(deviceId || '').trim().toLowerCase();
+        // Return the prepared value to the caller.
         return (
             normalized === 'local_cache'
             || normalized === 'offline_local_cache'
@@ -1570,6 +1704,7 @@ const ReportsPage = {
 
     localReportIdLooksLocal(reportId = '') {
         const normalized = String(reportId || '').trim().toLowerCase();
+        // Return the prepared value to the caller.
         return /^(local|offline|browser_local|local-cache|offline-cache)[_-]/.test(normalized);
     },
 
@@ -1581,6 +1716,7 @@ const ReportsPage = {
     },
 
     getSyncState(record = {}) {
+        // Return the prepared value to the caller.
         return String(
             (record && (record.sync_state || record.syncState || record.cloud_sync_state || record.cloudSyncState)) || ''
         ).trim().toLowerCase();
@@ -1601,6 +1737,7 @@ const ReportsPage = {
     },
 
     hasCloudReportArtifactEvidence(record = {}) {
+        // Return the prepared value to the caller.
         return !!(
             record
             && (
@@ -1617,7 +1754,9 @@ const ReportsPage = {
         const sourceMarker = this.getSourceMarker(record);
         const handoffOnlyMarker = sourceMarker === 'browser_local_draft_handoff'
             || sourceMarker === 'sync_local_cache_partial';
+        // Choose the correct browser state branch before continuing.
         if (handoffOnlyMarker) {
+            // Return the prepared value to the caller.
             return this.hasStrictLocalArtifactOrigin(record);
         }
         if (
@@ -1636,10 +1775,12 @@ const ReportsPage = {
             || sourceMarker.startsWith('offline_')
             || (sourceMarker.startsWith('browser_local') && sourceMarker !== 'browser_local_draft_handoff')
         ) {
+            // Return the prepared value to the caller.
             return true;
         }
 
         const deviceId = this.getDeviceKey(record);
+        // Choose the correct browser state branch before continuing.
         if (
             deviceId === 'local_cache'
             || deviceId === 'offline_local_cache'
@@ -1650,10 +1791,12 @@ const ReportsPage = {
             || deviceId.startsWith('offline_')
             || deviceId.startsWith('browser_local')
         ) {
+            // Return the prepared value to the caller.
             return true;
         }
 
         const reportId = String((record && (record.report_id || record.id)) || '').trim().toLowerCase();
+        // Return the prepared value to the caller.
         return /^(local|offline|browser_local|local-cache|offline-cache)[_-]/.test(reportId);
     },
 
@@ -1673,7 +1816,9 @@ const ReportsPage = {
 
     hasLocalOriginEvidence(record = {}) {
         const explicit = this.normalizeSourceScope(record && record.source_scope);
+        // Choose the correct browser state branch before continuing.
         if (explicit === 'local') {
+            // Return the prepared value to the caller.
             return !this.hasCloudArtifactEvidence(record) || this.hasDurableLocalOriginEvidence(record);
         }
         return this.hasLocalOriginMarkerEvidence(record);
@@ -1684,6 +1829,7 @@ const ReportsPage = {
         if (explicit === 'local') {
             return !this.hasCloudArtifactEvidence(record) || this.hasDurableLocalOriginEvidence(record);
         }
+        // Return the prepared value to the caller.
         return this.hasLocalOriginMarkerEvidence(record) && !this.hasSyncedLocalEvidence(record);
     },
 
@@ -1694,6 +1840,7 @@ const ReportsPage = {
         const sourceMarker = sourceMarkers[0] || '';
         const deviceId = this.getDeviceKey(record);
         const syncState = this.getSyncState(record);
+        // Prepare sync marker for the next UI or data step.
         const syncMarker = (
             hasMarker('sync_local_cache')
             || hasMarker('local_cache_sync')
@@ -1702,10 +1849,12 @@ const ReportsPage = {
             || deviceId === 'sync_local_cache'
         );
         if (syncMarker) {
+            // Return the prepared value to the caller.
             return this.hasCloudReportArtifactEvidence(record);
         }
 
         const strictLocalOrigin = this.hasStrictLocalArtifactOrigin(record);
+        // Choose the correct browser state branch before continuing.
         if (hasMarker('local_synced')) {
             return strictLocalOrigin && this.hasCloudReportArtifactEvidence(record);
         }
@@ -1720,7 +1869,9 @@ const ReportsPage = {
             || syncState.startsWith('cloud_sync_')
             || syncState.startsWith('sync_')
         );
+        // Choose the correct browser state branch before continuing.
         if (syncStateConfirmed && strictLocalOrigin && this.hasCloudReportArtifactEvidence(record)) {
+            // Return the prepared value to the caller.
             return true;
         }
 
@@ -1741,7 +1892,9 @@ const ReportsPage = {
             )
         );
 
+        // Choose the correct browser state branch before continuing.
         if (forceCloudRuntime && normalizedCandidate === 'cloud') {
+            // Return the prepared value to the caller.
             return 'cloud';
         }
 
@@ -1758,9 +1911,11 @@ const ReportsPage = {
             )
         ) {
             const mergedForUnsyncedLocal = { ...sourceRecord, ...existing, ...patch };
+            // Return the prepared value to the caller.
             return this.hasLocalOriginMarkerEvidence(mergedForUnsyncedLocal) ? 'local' : 'cloud';
         }
 
+        // Choose the correct browser state branch before continuing.
         if (
             normalizedCandidate === 'cloud'
             && anchoredScope === 'local'
@@ -1779,9 +1934,11 @@ const ReportsPage = {
                 || this.hasSyncedLocalEvidence(patch)
             )
         ) {
+            // Return the prepared value to the caller.
             return 'synced_local';
         }
 
+        // Choose the correct browser state branch before continuing.
         if (normalizedCandidate !== 'local') {
             return normalizedCandidate;
         }
@@ -1794,8 +1951,10 @@ const ReportsPage = {
                 || this.hasSyncedLocalEvidence(patch)
             )
         ) {
+            // Return the prepared value to the caller.
             return 'synced_local';
         }
+        // Choose the correct browser state branch before continuing.
         if (anchoredScope === 'shared') {
             return 'shared';
         }
@@ -1807,7 +1966,9 @@ const ReportsPage = {
             || sourceLabel.includes('cloud')
             || this.hasCloudArtifactEvidence(existing)
             || this.hasCloudArtifactEvidence(sourceRecord);
+        // Choose the correct browser state branch before continuing.
         if (!cloudAnchored) {
+            // Return the prepared value to the caller.
             return normalizedCandidate;
         }
 
@@ -1825,22 +1986,26 @@ const ReportsPage = {
         const protectedScope = ['cloud', 'shared', 'synced_local'].includes(anchoredScope)
             ? anchoredScope
             : '';
+        // Choose the correct browser state branch before continuing.
         if (
             protectedScope
             && !this.hasCloudArtifactEvidence(patch)
             && !this.hasSyncedLocalEvidence(patch)
             && !patchStrongLocalDraft
         ) {
+            // Return the prepared value to the caller.
             return protectedScope;
         }
 
         const mergedForMarker = { ...sourceRecord, ...existing, ...patch };
         const localOrigin = this.hasDurableLocalOriginEvidence(mergedForMarker);
+        // Choose the correct browser state branch before continuing.
         if (localOrigin) {
             return normalizedCandidate;
         }
 
         if (cloudAnchored) {
+            // Return the prepared value to the caller.
             return 'cloud';
         }
 
@@ -1848,6 +2013,7 @@ const ReportsPage = {
             patch.status || existing.status || sourceRecord.status,
             !!(Object.prototype.hasOwnProperty.call(patch, 'has_report') ? patch.has_report : (existing.has_report || sourceRecord.has_report))
         );
+        // Choose the correct browser state branch before continuing.
         if (status === 'pending' || status === 'queued' || status === 'generating' || status === 'processing') {
             return 'cloud';
         }
@@ -1857,11 +2023,13 @@ const ReportsPage = {
 
     notify(message, type = 'info', options = {}) {
         if (typeof NotificationManager !== 'undefined') {
+            // Choose the correct browser state branch before continuing.
             if (type === 'success') return NotificationManager.success(message, options);
             if (type === 'warning') return NotificationManager.warning(message, options);
             if (type === 'error') return NotificationManager.error(message, options);
             return NotificationManager.info(message, options);
         }
+        // Choose the correct browser state branch before continuing.
         if (type === 'error') {
             alert(message);
         } else {
@@ -1872,6 +2040,7 @@ const ReportsPage = {
     notifyReportReady(reportId, sourceHint = null) {
         const rid = String(reportId || '').trim();
         if (!rid) return;
+        // Choose the correct browser state branch before continuing.
         if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportReady === 'function') {
             NotificationManager.reportReady(rid, {
                 action: {
@@ -1889,6 +2058,7 @@ const ReportsPage = {
 
     async openReport(reportId, sourceHint = null) {
         const rid = String(reportId || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!rid) return;
         const resolvedSourceHint = sourceHint || this.violations.find((v) => String(v.report_id) === rid) || null;
         const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
@@ -1904,20 +2074,25 @@ const ReportsPage = {
             && typeof API.getOfflineCachedReportUrl === 'function'
         ) {
             const cachedUrl = await API.getOfflineCachedReportUrl(rid, resolvedSourceHint);
+            // Choose the correct browser state branch before continuing.
             if (cachedUrl) {
                 window.open(cachedUrl, '_blank');
                 this.notify(`Opening cached report ${rid}`, 'info');
+                // Return the prepared value to the caller.
                 return;
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (typeof API !== 'undefined' && API.isCloudReportUnavailableOffline(resolvedSourceHint)) {
             const cachedUrl = typeof API.getOfflineCachedReportUrl === 'function'
                 ? await API.getOfflineCachedReportUrl(rid, resolvedSourceHint)
                 : null;
+            // Choose the correct browser state branch before continuing.
             if (cachedUrl) {
                 window.open(cachedUrl, '_blank');
                 this.notify(`Opening cached report ${rid}`, 'info');
+                // Return the prepared value to the caller.
                 return;
             }
             this.notify('Cloud report details are unavailable offline or without a cloud connection.', 'warning', {
@@ -1928,6 +2103,7 @@ const ReportsPage = {
         }
 
         const readyForCachedOpen = resolvedSourceHint && this.isReportReady(resolvedSourceHint);
+        // Choose the correct browser state branch before continuing.
         if (
             !offline
             && readyForCachedOpen
@@ -1936,6 +2112,7 @@ const ReportsPage = {
         ) {
             const needsOfflineCompleteCache = typeof API.reportNeedsEmbeddedImagesForOffline === 'function'
                 && API.reportNeedsEmbeddedImagesForOffline(resolvedSourceHint);
+            // Choose the correct browser state branch before continuing.
             if (
                 needsOfflineCompleteCache
                 && typeof API.getCachedReportHtml === 'function'
@@ -1944,6 +2121,7 @@ const ReportsPage = {
                 const completeCached = await API.getCachedReportHtml(rid, resolvedSourceHint, {
                     requireInlineImages: true
                 });
+                // Choose the correct browser state branch before continuing.
                 if (!completeCached) {
                     const cachePromise = API.cacheReportHtml(rid, resolvedSourceHint, {
                         offlineComplete: true
@@ -1958,9 +2136,11 @@ const ReportsPage = {
             const cachedUrl = await API.getCachedReportUrl(rid, resolvedSourceHint, {
                 requireInlineImages: needsOfflineCompleteCache
             });
+            // Choose the correct browser state branch before continuing.
             if (cachedUrl) {
                 window.open(cachedUrl, '_blank');
                 this.notify(`Opening cached report ${rid}`, 'info');
+                // Choose the correct browser state branch before continuing.
                 if (typeof this.prefetchReport === 'function') {
                     this.prefetchReport(rid, resolvedSourceHint, {
                         offlineComplete: needsOfflineCompleteCache
@@ -1970,6 +2150,7 @@ const ReportsPage = {
             }
         }
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const needsOfflineCompleteCache = !offline
                 && typeof API !== 'undefined'
@@ -1993,8 +2174,10 @@ const ReportsPage = {
     },
 
     focusReport(reportId, { openModal = false } = {}) {
+        // Choose the correct browser state branch before continuing.
         if (!reportId) {
             Router.navigate('reports');
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2010,14 +2193,17 @@ const ReportsPage = {
                 card.style.outlineOffset = '';
             }, 1800);
 
+            // Choose the correct browser state branch before continuing.
             if (openModal) {
                 const violation = this.violations.find((v) => String(v.report_id) === String(reportId));
+                // Choose the correct browser state branch before continuing.
                 if (violation) this.showGeneratingModal(violation);
             }
 
             return true;
         };
 
+        // Prepare current route for the next UI or data step.
         const currentRoute = (typeof Router !== 'undefined' && typeof Router.normalizePath === 'function')
             ? Router.normalizePath(window.location.hash)
             : String(window.location.hash || '').replace(/^#\/?/, '') || 'home';
@@ -2029,9 +2215,11 @@ const ReportsPage = {
                 attempts: 0
             };
             Router.navigate('reports');
+            // Return the prepared value to the caller.
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (!attemptFocus()) {
             this.pendingFocusRequest = {
                 reportId: String(reportId),
@@ -2044,11 +2232,13 @@ const ReportsPage = {
 
     applyPendingFocusRequest() {
         const req = this.pendingFocusRequest;
+        // Choose the correct browser state branch before continuing.
         if (!req || !req.reportId) return;
 
         const card = document.getElementById(`report-${req.reportId}`);
         if (!card) {
             this.schedulePendingFocusHydration();
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2058,6 +2248,7 @@ const ReportsPage = {
 
     renderReports() {
         const list = document.getElementById('reports-list');
+        // Choose the correct browser state branch before continuing.
         if (!list) return;
         list.innerHTML = this.renderReportsListMarkup();
     },
@@ -2065,6 +2256,7 @@ const ReportsPage = {
     renderReportsListMarkup() {
         const filtered = this.getFilteredViolations();
         if (!this.hasLoadedOnce && filtered.length === 0) {
+            // Return the prepared value to the caller.
             return '<div class="spinner"></div>';
         }
         if (filtered.length === 0) {
@@ -2096,9 +2288,12 @@ const ReportsPage = {
         const status = this.getDisplayStatus(violation);
         const ready = this.isReportReady(violation);
 
+        // Route the current value to the matching UI behaviour.
         switch(status) {
             case 'completed':
+                // Choose the correct browser state branch before continuing.
                 if (ready) {
+                    // Return the prepared value to the caller.
                     return { icon: 'fa-check-circle', color: 'success', text: 'Ready' };
                 }
                 return { icon: 'fa-spinner fa-spin', color: 'warning', text: 'Finalizing...' };
@@ -2109,6 +2304,7 @@ const ReportsPage = {
             case 'pending':
                 return { icon: 'fa-clock', color: 'warning', text: 'Queued' };
             case 'queued':
+                // Return the prepared value to the caller.
                 return { icon: 'fa-clock', color: 'warning', text: 'Queued' };
             case 'failed':
                 return { icon: 'fa-exclamation-triangle', color: 'danger', text: 'Failed' };
@@ -2127,7 +2323,9 @@ const ReportsPage = {
         const scope = this.inferSourceScope(violation);
         const labelFromApi = String((violation && violation.source_label) || '').trim();
 
+        // Choose the correct browser state branch before continuing.
         if (scope === 'local') {
+            // Return the prepared value to the caller.
             return {
                 scope,
                 label: labelFromApi || this.sourceLabelForScope(scope),
@@ -2145,7 +2343,9 @@ const ReportsPage = {
             };
         }
 
+        // Choose the correct browser state branch before continuing.
         if (scope === 'shared') {
+            // Return the prepared value to the caller.
             return {
                 scope,
                 label: labelFromApi || this.sourceLabelForScope(scope),
@@ -2169,9 +2369,11 @@ const ReportsPage = {
         const localRelated = scope === 'local'
             || scope === 'synced_local'
             || this.hasLocalOriginMarkerEvidence(violation);
+        // Choose the correct browser state branch before continuing.
         if (!localRelated) return null;
 
         if (scope === 'synced_local') {
+            // Return the prepared value to the caller.
             return {
                 color: 'success',
                 icon: 'fa-check-circle',
@@ -2180,6 +2382,7 @@ const ReportsPage = {
             };
         }
 
+        // Choose the correct browser state branch before continuing.
         if (!syncState) return null;
 
         if (
@@ -2187,6 +2390,7 @@ const ReportsPage = {
             || syncState === 'completed_synced'
             || syncState === 'synced'
         ) {
+            // Return the prepared value to the caller.
             return {
                 color: 'success',
                 icon: 'fa-check-circle',
@@ -2195,11 +2399,13 @@ const ReportsPage = {
             };
         }
 
+        // Choose the correct browser state branch before continuing.
         if (
             syncState.includes('queued')
             || syncState.includes('pending')
             || syncState.includes('retry')
         ) {
+            // Return the prepared value to the caller.
             return {
                 color: 'warning',
                 icon: 'fa-cloud-upload-alt',
@@ -2208,6 +2414,7 @@ const ReportsPage = {
             };
         }
 
+        // Choose the correct browser state branch before continuing.
         if (syncState.includes('syncing') || syncState.includes('in_progress')) {
             return {
                 color: 'warning',
@@ -2236,6 +2443,7 @@ const ReportsPage = {
         const processAction = this.getProcessAction(violation);
 
         // Fetch detailed status from API if failed
+        // Prepare detailed error for the next UI or data step.
         let detailedError = violation.error_message;
         if (this.normalizeStatus(violation) === 'failed') {
             try {
@@ -2326,6 +2534,7 @@ const ReportsPage = {
         `;
 
         modal.onclick = (e) => {
+            // Choose the correct browser state branch before continuing.
             if (e.target === modal) this.closeModal();
         };
 
@@ -2333,6 +2542,7 @@ const ReportsPage = {
 
         this.ensureModalRuntime(violation.report_id);
         this.updateModalRetryText();
+        // Choose the correct browser state branch before continuing.
         if (this.isQuotaOrRateLimitError(detailedError)) {
             this.setProviderWarning('Provider quota/rate limit detected. Report generation may be delayed. Please retry after quota reset or switch provider.');
         } else {
@@ -2354,7 +2564,9 @@ const ReportsPage = {
         const status = this.normalizeStatus(violation);
         const ready = this.isReportReady(violation);
 
+        // Choose the correct browser state branch before continuing.
         if (ready) {
+            // Return the prepared value to the caller.
             return 'Report is ready. Click Open Report to view it.';
         }
 
@@ -2364,16 +2576,19 @@ const ReportsPage = {
 
         switch(status) {
             case 'generating':
+                // Choose the correct browser state branch before continuing.
                 if (violation && violation.active_step) {
                     const elapsed = this.formatDuration(violation.active_elapsed_seconds);
                     const stageElapsed = this.formatDuration(violation.active_stage_elapsed_seconds);
                     const timingText = elapsed
                         ? ` Elapsed ${elapsed}${stageElapsed ? `; current step ${stageElapsed}` : ''}.`
                         : '';
+                    // Return the prepared value to the caller.
                     return `${violation.active_step}.${timingText}`;
                 }
                 return 'The AI is analyzing the violation and generating a detailed report. Provider timing can vary by image caption and report-analysis latency.';
             case 'processing':
+                // Choose the correct browser state branch before continuing.
                 if (violation && violation.active_step) {
                     const elapsed = this.formatDuration(violation.active_elapsed_seconds);
                     return `${violation.active_step}.${elapsed ? ` Elapsed ${elapsed}.` : ''}`;
@@ -2382,8 +2597,10 @@ const ReportsPage = {
             case 'pending':
                 if (violation && violation.active_report_id && String(violation.active_report_id) !== String(violation.report_id || '')) {
                     const elapsed = this.formatDuration(violation.active_elapsed_seconds);
+                    // Return the prepared value to the caller.
                     return `Queued for generation. The worker is currently processing ${violation.active_report_id}${elapsed ? ` (${elapsed} elapsed)` : ''}.`;
                 }
+                // Choose the correct browser state branch before continuing.
                 if (violation && violation.queue_position) {
                     return `Queued for generation at position ${violation.queue_position}.`;
                 }
@@ -2394,8 +2611,10 @@ const ReportsPage = {
                     return `Queued for generation. The worker is currently processing ${violation.active_report_id}${elapsed ? ` (${elapsed} elapsed)` : ''}.`;
                 }
                 if (violation && violation.queue_position) {
+                    // Return the prepared value to the caller.
                     return `Queued for generation at position ${violation.queue_position}.`;
                 }
+                // Return the prepared value to the caller.
                 return 'This report is queued for processing. It will be generated shortly.';
             case 'failed':
                 return `Report generation failed. ${violation.error_message || 'Please try again or contact support.'}`;
@@ -2407,6 +2626,7 @@ const ReportsPage = {
     },
 
     ensureModalRuntime(reportId) {
+        // Choose the correct browser state branch before continuing.
         if (this.modalRuntime.reportId !== reportId) {
             this.stopModalPolling();
             this.stopModalCooldown();
@@ -2418,6 +2638,7 @@ const ReportsPage = {
             this.modalRuntime.pollStartedAt = 0;
             this.modalRuntime.sawGeneratingStage = false;
         }
+        // Return the prepared value to the caller.
         return this.modalRuntime;
     },
 
@@ -2428,6 +2649,7 @@ const ReportsPage = {
         if (total < 60) return `${total}s`;
         const mins = Math.floor(total / 60);
         const secs = total % 60;
+        // Return the prepared value to the caller.
         return secs ? `${mins}m ${secs}s` : `${mins}m`;
     },
 
@@ -2437,6 +2659,7 @@ const ReportsPage = {
 
         if (!this.modalRuntime.pollStartedAt) {
             etaEl.textContent = '';
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2446,6 +2669,7 @@ const ReportsPage = {
 
     setModalStatusText(message) {
         const el = document.getElementById('report-modal-status');
+        // Choose the correct browser state branch before continuing.
         if (el) el.textContent = message;
     },
 
@@ -2454,6 +2678,7 @@ const ReportsPage = {
         const stageIndex = order.indexOf(stage);
         order.forEach((name, index) => {
             const el = document.getElementById(`report-stage-${name}`);
+            // Choose the correct browser state branch before continuing.
             if (!el) return;
             el.classList.remove('active', 'done');
             if (stageIndex >= 0 && index < stageIndex) el.classList.add('done');
@@ -2467,6 +2692,7 @@ const ReportsPage = {
 
     updateModalRetryText() {
         const el = document.getElementById('report-modal-retries');
+        // Choose the correct browser state branch before continuing.
         if (!el) return;
         el.textContent = `Retries used: ${this.modalRuntime.retryCount} / ${this.modalRuntime.maxRetries}`;
     },
@@ -2478,6 +2704,7 @@ const ReportsPage = {
 
     isQuotaOrRateLimitError(message) {
         const text = String(message || '').toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (!text) return false;
         return (
             text.includes('resource_exhausted') ||
@@ -2490,10 +2717,12 @@ const ReportsPage = {
 
     setProviderWarning(message) {
         const el = document.getElementById('report-modal-provider-warning');
+        // Choose the correct browser state branch before continuing.
         if (!el) return;
         if (!message) {
             el.style.display = 'none';
             el.textContent = '';
+            // Return the prepared value to the caller.
             return;
         }
         el.style.display = 'block';
@@ -2502,6 +2731,7 @@ const ReportsPage = {
 
     async promptQuotaRecovery(reportId, sourceError = '') {
         const runtime = this.ensureModalRuntime(reportId);
+        // Choose the correct browser state branch before continuing.
         if (runtime.quotaPromptedForReport === reportId) {
             return;
         }
@@ -2510,11 +2740,13 @@ const ReportsPage = {
         const options = await API.getReportRecoveryOptions();
         if (!options || options.success === false) {
             this.setModalStatusText('Quota recovery options unavailable. You can retry manually.');
+            // Return the prepared value to the caller.
             return;
         }
 
         const local = options.local || {};
         const counts = options.counts || {};
+        // Prepare local ready for the next UI or data step.
         let localReady = !!local.local_mode_possible;
         const pullHint = local.pull_command || 'ollama pull llama3';
         const startHint = local.start_command || 'ollama serve';
@@ -2534,6 +2766,7 @@ const ReportsPage = {
                 `Provider quota is exhausted and Local mode is not ready yet.\n\nTry automatic setup now?\nThis will attempt to:\n1) start Ollama if installed\n2) pull required model\n3) switch provider routing to local-first\n\nOK = Try automatic setup\nCancel = Skip and use failover`
             );
 
+            // Choose the correct browser state branch before continuing.
             if (tryAutoSetup) {
                 this.setModalStatusText('Preparing LOCAL mode (auto-start + model setup)...');
                 const prep = await API.prepareLocalMode({
@@ -2543,11 +2776,13 @@ const ReportsPage = {
                     pullTimeoutSeconds: 900
                 });
 
+                // Choose the correct browser state branch before continuing.
                 if (prep && prep.success === true) {
                     localReady = true;
                     chooseLocal = true;
                 } else {
                     const prepErr = String((prep && prep.error) || (prep && prep.message) || 'Local mode bootstrap failed');
+                    // Prepare after for the next UI or data step.
                     const after = (prep && prep.after) || {};
                     const missingInstall = after.ollama_installed === false || local.ollama_installed === false;
                     const installHelp = missingInstall
@@ -2558,14 +2793,17 @@ const ReportsPage = {
                         `Automatic local setup failed: ${prepErr}${installHelp}\n\nRun failover pipeline for pending reports now?`
                     );
 
+                    // Choose the correct browser state branch before continuing.
                     if (!continueFailoverAfterPrepFail) {
                         this.setModalStatusText('Recovery paused. You can retry automatic local setup from the report modal.');
+                        // Return the prepared value to the caller.
                         return;
                     }
                 }
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (chooseLocal) {
             this.setModalStatusText('Preparing LOCAL mode (starting Ollama / pulling model if needed)...');
             const prep = await API.prepareLocalMode({
@@ -2575,24 +2813,29 @@ const ReportsPage = {
                 pullTimeoutSeconds: 600
             });
 
+            // Choose the correct browser state branch before continuing.
             if (!prep || prep.success !== true) {
                 const prepErr = String((prep && prep.error) || (prep && prep.message) || 'Local mode bootstrap failed');
                 const continueFailoverAfterPrepFail = window.confirm(
                     `Automatic local-mode setup failed: ${prepErr}\n\nRun failover pipeline for pending reports now?`
                 );
+                // Choose the correct browser state branch before continuing.
                 if (!continueFailoverAfterPrepFail) {
                     this.setModalStatusText('Recovery paused. You can retry local setup from the report modal.');
+                    // Return the prepared value to the caller.
                     return;
                 }
             }
 
             this.setModalStatusText('Applying LOCAL mode and re-queuing pending/quota-failed reports...');
             const res = await API.executeReportRecovery('local');
+            // Choose the correct browser state branch before continuing.
             if (res && res.success) {
                 this.notify(`Local recovery started: ${res.enqueued}/${res.total_candidates} queued`, 'success');
                 this.setProviderWarning('Local mode recovery approved. Monitoring queue progress...');
                 await this.refreshReports();
                 this.startModalPolling(reportId, { autoOpen: true });
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -2600,6 +2843,7 @@ const ReportsPage = {
             const continueFailover = window.confirm(
                 `Local mode could not be started: ${err}\n\nRun failover pipeline for pending reports now?`
             );
+            // Choose the correct browser state branch before continuing.
             if (!continueFailover) {
                 this.setModalStatusText('Recovery paused. You can retry after preparing local mode.');
                 return;
@@ -2610,6 +2854,7 @@ const ReportsPage = {
             );
             if (!proceedFailoverNoLocal) {
                 this.setModalStatusText('Recovery paused. Prepare local mode and retry when ready.');
+                // Return the prepared value to the caller.
                 return;
             }
         }
@@ -2617,8 +2862,10 @@ const ReportsPage = {
         const approveFailover = window.confirm(
             'Proceed with failover pipeline for pending/quota-failed reports?\n\nThis keeps generation running after your approval.'
         );
+        // Choose the correct browser state branch before continuing.
         if (!approveFailover) {
             this.setModalStatusText('Failover not approved. Report remains pending/manual retry.');
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2629,6 +2876,7 @@ const ReportsPage = {
             this.setProviderWarning('Failover recovery approved. Monitoring queue progress...');
             await this.refreshReports();
             this.startModalPolling(reportId, { autoOpen: true });
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2638,6 +2886,7 @@ const ReportsPage = {
     },
 
     stopModalPolling() {
+        // Choose the correct browser state branch before continuing.
         if (this.modalRuntime.pollTimer) {
             clearInterval(this.modalRuntime.pollTimer);
             this.modalRuntime.pollTimer = null;
@@ -2652,6 +2901,7 @@ const ReportsPage = {
             this.modalRuntime.cooldownTimer = null;
         }
         const cooldownEl = document.getElementById('report-modal-cooldown');
+        // Choose the correct browser state branch before continuing.
         if (cooldownEl) cooldownEl.style.display = 'none';
     },
 
@@ -2662,6 +2912,7 @@ const ReportsPage = {
         this.notify(`Queue busy. Retry available in ${remaining}s.`, 'warning');
 
         const cooldownEl = document.getElementById('report-modal-cooldown');
+        // Choose the correct browser state branch before continuing.
         if (cooldownEl) {
             cooldownEl.style.display = 'block';
             cooldownEl.textContent = `Queue busy. Retry available in ${remaining}s...`;
@@ -2670,9 +2921,11 @@ const ReportsPage = {
         this.setModalProcessButtonEnabled(false);
         this.modalRuntime.cooldownTimer = setInterval(() => {
             remaining -= 1;
+            // Choose the correct browser state branch before continuing.
             if (remaining <= 0) {
                 this.stopModalCooldown();
                 this.setModalProcessButtonEnabled(this.modalRuntime.retryCount < this.modalRuntime.maxRetries);
+                // Return the prepared value to the caller.
                 return;
             }
             if (cooldownEl) {
@@ -2696,10 +2949,13 @@ const ReportsPage = {
             source_scope: (data && data.source_scope) || (sourceHint && sourceHint.source_scope) || ''
         }, sourceHint) || sourceHint;
 
+        // Choose the correct browser state branch before continuing.
         if (runtime.lastPollStatus !== status) {
+            // Choose the correct browser state branch before continuing.
             if (status === 'pending' || status === 'queued') {
                 this.notify(`Report ${reportId} is queued for generation.`, 'info');
             } else if (status === 'generating' || status === 'processing') {
+                // Choose the correct browser state branch before continuing.
                 if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
                     NotificationManager.reportGenerating(reportId, {
                         title: 'Generating Report',
@@ -2710,6 +2966,7 @@ const ReportsPage = {
                     });
                 }
             } else if (status === 'completed' && dataHasReport) {
+                // Choose the correct browser state branch before continuing.
                 if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportReady === 'function') {
                     NotificationManager.reportReady(reportId, {
                         action: {
@@ -2724,8 +2981,10 @@ const ReportsPage = {
             runtime.lastPollStatus = status;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (this.isQuotaOrRateLimitError(providerError)) {
             this.setProviderWarning('Provider quota/rate limit detected. Generation is waiting on provider availability.');
+            // Choose the correct browser state branch before continuing.
             if (status === 'failed') {
                 await this.promptQuotaRecovery(reportId, providerError);
             }
@@ -2736,9 +2995,11 @@ const ReportsPage = {
         if (status === 'pending' || status === 'queued') {
             this.setModalStage('queued');
             this.setModalStatusText((data && data.message) || 'Report is queued for generation...');
+            // Return the prepared value to the caller.
             return false;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (status === 'generating' || status === 'processing') {
             runtime.sawGeneratingStage = true;
             this.setModalStage('generating');
@@ -2746,9 +3007,11 @@ const ReportsPage = {
             if (alertMessage) {
                 this.setProviderWarning(alertMessage);
             }
+            // Return the prepared value to the caller.
             return false;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (status === 'completed' && dataHasReport) {
             if (
                 !runtime.sawGeneratingStage
@@ -2767,6 +3030,7 @@ const ReportsPage = {
             this.setModalStage('completed');
             this.setModalStatusText('Report completed. Opening now...');
             await this.loadReports({ noCache: true, targetedReportId: reportId });
+            // Choose the correct browser state branch before continuing.
             if (autoOpen) {
                 const refreshedSourceHint = this.violations.find((v) => String(v.report_id) === String(reportId)) || latestSourceHint;
                 this.openReport(reportId, refreshedSourceHint);
@@ -2775,9 +3039,11 @@ const ReportsPage = {
             return true;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (status === 'failed' || status === 'partial' || status === 'skipped') {
             this.setModalStatusText(`Generation status: ${status}. You can retry.`);
             this.setModalProcessButtonEnabled(this.modalRuntime.retryCount < this.modalRuntime.maxRetries);
+            // Return the prepared value to the caller.
             return true;
         }
 
@@ -2792,8 +3058,10 @@ const ReportsPage = {
         this.modalRuntime.pollTimer = setInterval(async () => {
             this.updateModalEtaText();
             const done = await this.pollReportProgress(reportId, opts);
+            // Choose the correct browser state branch before continuing.
             if (done) {
                 this.stopModalPolling();
+                // Return the prepared value to the caller.
                 return;
             }
             if (Date.now() - startedAt > this.modalRuntime.maxWaitMs) {
@@ -2808,6 +3076,7 @@ const ReportsPage = {
         this.stopModalPolling();
         this.stopModalCooldown();
         const modal = document.getElementById('report-status-modal');
+        // Choose the correct browser state branch before continuing.
         if (modal) modal.remove();
     },
 
@@ -2841,6 +3110,7 @@ const ReportsPage = {
             || status === 'pending'
             || status === 'queued';
 
+        // Return the prepared value to the caller.
         return {
             force: isReprocess,
             label: isReprocess ? 'Reprocess Now' : 'Process Now',
@@ -2852,10 +3122,12 @@ const ReportsPage = {
         const runtime = this.ensureModalRuntime(reportId);
         const now = Date.now();
 
+        // Choose the correct browser state branch before continuing.
         if (runtime.retryCount >= runtime.maxRetries) {
             this.setModalStatusText('Maximum retries reached. Please wait before trying again.');
             this.setModalProcessButtonEnabled(false);
             this.notify('Maximum retries reached for this report.', 'warning');
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2871,6 +3143,7 @@ const ReportsPage = {
         this.setModalStage('queued');
         this.setModalStatusText('Submitting request to queue...');
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const sourceHint = options.source || options.violation || this.violations.find((v) => String(v.report_id) === String(reportId)) || null;
             const sourceScope = this.inferSourceScope(sourceHint);
@@ -2883,6 +3156,7 @@ const ReportsPage = {
                 force: !!options.force,
                 source: sourceHint
             });
+            // Choose the correct browser state branch before continuing.
             if (!result || !result.success) {
                 runtime.retryCount += 1;
                 this.updateModalRetryText();
@@ -2894,6 +3168,7 @@ const ReportsPage = {
                 const queueBusy = rejectedReason === 'queue_full'
                     || rejectedReason === 'rate_limited'
                     || (/queue|busy|rate|limit|full|capacity|409|429/i.test(errorText) && httpStatus !== 503);
+                // Choose the correct browser state branch before continuing.
                 if (this.isQuotaOrRateLimitError(errorText)) {
                     this.setProviderWarning('Provider quota/rate limit detected. Awaiting your recovery choice.');
                     await this.promptQuotaRecovery(reportId, errorText);
@@ -2912,6 +3187,7 @@ const ReportsPage = {
                         terminal_generation_failure: true,
                         source_scope: sourceScope
                     }, sourceHint);
+                    // Choose the correct browser state branch before continuing.
                     if (typeof API !== 'undefined' && typeof API.upsertPendingReportCache === 'function') {
                         await API.upsertPendingReportCache({
                             ...(sourceHint && typeof sourceHint === 'object' ? sourceHint : {}),
@@ -2925,9 +3201,11 @@ const ReportsPage = {
                     }
                     this.setModalProcessButtonEnabled(false);
                     this.notify('Queue worker is not running. Generation stopped for this report.', 'error');
+                    // Return the prepared value to the caller.
                     return;
                 }
 
+                // Choose the correct browser state branch before continuing.
                 if (queueBusy) {
                     const busyMessage = (rejectedReason === 'rate_limited' && queueSize <= 0)
                         ? 'Queue appears idle but this request was rate-limited. Please retry in a moment.'
@@ -2935,6 +3213,7 @@ const ReportsPage = {
                     this.setModalStatusText(busyMessage);
                     this.notify(`Queue busy for report ${reportId}. Monitoring in progress.`, 'warning');
                     this.startModalCooldown(runtime.cooldownSeconds);
+                    // Return the prepared value to the caller.
                     return;
                 }
 
@@ -2947,6 +3226,7 @@ const ReportsPage = {
                 }, sourceHint);
                 this.setModalProcessButtonEnabled(runtime.retryCount < runtime.maxRetries);
                 this.notify(errorText, 'error');
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -2977,6 +3257,7 @@ const ReportsPage = {
                 source_reason: result.routed_via_cloud_fallback ? 'manual_cloud_reprocess_fallback' : '',
                 routed_via_cloud_fallback: !!result.routed_via_cloud_fallback
             }, sourceHint);
+            // Choose the correct browser state branch before continuing.
             if (typeof NotificationManager !== 'undefined' && typeof NotificationManager.reportGenerating === 'function') {
                 NotificationManager.reportGenerating(reportId, {
                     title: options.force ? 'Reprocessing Started' : 'Generation Started',
@@ -3014,6 +3295,7 @@ const ReportsPage = {
             : 'Unknown time';
         const originalImageUrl = API.getImageUrl(violation.report_id, 'original.jpg', violation);
         const annotatedImageUrl = API.getImageUrl(violation.report_id, 'annotated.jpg', violation);
+        // Prepare explicit image url for the next UI or data step.
         const explicitImageUrl = (typeof API.resolveReportAssetUrl === 'function')
             ? API.resolveReportAssetUrl(
                 violation.local_image_url || violation.thumbnail_url || violation.image_url || violation.annotated_image_url || violation.original_image_url,
@@ -3038,6 +3320,7 @@ const ReportsPage = {
         );
         const isReady = this.isReportReady(violation);
         const processAction = this.getProcessAction(violation);
+        // Prepare missing ppe labels for the next UI or data step.
         const missingPpeLabels = (typeof API !== 'undefined' && typeof API.extractMissingPpeLabels === 'function')
             ? API.extractMissingPpeLabels(violation)
             : (Array.isArray(violation.missing_ppe) ? violation.missing_ppe : []);

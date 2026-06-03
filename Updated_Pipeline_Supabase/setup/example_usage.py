@@ -7,6 +7,7 @@ to create and upload violation reports.
 
 This is a simplified example showing the key integration points.
 """
+# Readability: Setup helper: prepare project dependencies, data, or cloud resources.
 
 import logging
 import os
@@ -16,6 +17,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 
 # Add project root to path (file is in setup/, project root is parent dir)
+# Trigger the side effect required for this stage.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Load environment variables
@@ -26,9 +28,11 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+# Prepare logger for the next step.
 logger = logging.getLogger(__name__)
 
 
+# Section: run the example generate report workflow with clear inputs and outputs.
 def example_generate_report():
     """
     Example: Generate a violation report and upload to Supabase.
@@ -66,6 +70,7 @@ def example_generate_report():
     }
     
     # Step 2: Initialize generator
+    # Trigger the side effect required for this stage.
     logger.info("\nInitializing Supabase report generator...")
     generator = create_supabase_report_generator(config)
     logger.info("✓ Generator initialized")
@@ -106,6 +111,7 @@ def example_generate_report():
         'annotated_image_path': 'path/to/annotated/image.jpg'  # Replace with actual path
     }
     
+    # Trigger the side effect required for this stage.
     logger.info(f"\nReport ID: {report_id}")
     logger.info(f"Violations: {report_data['violation_count']}")
     logger.info(f"Severity: {report_data['severity']}")
@@ -115,37 +121,47 @@ def example_generate_report():
     logger.info("This will:")
     logger.info("  1. Generate local HTML report")
     logger.info("  2. Insert detection event in Postgres")
+    # Trigger the side effect required for this stage.
     logger.info("  3. Upload images to Supabase Storage")
     logger.info("  4. Upload HTML report to Supabase Storage")
     logger.info("  5. Insert violation record with storage keys")
     logger.info("  6. Log event to flood_logs")
     
     try:
+        # Prepare result for the next step.
         result = generator.generate_report(report_data)
         
         if result:
+            # Trigger the side effect required for this stage.
             logger.info("\n✓ Report generated successfully!")
             logger.info(f"  Local HTML: {result.get('html')}")
             
             storage_keys = result.get('storage_keys', {})
             if storage_keys:
+                # Trigger the side effect required for this stage.
                 logger.info("\n  Uploaded to Supabase:")
                 for key, value in storage_keys.items():
+                    # Choose the correct branch before the workflow continues.
                     if value:
+                        # Trigger the side effect required for this stage.
                         logger.info(f"    - {key}: {value}")
             
+            # Trigger the side effect required for this stage.
             logger.info(f"\nView report at: http://localhost:5001/report/{report_id}")
         else:
             logger.error("\n✗ Report generation failed")
             
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"\n✗ Error generating report: {e}")
         import traceback
         traceback.print_exc()
     
+    # Trigger the side effect required for this stage.
     logger.info("\n" + "=" * 70)
 
 
+# Section: run the example query reports workflow with clear inputs and outputs.
 def example_query_reports():
     """
     Example: Query reports from Supabase database.
@@ -154,6 +170,7 @@ def example_query_reports():
     """
     from pipeline.backend.core.supabase_db import create_db_manager_from_env
     
+    # Trigger the side effect required for this stage.
     logger.info("=" * 70)
     logger.info("EXAMPLE: Querying Reports from Supabase")
     logger.info("=" * 70)
@@ -168,6 +185,7 @@ def example_query_reports():
     logger.info(f"Found {len(violations)} recent violations:\n")
     
     for i, v in enumerate(violations, 1):
+        # Trigger the side effect required for this stage.
         logger.info(f"{i}. Report: {v['report_id']}")
         logger.info(f"   Time: {v.get('timestamp')}")
         logger.info(f"   People: {v.get('person_count')}")
@@ -176,10 +194,12 @@ def example_query_reports():
         logger.info(f"   Summary: {v.get('violation_summary', 'N/A')[:60]}...")
         logger.info("")
     
+    # Trigger the side effect required for this stage.
     db.close()
     logger.info("=" * 70)
 
 
+# Section: run the example generate signed urls workflow with clear inputs and outputs.
 def example_generate_signed_urls():
     """
     Example: Generate signed URLs for accessing private storage.
@@ -189,6 +209,7 @@ def example_generate_signed_urls():
     from pipeline.backend.core.supabase_storage import create_storage_manager_from_env
     from pipeline.backend.core.supabase_db import create_db_manager_from_env
     
+    # Trigger the side effect required for this stage.
     logger.info("=" * 70)
     logger.info("EXAMPLE: Generating Signed URLs")
     logger.info("=" * 70)
@@ -198,15 +219,18 @@ def example_generate_signed_urls():
     db = create_db_manager_from_env()
     
     # Get a recent violation
+    # Prepare violations for the next step.
     violations = db.get_recent_violations(limit=1)
     
     if not violations:
+        # Trigger the side effect required for this stage.
         logger.info("\nNo violations found in database")
         return
     
     violation = violations[0]
     report_id = violation['report_id']
     
+    # Trigger the side effect required for this stage.
     logger.info(f"\nGenerating signed URLs for report: {report_id}")
     
     # Generate signed URLs
@@ -216,6 +240,7 @@ def example_generate_signed_urls():
     
     logger.info(f"\nSigned URLs (valid for {storage.signed_url_ttl} seconds):")
     logger.info(f"\n  Original image:")
+    # Trigger the side effect required for this stage.
     logger.info(f"    {original_url[:80]}..." if original_url else "    Not available")
     logger.info(f"\n  Annotated image:")
     logger.info(f"    {annotated_url[:80]}..." if annotated_url else "    Not available")
@@ -226,8 +251,10 @@ def example_generate_signed_urls():
     logger.info("\n" + "=" * 70)
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main():
     """Run all examples."""
+    # Trigger the side effect required for this stage.
     print("\n")
     print("=" * 70)
     print("SUPABASE INTEGRATION EXAMPLES")
@@ -239,6 +266,7 @@ def main():
     print("\n" + "=" * 70)
     
     # Example 1: Query existing reports
+    # Protect this step so expected failures can fall back cleanly.
     try:
         example_query_reports()
     except Exception as e:
@@ -262,5 +290,6 @@ def main():
     print("=" * 70)
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == '__main__':
     main()

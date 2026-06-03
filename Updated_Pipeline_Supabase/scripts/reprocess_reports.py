@@ -17,6 +17,7 @@ Examples:
     python reprocess_reports.py --since 2026-01-01       # Reprocess since date
     python reprocess_reports.py --report-id 20251223_172006  # Single report
 """
+# Readability: Utility script: keep operational maintenance steps visible and repeatable.
 
 import argparse
 import logging
@@ -39,9 +40,11 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+# Prepare logger for the next step.
 logger = logging.getLogger(__name__)
 
 
+# Section: run the format violation type workflow with clear inputs and outputs.
 def format_violation_type(class_name: str) -> str:
     """
     Format violation class name for display.
@@ -51,7 +54,9 @@ def format_violation_type(class_name: str) -> str:
         'NO-Safety Vest' -> 'Missing Safety Vest'
         'NO-Gloves' -> 'Missing Gloves'
     """
+    # Choose the correct branch before the workflow continues.
     if class_name.startswith('NO-'):
+        # Prepare item for the next step.
         item = class_name.replace('NO-', '')
         # Format specific items
         item = item.replace('Hardhat', 'Hard Hat')
@@ -65,21 +70,25 @@ required_env_vars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_DB_U
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
 
 if missing_vars:
+    # Trigger the side effect required for this stage.
     logger.error("=" * 70)
     logger.error("MISSING ENVIRONMENT VARIABLES")
     logger.error("=" * 70)
     logger.error(f"The following environment variables are required but not set:")
     for var in missing_vars:
+        # Trigger the side effect required for this stage.
         logger.error(f"  - {var}")
     logger.error("")
     logger.error("Please ensure your .env file contains all required variables:")
     logger.error("  SUPABASE_URL=your_supabase_project_url")
+    # Trigger the side effect required for this stage.
     logger.error("  SUPABASE_SERVICE_ROLE_KEY=your_service_role_key")
     logger.error("  SUPABASE_DB_URL=postgresql://user:pass@host:port/database")
     logger.error("=" * 70)
     sys.exit(1)
 
 # Import project modules
+# Protect this step so expected failures can fall back cleanly.
 try:
     from pipeline.backend.core.supabase_db import create_db_manager_from_env
     from pipeline.backend.core.supabase_storage import create_storage_manager_from_env
@@ -89,20 +98,24 @@ try:
     from infer_image import predict_image
     from pipeline.config import VIOLATION_RULES
 except ImportError as e:
+    # Trigger the side effect required for this stage.
     logger.error(f"Failed to import required modules: {e}")
     logger.error("Make sure you're running from the Updated_Pipeline_Supabase directory")
     sys.exit(1)
 
 # Initialize managers
+# Prepare db manager for the next step.
 db_manager = None
 storage_manager = None
 report_generator = None
 caption_generator = None
 
+# Section: run the initialize managers workflow with clear inputs and outputs.
 def initialize_managers():
     """Initialize all required managers."""
     global db_manager, storage_manager, report_generator, caption_generator
     
+    # Protect this step so expected failures can fall back cleanly.
     try:
         # Import configuration
         from pipeline.config import (
@@ -110,6 +123,7 @@ def initialize_managers():
             REPORTS_DIR, VIOLATIONS_DIR, SUPABASE_CONFIG, LLAVA_CONFIG
         )
         
+        # Prepare db manager for the next step.
         db_manager = create_db_manager_from_env()
         storage_manager = create_storage_manager_from_env()
         
@@ -124,6 +138,7 @@ def initialize_managers():
             'SUPABASE_CONFIG': SUPABASE_CONFIG
         }
         
+        # Prepare report generator for the next step.
         report_generator = create_supabase_report_generator(report_config)
         
         # Initialize caption generator with LLAVA config
@@ -133,12 +148,14 @@ def initialize_managers():
         logger.info("✓ All managers initialized successfully")
         return True
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Failed to initialize managers: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
+# Section: run the reprocess single report workflow with clear inputs and outputs.
 def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
     """
     Reprocess a single violation report.
@@ -150,6 +167,7 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
     Returns:
         True if successful, False otherwise
     """
+    # Trigger the side effect required for this stage.
     logger.info(f"=" * 70)
     logger.info(f"Reprocessing report: {report_id}")
     logger.info(f"=" * 70)
@@ -160,6 +178,7 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
     
     try:
         # 1. Get violation data from database
+        # Prepare violation for the next step.
         violation = db_manager.get_violation(report_id)
         if not violation:
             logger.error(f"Report {report_id} not found in database")
@@ -171,10 +190,12 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             logger.error(f"No original image found for report {report_id}")
             return False
         
+        # Trigger the side effect required for this stage.
         logger.info("📥 Downloading original image...")
         image_bytes = storage_manager.download_file_content(original_image_key)
         
         if not image_bytes:
+            # Trigger the side effect required for this stage.
             logger.error("Failed to download original image")
             return False
         
@@ -182,6 +203,7 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
         temp_image.write_bytes(image_bytes)
         
         # 3. Re-run YOLO detection with NEW pipeline settings
+        # Trigger the side effect required for this stage.
         logger.info("🔍 Re-running YOLO detection with updated pipeline...")
         detections, annotated = predict_image(str(temp_image), conf=0.25)  # New threshold
         logger.info(f"   Detected {len(detections)} objects")
@@ -191,11 +213,13 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
         cv2.imwrite(str(annotated_path), annotated)
         
         # 4. Re-validate environment
+        # Trigger the side effect required for this stage.
         logger.info("🌍 Re-validating work environment...")
         env_result = validate_work_environment(str(temp_image))
         logger.info(f"   Environment: {env_result['environment_type']} (valid: {env_result['is_valid']})")
         
         if not env_result['is_valid']:
+            # Trigger the side effect required for this stage.
             logger.warning(f"⚠️ Report {report_id} is not a valid work environment - skipping")
             # Update status to skipped
             db_manager.update_detection_status(
@@ -206,6 +230,7 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             return True  # Not an error, just skipped
         
         # 5. Re-generate caption with NEW prompts
+        # Trigger the side effect required for this stage.
         logger.info("🎨 Re-generating caption with updated prompts...")
         caption = caption_image_llava(str(temp_image))
         logger.info(f"   Caption length: {len(caption) if caption else 0} chars")
@@ -214,6 +239,7 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
         caption_model = None
         try:
             from caption_image import get_runtime_provider_diagnostics
+            # Prepare vision diag for the next step.
             vision_diag = get_runtime_provider_diagnostics() or {}
             caption_provider = vision_diag.get('last_provider_used')
             provider_key = str(caption_provider or '').strip().lower()
@@ -227,6 +253,7 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             pass
         
         # 6. Extract violation types
+        # Prepare violation detections for the next step.
         violation_detections = [d for d in detections if 'no-' in d['class_name'].lower()]
         violation_types_raw = [d['class_name'] for d in violation_detections]
         violation_types = [format_violation_type(vt) for vt in violation_types_raw]
@@ -244,6 +271,7 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             return True  # Successfully processed (deleted)
         
         # 7. Generate new report with updated data
+        # Trigger the side effect required for this stage.
         logger.info("📄 Generating new report...")
         report_data = {
             'report_id': report_id,
@@ -263,9 +291,11 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             'detection_data': {'reprocessed': True, 'reprocess_date': datetime.now().isoformat()}
         }
         
+        # Prepare result for the next step.
         result = report_generator.generate_report(report_data)
         
         if result and result.get('html'):
+            # Trigger the side effect required for this stage.
             logger.info("✓ Report generated successfully")
             
             # 9. Update database with new data (skip report_generator's insert since record exists)
@@ -277,18 +307,22 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
                 'reprocessed': True,
                 'reprocess_date': datetime.now().isoformat()
             }
+            # Choose the correct branch before the workflow continues.
             if caption_provider:
+                # Prepare values needed by the next step.
                 metadata['caption_provider'] = caption_provider
             if caption_model:
                 metadata['caption_model'] = caption_model
             nlp_analysis = result.get('nlp_analysis', {}) or {}
             if isinstance(nlp_analysis, dict):
                 if nlp_analysis.get('provider'):
+                    # Prepare values needed by the next step.
                     metadata['generation_provider'] = nlp_analysis.get('provider')
                 if nlp_analysis.get('model'):
                     metadata['generation_model'] = nlp_analysis.get('model')
             
             # Update violation record
+            # Prepare success for the next step.
             success = db_manager.update_violation(
                 report_id=report_id,
                 violation_summary=report_data['violation_summary'],
@@ -302,6 +336,7 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             )
             
             # Update detection_events with new counts
+            # Trigger the side effect required for this stage.
             db_manager.update_detection_event(
                 report_id=report_id,
                 person_count=report_data['person_count'],
@@ -311,12 +346,14 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
             )
             
             logger.info(f"✅ Report {report_id} reprocessed successfully")
+            # Return the prepared result to the caller.
             return True
         else:
             logger.error("Failed to generate report")
             return False
             
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error reprocessing report {report_id}: {e}", exc_info=True)
         try:
             db_manager.update_detection_status(report_id, 'failed', f"Reprocessing error: {str(e)}")
@@ -326,11 +363,13 @@ def reprocess_single_report(report_id: str, temp_dir: Path) -> bool:
     finally:
         # Cleanup temp files
         if temp_image.exists():
+            # Trigger the side effect required for this stage.
             temp_image.unlink()
         if annotated_path.exists():
             annotated_path.unlink()
 
 
+# Section: run the reprocess all reports workflow with clear inputs and outputs.
 def reprocess_all_reports(since_date=None):
     """
     Reprocess all violation reports.
@@ -338,6 +377,7 @@ def reprocess_all_reports(since_date=None):
     Args:
         since_date: Optional datetime to filter reports (only reprocess reports after this date)
     """
+    # Trigger the side effect required for this stage.
     logger.info("🔄 Starting bulk report reprocessing...")
     
     # Create temp directory
@@ -347,17 +387,21 @@ def reprocess_all_reports(since_date=None):
     try:
         # Get only lightweight report refs for the bulk list. Full violation
         # rows are fetched one-at-a-time inside reprocess_single_report().
+        # Choose the correct branch before the workflow continues.
         if hasattr(db_manager, 'get_recent_violation_refs'):
             violations = db_manager.get_recent_violation_refs(limit=10000, since=since_date)
         else:
             violations = db_manager.get_recent_violations(limit=10000)
             if since_date:
+                # Prepare violations for the next step.
                 violations = [v for v in violations if v.get('timestamp') and v['timestamp'] >= since_date]
         
         total = len(violations)
         logger.info(f"📊 Found {total} reports to reprocess")
         
+        # Choose the correct branch before the workflow continues.
         if total == 0:
+            # Trigger the side effect required for this stage.
             logger.info("No reports to reprocess")
             return
         
@@ -366,7 +410,9 @@ def reprocess_all_reports(since_date=None):
         failed_count = 0
         skipped_count = 0
         
+        # Process each item in this collection using the same rule set.
         for idx, violation in enumerate(violations, 1):
+            # Prepare report id for the next step.
             report_id = violation['report_id']
             logger.info(f"\n[{idx}/{total}] Processing {report_id}...")
             
@@ -378,9 +424,11 @@ def reprocess_all_reports(since_date=None):
                 failed_count += 1
             
             # Small delay to avoid overwhelming the system
+            # Trigger the side effect required for this stage.
             time.sleep(1)
         
         # Summary
+        # Trigger the side effect required for this stage.
         logger.info("\n" + "=" * 70)
         logger.info("REPROCESSING SUMMARY")
         logger.info("=" * 70)
@@ -391,6 +439,7 @@ def reprocess_all_reports(since_date=None):
         logger.info("=" * 70)
         
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"Error during bulk reprocessing: {e}", exc_info=True)
     finally:
         # Cleanup temp directory
@@ -399,8 +448,10 @@ def reprocess_all_reports(since_date=None):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main():
     """Main entry point."""
+    # Prepare parser for the next step.
     parser = argparse.ArgumentParser(
         description='Reprocess violation reports with latest pipeline',
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -410,6 +461,7 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--all', action='store_true', help='Reprocess all reports')
     group.add_argument('--since', type=str, help='Reprocess reports since date (YYYY-MM-DD)')
+    # Trigger the side effect required for this stage.
     group.add_argument('--report-id', type=str, help='Reprocess single report by ID')
     
     args = parser.parse_args()
@@ -420,9 +472,11 @@ def main():
         sys.exit(1)
     
     # Parse date if provided
+    # Prepare since date for the next step.
     since_date = None
     if args.since:
         try:
+            # Prepare since date for the next step.
             since_date = datetime.strptime(args.since, '%Y-%m-%d')
             logger.info(f"Filtering reports since: {since_date}")
         except ValueError:
@@ -430,21 +484,27 @@ def main():
             sys.exit(1)
     
     # Execute based on arguments
+    # Choose the correct branch before the workflow continues.
     if args.report_id:
         # Single report
         temp_dir = Path('temp_reprocess')
         temp_dir.mkdir(exist_ok=True)
         try:
+            # Prepare success for the next step.
             success = reprocess_single_report(args.report_id, temp_dir)
             sys.exit(0 if success else 1)
         finally:
             import shutil
             if temp_dir.exists():
+                # Trigger the side effect required for this stage.
                 shutil.rmtree(temp_dir, ignore_errors=True)
     else:
         # All reports or filtered by date
+        # Trigger the side effect required for this stage.
         reprocess_all_reports(since_date=since_date)
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == '__main__':
+    # Trigger the side effect required for this stage.
     main()

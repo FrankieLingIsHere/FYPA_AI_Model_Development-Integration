@@ -1,5 +1,7 @@
 <!DOCTYPE html>
+<!-- Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan. -->
 <html lang="en">
+<!-- Section: organise the head markup for the CASM interface. -->
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -12,6 +14,7 @@
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<!-- Section: organise the script markup for the CASM interface. -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body class="startup-loading">
@@ -175,6 +178,7 @@
     </script>
 
     <!-- Mobile Top App-bar (visible on phones only) -->
+<!-- Section: organise the header markup for the CASM interface. -->
     <header class="mobile-app-bar" role="banner">
         <a href="#home" class="mobile-app-bar-brand sidebar-link" data-page="home">
             <i class="fas fa-hard-hat" aria-hidden="true"></i>
@@ -241,6 +245,7 @@
     <div id="mobileDrawerBackdrop" class="mobile-drawer-backdrop" aria-hidden="true"></div>
 
     <!-- Sidebar Navigation -->
+<!-- Section: organise the nav markup for the CASM interface. -->
     <nav class="sidebar" id="sidebar">
         <a href="#home" class="sidebar-header" style="text-decoration: none; color: inherit; cursor: pointer;">
             <i class="fas fa-hard-hat sidebar-logo"></i>
@@ -329,6 +334,7 @@
     </nav>
 
     <!-- Main Content Area -->
+<!-- Section: organise the main markup for the CASM interface. -->
     <main class="main-content">
         <div class="main-content-statusbar">
             <div id="networkStatusBadge" class="network-badge network-good" title="Network quality">
@@ -349,6 +355,7 @@
         <button id="assistantLauncher" class="assistant-launcher" type="button" aria-label="Open Mira chat" aria-expanded="false" aria-controls="assistantPanel" title="Open Mira chat">
             <i class="fas fa-comments" aria-hidden="true"></i>
         </button>
+<!-- Section: organise the section markup for the CASM interface. -->
         <section id="assistantPanel" class="assistant-panel hidden" role="dialog" aria-modal="false" aria-labelledby="assistantTitle">
             <div class="assistant-panel-shell">
                 <header class="assistant-header">
@@ -403,6 +410,7 @@
     </div>
 
     <!-- Mobile Bottom Navigation (visible on phones only) -->
+<!-- Section: organise the nav markup for the CASM interface. -->
     <nav class="mobile-bottom-nav" role="navigation" aria-label="Primary">
         <a href="#home" class="mobile-bottom-nav-link sidebar-link active" data-page="home">
             <i class="fas fa-home" aria-hidden="true"></i>
@@ -427,6 +435,7 @@
     </nav>
 
     <!-- Footer -->
+<!-- Section: organise the footer markup for the CASM interface. -->
     <footer class="footer">
         <div class="footer-content">
             <p>&copy; 2026 CASM PPE Safety Monitor - FYPA AI Model Development & Integration.</p>
@@ -440,6 +449,7 @@
     <script src="/static/js/runtime-config.js"></script>
     <script src="/static/js/config.js"></script>
     <script src="/static/js/notifications.js"></script>
+<!-- Section: organise the script markup for the CASM interface. -->
     <script src="/static/js/timezone.js"></script>
     <script src="/static/js/indexed-db.js"></script>
     <script src="/static/js/violation-monitor.js"></script>
@@ -452,6 +462,7 @@
     <script src="/static/js/pages/live.js"></script>
     <script src="/static/js/pages/reports.js"></script>
     <script src="/static/js/pages/analytics.js"></script>
+<!-- Section: organise the script markup for the CASM interface. -->
     <script src="/static/js/pages/about.js"></script>
     <script src="/static/js/app.js"></script>
     <script src="/static/js/assistant.js"></script>

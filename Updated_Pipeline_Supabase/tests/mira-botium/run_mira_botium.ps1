@@ -1,3 +1,5 @@
+# Readability: Test setup: document the contract this file protects.
+# Section: perform this operational step before continuing.
 $ErrorActionPreference = 'Stop'
 
 $root = Resolve-Path (Join-Path $PSScriptRoot '..\..\..')
@@ -9,6 +11,7 @@ $stderr = Join-Path $logDir 'server.err.log'
 
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
+# Section: perform this operational step before continuing.
 $server = Start-Process -WindowStyle Hidden -PassThru -FilePath 'node' -ArgumentList @("`"$serverPath`"") -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 try {
     $ready = $false
@@ -24,6 +27,7 @@ try {
         }
     }
 
+# Section: perform this operational step before continuing.
     if (-not $ready) {
         throw "Mira Botium wrapper did not become ready on port $port"
     }
@@ -36,6 +40,7 @@ try {
         }
 
         node .\mira_prompt_ideas_coverage.js
+# Section: perform this operational step before continuing.
         if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
         }

@@ -1,3 +1,4 @@
+# Readability: Test setup: document the contract this file protects.
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 
+# Prepare base url for the next step.
 BASE_URL = os.environ.get("CASM_LOCAL_UI_URL", "http://127.0.0.1:5000").rstrip("/")
 AUTO_SYNC_START_TIMEOUT_MS = int(os.environ.get("CASM_AUTO_SYNC_START_TIMEOUT_MS", "30000"))
 AUTO_SYNC_COMPLETE_TIMEOUT_MS = int(os.environ.get("CASM_AUTO_SYNC_COMPLETE_TIMEOUT_MS", "150000"))
@@ -17,27 +19,37 @@ ALLOW_MANUAL_RECONNECT_SYNC_FALLBACK = os.environ.get(
 ) != "0"
 
 
+# Section: run the find visible nav workflow with clear inputs and outputs.
 def _find_visible_nav(page, nav_selector: str):
+    # Prepare locator for the next step.
     locator = page.locator(nav_selector)
     for index in range(locator.count()):
+        # Prepare candidate for the next step.
         candidate = locator.nth(index)
         if candidate.is_visible():
+            # Return the prepared result to the caller.
             return candidate
     return None
 
 
+# Section: run the wait for visible nav workflow with clear inputs and outputs.
 def _wait_for_visible_nav(page, nav_selector: str, *, attempts: int = 10, pause_ms: int = 200):
+    # Process each item in this collection using the same rule set.
     for _ in range(attempts):
         candidate = _find_visible_nav(page, nav_selector)
+        # Choose the correct branch before the workflow continues.
         if candidate:
             return candidate
         page.wait_for_timeout(pause_ms)
     return None
 
 
+# Section: run the ensure nav visible workflow with clear inputs and outputs.
 def ensure_nav_visible(page, page_name: str):
+    # Prepare nav selector for the next step.
     nav_selector = f"[data-page='{page_name}']"
     if page.locator(nav_selector).count() == 0:
+        # Surface the failure with enough context for the caller.
         raise RuntimeError(f"Navigation link not found in DOM for page={page_name}")
 
     if _wait_for_visible_nav(page, nav_selector):
@@ -46,37 +58,48 @@ def ensure_nav_visible(page, page_name: str):
     for toggle_selector in ("#navToggle", "#navMoreToggle"):
         toggle = page.locator(toggle_selector)
         if toggle.count() > 0 and toggle.first.is_visible():
+            # Trigger the side effect required for this stage.
             toggle.first.click()
             page.wait_for_timeout(220)
             if _wait_for_visible_nav(page, nav_selector, attempts=6, pause_ms=220):
+                # Return the prepared result to the caller.
                 return
 
+    # Choose the correct branch before the workflow continues.
     if not _find_visible_nav(page, nav_selector):
+        # Surface the failure with enough context for the caller.
         raise RuntimeError(f"Navigation link exists but is not visible for page={page_name}")
 
 
+# Section: run the routing profile of workflow with clear inputs and outputs.
 def routing_profile_of(payload):
     if not isinstance(payload, dict):
         return ""
     for key in ("routing_profile", "profile", "active_profile"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
+            # Return the prepared result to the caller.
             return value.strip()
+    # Return the prepared result to the caller.
     return ""
 
 
+# Section: run the collect local report candidates workflow with clear inputs and outputs.
 def collect_local_report_candidates(limit: int = 80):
     base_dir = Path(__file__).resolve().parents[1] / "pipeline" / "violations"
     if not base_dir.exists():
+        # Return the prepared result to the caller.
         return []
 
     rows = []
+    # Process each item in this collection using the same rule set.
     for child in base_dir.iterdir():
         if not child.is_dir():
             continue
         report_id = child.name
         original_exists = (child / "original.jpg").exists()
         report_exists = (child / "report.html").exists()
+        # Choose the correct branch before the workflow continues.
         if not original_exists and not report_exists:
             continue
         rows.append(
@@ -87,15 +110,19 @@ def collect_local_report_candidates(limit: int = 80):
             }
         )
 
+    # Trigger the side effect required for this stage.
     rows.sort(key=lambda item: item["report_id"], reverse=True)
     return rows[: max(1, int(limit or 1))]
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main() -> int:
     started = time.perf_counter()
     timeline = []
 
+    # Section: run the mark workflow with clear inputs and outputs.
     def mark(step: str, details=None):
+        # Trigger the side effect required for this stage.
         timeline.append(
             {
                 "step": step,
@@ -104,8 +131,11 @@ def main() -> int:
             }
         )
 
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Open the managed resource only for the block that needs it.
         with sync_playwright() as p:
+            # Prepare browser for the next step.
             browser = p.chromium.launch(headless=True)
             # Use a regular isolated context; persistent profile is unnecessary for this flow.
             context = browser.new_context(viewport={"width": 1440, "height": 900})
@@ -115,8 +145,10 @@ def main() -> int:
             page.wait_for_selector("body", state="attached", timeout=60000)
             page.wait_for_selector("[data-page='home']", state="attached", timeout=120000)
 
+            # Prepare loader forced for the next step.
             loader_forced = False
             try:
+                # Trigger the side effect required for this stage.
                 page.wait_for_selector("#startupLoader", state="hidden", timeout=90000)
             except PlaywrightTimeoutError:
                 # Some local variants keep startup overlay visible even after app scripts are ready.
@@ -134,6 +166,7 @@ def main() -> int:
                     """
                 )
 
+            # Trigger the side effect required for this stage.
             page.wait_for_function(
                 "() => typeof API !== 'undefined' && typeof Router !== 'undefined'",
                 timeout=60000,
@@ -161,6 +194,7 @@ def main() -> int:
                 """,
                 BASE_URL,
             )
+            # Trigger the side effect required for this stage.
             mark("api_base_fixed", api_base_fix)
 
             page.evaluate(
@@ -309,6 +343,7 @@ def main() -> int:
                 """,
                 BASE_URL,
             )
+            # Trigger the side effect required for this stage.
             mark("perf_hooks_installed")
 
             open_started = time.perf_counter()
@@ -323,7 +358,9 @@ def main() -> int:
                 }
                 """
             )
+            # Choose the correct branch before the workflow continues.
             if not modal_open_result or not modal_open_result.get("ok"):
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError((modal_open_result or {}).get("error") or "failed opening global settings modal")
 
             page.wait_for_selector("#globalSettingsModal.open", timeout=15000)
@@ -333,6 +370,7 @@ def main() -> int:
                 {"duration_ms": round((time.perf_counter() - open_started) * 1000, 2)},
             )
 
+            # Prepare checkup started for the next step.
             checkup_started = time.perf_counter()
             page.click("#globalRunLocalModeCheckupBtn")
             page.wait_for_function(
@@ -346,15 +384,18 @@ def main() -> int:
                 """,
                 timeout=180000,
             )
+            # Prepare checkup duration ms for the next step.
             checkup_duration_ms = round((time.perf_counter() - checkup_started) * 1000, 2)
 
             checkup_status = ""
             provider_status = ""
             if page.locator("#globalLocalModeCheckupStatus").count() > 0:
+                # Prepare checkup status for the next step.
                 checkup_status = page.locator("#globalLocalModeCheckupStatus").first.inner_text().strip()
             if page.locator("#globalProviderRoutingStatus").count() > 0:
                 provider_status = page.locator("#globalProviderRoutingStatus").first.inner_text().strip()
 
+            # Trigger the side effect required for this stage.
             mark(
                 "local_checkup_completed",
                 {
@@ -364,6 +405,7 @@ def main() -> int:
                 },
             )
 
+            # Prepare apply started for the next step.
             apply_started = time.perf_counter()
             page.click("#globalApplyProviderRoutingBtn")
             page.wait_for_timeout(1500)
@@ -382,8 +424,10 @@ def main() -> int:
                 """
             )
 
+            # Prepare local apply status for the next step.
             local_apply_status = ""
             if page.locator("#globalProviderRoutingStatus").count() > 0:
+                # Prepare local apply status for the next step.
                 local_apply_status = page.locator("#globalProviderRoutingStatus").first.inner_text().strip()
 
             mark(
@@ -395,6 +439,7 @@ def main() -> int:
                 },
             )
 
+            # Trigger the side effect required for this stage.
             page.click("#globalSettingsCloseBtn")
             page.wait_for_selector("#globalSettingsModal", state="hidden", timeout=8000)
             mark("settings_modal_closed")
@@ -403,6 +448,7 @@ def main() -> int:
             reports_nav_error = ""
             reports_mount_forced = False
             try:
+                # Trigger the side effect required for this stage.
                 ensure_nav_visible(page, "reports")
                 page.click("[data-page='reports']")
                 page.wait_for_selector("#reports-list", timeout=7000)
@@ -419,12 +465,15 @@ def main() -> int:
                     }
                     """
                 )
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Trigger the side effect required for this stage.
                     page.wait_for_selector("#reports-list", timeout=7000)
                     reports_ui_ready = True
                 except PlaywrightTimeoutError:
                     reports_ui_ready = False
 
+            # Choose the correct branch before the workflow continues.
             if not reports_ui_ready:
                 reports_mount_forced = True
                 forced_mount = page.evaluate(
@@ -453,15 +502,20 @@ def main() -> int:
                     }
                     """
                 )
+                # Prepare reports ui ready for the next step.
                 reports_ui_ready = bool((forced_mount or {}).get("ok"))
                 if not reports_ui_ready:
+                    # Prepare forced error for the next step.
                     forced_error = (forced_mount or {}).get("error")
                     if forced_error:
+                        # Choose the correct branch before the workflow continues.
                         if reports_nav_error:
+                            # Prepare reports nav error for the next step.
                             reports_nav_error = f"{reports_nav_error} | forced mount: {forced_error}"
                         else:
                             reports_nav_error = f"forced mount: {forced_error}"
 
+            # Trigger the side effect required for this stage.
             mark(
                 "reports_page_open",
                 {
@@ -471,6 +525,7 @@ def main() -> int:
                 },
             )
 
+            # Prepare local cache candidates for the next step.
             local_cache_candidates = collect_local_report_candidates(limit=80)
             mark(
                 "local_cache_candidates_scanned",
@@ -480,6 +535,7 @@ def main() -> int:
                 },
             )
 
+            # Prepare generation result for the next step.
             generation_result = page.evaluate(
                 """
                 async (fallbackCandidates) => {
@@ -756,6 +812,7 @@ def main() -> int:
                 """,
                 local_cache_candidates,
             )
+            # Trigger the side effect required for this stage.
             mark("real_report_generation_flow", generation_result)
 
             before_offline_route = page.evaluate(
@@ -770,6 +827,7 @@ def main() -> int:
                 """
             )
 
+            # Prepare offline dispatch at for the next step.
             offline_dispatch_at = page.evaluate("() => Date.now()")
             offline_started = time.perf_counter()
             page.evaluate(
@@ -786,6 +844,7 @@ def main() -> int:
                 }
                 """
             )
+            # Trigger the side effect required for this stage.
             page.wait_for_timeout(6500)
             after_offline_route = page.evaluate(
                 """
@@ -798,6 +857,7 @@ def main() -> int:
                 }
                 """
             )
+            # Trigger the side effect required for this stage.
             mark(
                 "wifi_disconnect_event_processed",
                 {
@@ -808,6 +868,7 @@ def main() -> int:
                 },
             )
 
+            # Prepare reconnect since for the next step.
             reconnect_since = page.evaluate("() => Date.now()")
             reconnect_started = time.perf_counter()
             page.evaluate(
@@ -825,8 +886,10 @@ def main() -> int:
                 """
             )
 
+            # Prepare sync started auto after reconnect for the next step.
             sync_started_auto_after_reconnect = True
             try:
+                # Trigger the side effect required for this stage.
                 page.wait_for_function(
                     """
                     (sinceTs) => {
@@ -841,11 +904,14 @@ def main() -> int:
                     timeout=AUTO_SYNC_START_TIMEOUT_MS,
                 )
             except PlaywrightTimeoutError:
+                # Prepare sync started auto after reconnect for the next step.
                 sync_started_auto_after_reconnect = False
 
+            # Prepare sync seen auto after reconnect for the next step.
             sync_seen_auto_after_reconnect = sync_started_auto_after_reconnect
             if sync_started_auto_after_reconnect:
                 try:
+                    # Trigger the side effect required for this stage.
                     page.wait_for_function(
                         """
                         (sinceTs) => {
@@ -859,10 +925,12 @@ def main() -> int:
                         arg=reconnect_since,
                         timeout=AUTO_SYNC_COMPLETE_TIMEOUT_MS,
                     )
+                    # Prepare sync seen auto after reconnect for the next step.
                     sync_seen_auto_after_reconnect = True
                 except PlaywrightTimeoutError:
                     sync_seen_auto_after_reconnect = False
 
+            # Prepare manual sync attempt for the next step.
             manual_sync_attempt = {
                 "attempted": False,
                 "api_available": False,
@@ -870,6 +938,7 @@ def main() -> int:
                 "skipped_reason": "",
             }
             if not sync_started_auto_after_reconnect and ALLOW_MANUAL_RECONNECT_SYNC_FALLBACK:
+                # Prepare manual sync attempt for the next step.
                 manual_sync_attempt = page.evaluate(
                     """
                     async () => {
@@ -903,7 +972,9 @@ def main() -> int:
                     }
                     """
                 )
+            # Choose the correct branch before the workflow continues.
             elif not sync_started_auto_after_reconnect and not ALLOW_MANUAL_RECONNECT_SYNC_FALLBACK:
+                # Prepare values needed by the next step.
                 manual_sync_attempt["skipped_reason"] = (
                     "manual fallback disabled; no auto reconnect sync start seen"
                 )
@@ -912,9 +983,12 @@ def main() -> int:
                     "auto reconnect sync started but completion not observed within timeout; manual fallback suppressed"
                 )
 
+            # Prepare sync seen after reconnect for the next step.
             sync_seen_after_reconnect = sync_seen_auto_after_reconnect or sync_started_auto_after_reconnect
             if not sync_seen_after_reconnect:
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Trigger the side effect required for this stage.
                     page.wait_for_function(
                         """
                         (sinceTs) => {
@@ -928,10 +1002,12 @@ def main() -> int:
                         arg=reconnect_since,
                         timeout=12000,
                     )
+                    # Prepare sync seen after reconnect for the next step.
                     sync_seen_after_reconnect = True
                 except PlaywrightTimeoutError:
                     sync_seen_after_reconnect = False
 
+            # Trigger the side effect required for this stage.
             page.wait_for_timeout(3000)
             after_reconnect_route = page.evaluate(
                 """
@@ -945,6 +1021,7 @@ def main() -> int:
                 """
             )
 
+            # Trigger the side effect required for this stage.
             mark(
                 "wifi_reconnect_event_processed",
                 {
@@ -957,6 +1034,7 @@ def main() -> int:
                 },
             )
 
+            # Prepare perf extract for the next step.
             perf_extract = page.evaluate(
                 """
                 (reconnectSince) => {
@@ -1035,6 +1113,7 @@ def main() -> int:
                 reconnect_since,
             )
 
+            # Prepare summary for the next step.
             summary = {
                 "base_url": BASE_URL,
                 "pass": True,
@@ -1053,7 +1132,9 @@ def main() -> int:
                 "performance": perf_extract,
             }
 
+            # Choose the correct branch before the workflow continues.
             if not generation_result or not generation_result.get("ok"):
+                # Prepare values needed by the next step.
                 summary["pass"] = False
             if not perf_extract.get("sync_after_reconnect_calls") and not perf_extract.get(
                 "sync_after_reconnect_started_calls"
@@ -1063,9 +1144,11 @@ def main() -> int:
             print("PASS" if summary["pass"] else "FAIL")
             print(json.dumps(summary, indent=2, ensure_ascii=True))
 
+            # Trigger the side effect required for this stage.
             browser.close()
             return 0 if summary["pass"] else 2
     except PlaywrightTimeoutError as exc:
+        # Trigger the side effect required for this stage.
         print("FAIL")
         print(json.dumps({"pass": False, "error": f"timeout: {exc}"}, indent=2, ensure_ascii=True))
         return 40
@@ -1075,5 +1158,7 @@ def main() -> int:
         return 41
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
+    # Trigger the side effect required for this stage.
     sys.exit(main())

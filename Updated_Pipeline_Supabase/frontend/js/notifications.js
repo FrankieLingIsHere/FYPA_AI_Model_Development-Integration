@@ -1,3 +1,4 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 // Notification System for CASM PPE Monitor
 // ==========================================
 // Toast notifications for violation detection and report generation
@@ -18,7 +19,9 @@ const NotificationManager = {
     _bootTs: Date.now(),
 
     isMobileViewport() {
+        // Keep this browser operation recoverable if it fails.
         try {
+            // Return the prepared value to the caller.
             return window.matchMedia('(max-width: 640px)').matches;
         } catch (_) {
             return (window.innerWidth || 0) <= 640;
@@ -30,7 +33,9 @@ const NotificationManager = {
     },
 
     isLocalRuntimeContext() {
+        // Keep this browser operation recoverable if it fails.
         try {
+            // Choose the correct browser state branch before continuing.
             if (typeof navigator !== 'undefined' && navigator.onLine === false) return true;
             const base = (typeof API_CONFIG !== 'undefined' && API_CONFIG && API_CONFIG.BASE_URL)
                 ? String(API_CONFIG.BASE_URL || '')
@@ -42,6 +47,7 @@ const NotificationManager = {
                 || host === '0.0.0.0'
                 || host.endsWith('.local');
         } catch (_) {
+            // Return the prepared value to the caller.
             return false;
         }
     },
@@ -53,6 +59,7 @@ const NotificationManager = {
         if (options.action) return false;
         const isMobile = this.isMobileViewport();
         const quiet = this.inStartupQuietWindow();
+        // Prepare low value for the next UI or data step.
         const lowValue = (type === 'info' || type === 'success' || type === 'report');
         if (lowValue && this.isLocalRuntimeContext()) return false;
         // Mobile + low-value -> always silent (bell only).
@@ -70,11 +77,14 @@ const NotificationManager = {
     historyListeners: [],
 
     loadHistory() {
+        // Keep this browser operation recoverable if it fails.
         try {
             const raw = localStorage.getItem(this.HISTORY_STORAGE_KEY);
+            // Choose the correct browser state branch before continuing.
             if (!raw) {
                 this.history = [];
                 this.unreadCount = 0;
+                // Return the prepared value to the caller.
                 return;
             }
             const parsed = JSON.parse(raw);
@@ -90,6 +100,7 @@ const NotificationManager = {
     },
 
     persistHistory() {
+        // Keep this browser operation recoverable if it fails.
         try {
             localStorage.setItem(
                 this.HISTORY_STORAGE_KEY,
@@ -98,6 +109,7 @@ const NotificationManager = {
         } catch (e) {
             // Storage quota exceeded; trim and try once more
             this.history = this.history.slice(-Math.floor(this.HISTORY_MAX / 2));
+            // Keep this browser operation recoverable if it fails.
             try {
                 localStorage.setItem(
                     this.HISTORY_STORAGE_KEY,
@@ -119,6 +131,7 @@ const NotificationManager = {
             read: false
         };
         this.history.push(record);
+        // Choose the correct browser state branch before continuing.
         if (this.history.length > this.HISTORY_MAX) {
             this.history = this.history.slice(-this.HISTORY_MAX);
         }
@@ -131,6 +144,7 @@ const NotificationManager = {
     inferCategory(type, title, message) {
         const t = String(title || '').toLowerCase();
         const m = String(message || '').toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (type === 'violation' || t.includes('violation') || m.includes('violation')) return 'detection';
         if (type === 'report' || t.includes('report') || m.includes('report')) return 'report';
         if (m.includes('sync') || m.includes('cloud') || m.includes('supabase')) return 'sync';
@@ -141,12 +155,14 @@ const NotificationManager = {
 
     inferPriority(type) {
         if (type === 'error' || type === 'violation') return 'high';
+        // Choose the correct browser state branch before continuing.
         if (type === 'warning') return 'medium';
         return 'low';
     },
 
     notifyHistoryListeners() {
         this.historyListeners.forEach((fn) => {
+            // Keep this browser operation recoverable if it fails.
             try { fn(this.history, this.unreadCount); } catch (_) { /* swallow */ }
         });
     },
@@ -174,6 +190,7 @@ const NotificationManager = {
         ].filter(Boolean);
         const visibleText = this.unreadCount > 99 ? '99+' : String(this.unreadCount);
         badges.forEach((badge) => {
+            // Choose the correct browser state branch before continuing.
             if (this.unreadCount > 0) {
                 badge.textContent = visibleText;
                 badge.style.display = 'inline-flex';
@@ -186,6 +203,7 @@ const NotificationManager = {
     openHistoryCenter() {
         this.ensureHistoryModal();
         const modal = document.getElementById('notif-history-modal');
+        // Choose the correct browser state branch before continuing.
         if (!modal) return;
         modal.style.display = 'flex';
         this.renderHistoryList();
@@ -197,6 +215,7 @@ const NotificationManager = {
     },
 
     ensureHistoryModal() {
+        // Choose the correct browser state branch before continuing.
         if (document.getElementById('notif-history-modal')) return;
         const overlay = document.createElement('div');
         overlay.id = 'notif-history-modal';
@@ -236,6 +255,7 @@ const NotificationManager = {
         document.body.appendChild(overlay);
 
         overlay.addEventListener('click', (e) => {
+            // Choose the correct browser state branch before continuing.
             if (e.target === overlay) this.closeHistoryCenter();
         });
         document.getElementById('notif-history-close').addEventListener('click', () => this.closeHistoryCenter());
@@ -276,6 +296,7 @@ const NotificationManager = {
 
     renderHistoryList() {
         const list = document.getElementById('notif-history-list');
+        // Choose the correct browser state branch before continuing.
         if (!list) return;
 
         const cat = this._historyCategoryFilter || 'all';
@@ -288,6 +309,7 @@ const NotificationManager = {
                     <i class="fas fa-inbox" style="font-size:1.6rem; margin-bottom:.5rem;"></i>
                     <div>No notifications in history.</div>
                 </div>`;
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -322,6 +344,7 @@ const NotificationManager = {
     },
 
     init() {
+        // Choose the correct browser state branch before continuing.
         if (this.container) return;
 
         // Create notification container.
@@ -409,6 +432,7 @@ const NotificationManager = {
             topbarBell.dataset.notifBound = '1';
             topbarBell.addEventListener('click', () => this.openHistoryCenter());
         }
+        // Choose the correct browser state branch before continuing.
         if (!statusbarHost && !topbarBell
             && !document.getElementById('notif-bell-btn')) {
             const bell = document.createElement('button');
@@ -448,6 +472,7 @@ const NotificationManager = {
         const visibleCount = this.notifications.length;
         const hiddenCount = Math.max(0, visibleCount - this.maxVisible);
 
+        // Choose the correct browser state branch before continuing.
         if (hiddenCount > 0) {
             this.summaryBadge.style.display = 'block';
             document.getElementById('grouped-count').textContent = hiddenCount;
@@ -466,10 +491,12 @@ const NotificationManager = {
     },
 
     pruneRecentKeys(nowTs = Date.now()) {
+        // Choose the correct browser state branch before continuing.
         if (!(this.recentByKey instanceof Map)) return;
         this.recentByKey.forEach((entry, key) => {
             const ts = Number((entry && entry.ts) || 0);
             const ttlMs = Number((entry && entry.ttlMs) || 0);
+            // Choose the correct browser state branch before continuing.
             if (!Number.isFinite(ts) || !Number.isFinite(ttlMs) || ttlMs <= 0 || (nowTs - ts) > ttlMs) {
                 this.recentByKey.delete(key);
             }
@@ -491,9 +518,12 @@ const NotificationManager = {
             ? Math.max(250, Math.min(Math.floor(requestedDedupeTtlMs), 120000))
             : 5000;
 
+        // Choose the correct browser state branch before continuing.
         if (dedupeKey) {
             const existing = this.recentByKey.get(dedupeKey);
+            // Choose the correct browser state branch before continuing.
             if (existing && Number.isFinite(Number(existing.ts)) && (nowTs - Number(existing.ts)) <= dedupeTtlMs) {
+                // Return the prepared value to the caller.
                 return existing.id;
             }
         }
@@ -511,6 +541,7 @@ const NotificationManager = {
                 category: options.category,
                 priority: options.priority
             });
+            // Choose the correct browser state branch before continuing.
             if (dedupeKey) {
                 this.recentByKey.set(dedupeKey, { id: silentId, ts: nowTs, ttlMs: dedupeTtlMs });
             }
@@ -601,6 +632,7 @@ const NotificationManager = {
                     ">${options.action.text}</button>`)
             : '';
 
+        // Choose the correct browser state branch before continuing.
         if (compact) {
             // Single-row layout: icon — message+action — close.
             notification.innerHTML = `
@@ -649,6 +681,7 @@ const NotificationManager = {
         }
 
         const closeBtn = notification.querySelector('.notification-close-btn');
+        // Choose the correct browser state branch before continuing.
         if (closeBtn) {
             closeBtn.addEventListener('click', (event) => {
                 event.stopPropagation();
@@ -660,7 +693,9 @@ const NotificationManager = {
         if (actionBtn && options.action) {
             actionBtn.addEventListener('click', (event) => {
                 event.stopPropagation();
+                // Keep this browser operation recoverable if it fails.
                 try {
+                    // Choose the correct browser state branch before continuing.
                     if (typeof options.action.onClickFn === 'function') {
                         options.action.onClickFn();
                     } else if (typeof options.action.onClick === 'function') {
@@ -684,6 +719,7 @@ const NotificationManager = {
 
         this.container.insertBefore(notification, this.summaryBadge);
         this.notifications.push({ id, element: notification, type, timestamp: Date.now() });
+        // Choose the correct browser state branch before continuing.
         if (dedupeKey) {
             this.recentByKey.set(dedupeKey, {
                 id,
@@ -711,6 +747,7 @@ const NotificationManager = {
         this.updateSummaryBadge();
 
         // Auto dismiss
+        // Choose the correct browser state branch before continuing.
         if (duration > 0) {
             setTimeout(() => this.dismiss(id), duration);
         }
@@ -722,7 +759,9 @@ const NotificationManager = {
         const index = this.notifications.findIndex(n => n.id == id);
         if (index !== -1) {
             const notif = this.notifications[index];
+            // Choose the correct browser state branch before continuing.
             if (notif.isDismissing) {
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -752,6 +791,7 @@ const NotificationManager = {
     },
 
     error(message, options = {}) {
+        // Return the prepared value to the caller.
         return this.show(message, 'error', options.duration || 5000, options);
     },
 
@@ -764,6 +804,7 @@ const NotificationManager = {
     },
 
     violation(message, reportId, options = {}) {
+        // Return the prepared value to the caller.
         return this.show(message, 'violation', 8000, {
             title: 'Violation Detected',
             action: {
@@ -780,9 +821,12 @@ const NotificationManager = {
         const defaultAction = {
             text: 'View Progress',
             onClickFn: () => {
+                // Keep this browser operation recoverable if it fails.
                 try {
+                    // Choose the correct browser state branch before continuing.
                     if (typeof ReportsPage !== 'undefined' && typeof ReportsPage.focusReport === 'function') {
                         ReportsPage.focusReport(reportId, { openModal: true });
+                        // Return the prepared value to the caller.
                         return;
                     }
                 } catch (e) {
@@ -792,6 +836,7 @@ const NotificationManager = {
             }
         };
 
+        // Return the prepared value to the caller.
         return this.show(
             'Generating safety report...',
             'report',
@@ -807,6 +852,7 @@ const NotificationManager = {
     },
 
     reportReady(reportId, options = {}) {
+        // Return the prepared value to the caller.
         return this.show(
             'Report ready for review',
             'success',
@@ -816,6 +862,7 @@ const NotificationManager = {
                 action: {
                     text: 'Open',
                     onClickFn: () => {
+                        // Prepare url for the next UI or data step.
                         const url = (typeof API !== 'undefined' && typeof API.getReportUrl === 'function')
                             ? API.getReportUrl(reportId)
                             : `${API_CONFIG.BASE_URL}/report/${reportId}`;
@@ -889,6 +936,7 @@ style.textContent = `
 document.head.appendChild(style);
 
 // Initialize on load
+// Choose the correct browser state branch before continuing.
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => NotificationManager.init());
 } else {

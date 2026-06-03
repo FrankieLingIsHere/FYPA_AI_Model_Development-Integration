@@ -1,3 +1,4 @@
+// Readability: Test setup: document the contract this file protects.
 /*
  * Contract test for cross-mode report cache stability.
  *
@@ -15,23 +16,29 @@ const ROOT = path.resolve(__dirname, '..');
 const CONFIG_JS = path.join(ROOT, 'frontend', 'js', 'config.js');
 const API_JS = path.join(ROOT, 'frontend', 'js', 'api.js');
 
+// Section: handle the assert workflow.
 function assert(condition, message) {
+  // Choose the correct browser state branch before continuing.
   if (!condition) {
     throw new Error(message);
   }
 }
 
+// Section: handle the assert equal workflow.
 function assertEqual(actual, expected, message) {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${expected}, got ${actual}`);
   }
 }
 
+// Section: handle the create local storage mock workflow.
 function createLocalStorageMock() {
   const storage = new Map();
+  // Return the prepared value to the caller.
   return {
     getItem(key) {
       const normalized = String(key);
+      // Return the prepared value to the caller.
       return storage.has(normalized) ? storage.get(normalized) : null;
     },
     setItem(key, value) {
@@ -46,6 +53,7 @@ function createLocalStorageMock() {
   };
 }
 
+// Section: handle the load api context workflow.
 function loadApiContext() {
   const localStorage = createLocalStorageMock();
   const windowObject = {
@@ -83,9 +91,11 @@ function loadApiContext() {
     context,
     { filename: API_JS },
   );
+  // Return the prepared value to the caller.
   return context;
 }
 
+// Section: handle the test runtime transition preserves report list caches workflow.
 async function testRuntimeTransitionPreservesReportListCaches() {
   const { API } = loadApiContext();
   const cloudRow = {
@@ -120,6 +130,7 @@ async function testRuntimeTransitionPreservesReportListCaches() {
   assertEqual(pending.data[0].report_id, 'cache-pending-001', 'pending row retained across transition');
 }
 
+// Section: handle the test synced local merge survives cloud pending snapshot workflow.
 function testSyncedLocalMergeSurvivesCloudPendingSnapshot() {
   const { API } = loadApiContext();
   const synced = {
@@ -150,6 +161,7 @@ function testSyncedLocalMergeSurvivesCloudPendingSnapshot() {
   assertEqual(syncedAfterCloud.source_label, 'Local Synced', 'synced local label after stale cloud row');
 }
 
+// Section: handle the test cloud completed local draft normalizes as synced local workflow.
 function testCloudCompletedLocalDraftNormalizesAsSyncedLocal() {
   const { API } = loadApiContext();
   const draft = API.normalizeLocalReportDraft({
@@ -167,6 +179,7 @@ function testCloudCompletedLocalDraftNormalizesAsSyncedLocal() {
   assertEqual(draft.source_label, 'Local Synced', 'cloud_completed local draft label');
 }
 
+// Section: handle the test mixed tag reconnect snapshots do not collapse cards workflow.
 function testMixedTagReconnectSnapshotsDoNotCollapseCards() {
   const { API } = loadApiContext();
   const cachedRows = [
@@ -238,6 +251,7 @@ function testMixedTagReconnectSnapshotsDoNotCollapseCards() {
   });
 }
 
+// Section: handle the test local mode mirror snapshots do not poison cached tags workflow.
 function testLocalModeMirrorSnapshotsDoNotPoisonCachedTags() {
   const { API } = loadApiContext();
   const cachedRows = [
@@ -312,6 +326,7 @@ function testLocalModeMirrorSnapshotsDoNotPoisonCachedTags() {
   assertEqual(byId.get('cache-mirror-local-001').source_label, 'Local', 'real local label after local mirror');
 }
 
+// Section: handle the main workflow.
 async function main() {
   const tests = [
     testRuntimeTransitionPreservesReportListCaches,
@@ -321,7 +336,9 @@ async function main() {
     testLocalModeMirrorSnapshotsDoNotPoisonCachedTags,
   ];
   const failures = [];
+  // Walk through the active items and update each one consistently.
   for (const testFn of tests) {
+    // Keep this browser operation recoverable if it fails.
     try {
       await testFn();
       console.log(`PASS: ${testFn.name}`);
@@ -331,6 +348,7 @@ async function main() {
     }
   }
 
+  // Choose the correct browser state branch before continuing.
   if (failures.length) {
     process.exit(1);
   }

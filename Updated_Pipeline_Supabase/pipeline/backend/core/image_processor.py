@@ -14,6 +14,7 @@ Usage:
     detections, annotated = processor.process_image(frame)
     annotated_frame = processor.annotate_frame(frame, detections)
 """
+# Readability: Backend core: coordinate detection, persistence, and report workflow concerns.
 
 import logging
 import cv2
@@ -23,18 +24,22 @@ from pathlib import Path
 import sys
 
 # Import existing inference module
+# Trigger the side effect required for this stage.
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.absolute()))
 
 try:
     from infer_image import predict_image
+    # Prepare infer available for the next step.
     INFER_AVAILABLE = True
 except ImportError:
     INFER_AVAILABLE = False
     logging.warning("infer_image module not available")
 
+# Prepare logger for the next step.
 logger = logging.getLogger(__name__)
 
 
+# Section: group image processor state and behaviour in one readable unit.
 class ImageProcessor:
     """
     Processes images for violation detection.
@@ -42,6 +47,7 @@ class ImageProcessor:
     Wraps existing inference code and provides annotation capabilities.
     """
     
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, config: Dict[str, Any]):
         """
         Initialize image processor.
@@ -49,6 +55,7 @@ class ImageProcessor:
         Args:
             config: Configuration dictionary from config.py
         """
+        # Prepare config for the next step.
         self.config = config
         
         # YOLO settings
@@ -62,12 +69,15 @@ class ImageProcessor:
         
         logger.info("Image Processor initialized")
     
+    # Section: run the generate colors workflow with clear inputs and outputs.
     def _generate_colors(self, num_classes: int) -> Dict[int, Tuple[int, int, int]]:
         """Generate distinct colors for each class."""
         colors = {}
         np.random.seed(42)  # Consistent colors
         
+        # Process each item in this collection using the same rule set.
         for class_id in range(num_classes):
+            # Prepare values needed by the next step.
             colors[class_id] = tuple(map(int, np.random.randint(0, 255, 3)))
         
         return colors
@@ -95,17 +105,22 @@ class ImageProcessor:
         Returns:
             Tuple of (detections, annotated_image)
         """
+        # Choose the correct branch before the workflow continues.
         if not INFER_AVAILABLE:
+            # Trigger the side effect required for this stage.
             logger.error("infer_image module not available")
             # Fallback: return empty detections and original image
             if isinstance(image, np.ndarray):
+                # Return the prepared result to the caller.
                 return [], image.copy()
             return [], None
         
         model_path = model_path or self.model_path
         conf = conf or self.conf_threshold
         
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare values needed by the next step.
             detections, annotated = predict_image(
                 image,
                 model_path=model_path,
@@ -116,12 +131,15 @@ class ImageProcessor:
             return detections, annotated
             
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.error(f"Error processing image: {e}", exc_info=True)
             # Return empty detections and original image if available
             if isinstance(image, np.ndarray):
+                # Return the prepared result to the caller.
                 return [], image.copy()
             return [], None
     
+    # Section: run the annotate frame workflow with clear inputs and outputs.
     def annotate_frame(
         self,
         frame: np.ndarray,
@@ -141,10 +159,12 @@ class ImageProcessor:
         Returns:
             Annotated frame
         """
+        # Prepare annotated for the next step.
         annotated = frame.copy()
         
         for det in detections:
             # Get box coordinates
+            # Prepare bbox for the next step.
             bbox = det['bbox']
             x1, y1, x2, y2 = map(int, bbox)
             
@@ -154,6 +174,7 @@ class ImageProcessor:
             confidence = det.get('confidence', 0.0)
             
             # Get color for this class
+            # Prepare color for the next step.
             color = self.colors.get(class_id, (0, 255, 0))
             
             # Draw bounding box
@@ -166,6 +187,7 @@ class ImageProcessor:
                 label = class_name
             
             # Draw label background
+            # Prepare values needed by the next step.
             (label_width, label_height), baseline = cv2.getTextSize(
                 label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
             )
@@ -182,6 +204,7 @@ class ImageProcessor:
             )
             
             # Draw label text
+            # Trigger the side effect required for this stage.
             cv2.putText(
                 annotated,
                 label,
@@ -193,8 +216,10 @@ class ImageProcessor:
                 cv2.LINE_AA
             )
         
+        # Return the prepared result to the caller.
         return annotated
     
+    # Section: run the add info overlay workflow with clear inputs and outputs.
     def add_info_overlay(
         self,
         frame: np.ndarray,
@@ -210,6 +235,7 @@ class ImageProcessor:
         Returns:
             Frame with overlay
         """
+        # Prepare overlay for the next step.
         overlay = frame.copy()
         height, width = overlay.shape[:2]
         
@@ -222,6 +248,7 @@ class ImageProcessor:
             (0, 0, 0),
             -1
         )
+        # Trigger the side effect required for this stage.
         cv2.addWeighted(overlay_bg, 0.6, overlay, 0.4, 0, overlay)
         
         # Add text
@@ -240,6 +267,7 @@ class ImageProcessor:
             )
             y_offset += 25
         
+        # Return the prepared result to the caller.
         return overlay
     
     # =========================================================================
@@ -263,18 +291,22 @@ class ImageProcessor:
         Returns:
             Resized frame
         """
+        # Prepare values needed by the next step.
         height, width = frame.shape[:2]
         
         # Calculate scale
         scale = min(max_width / width, max_height / height, 1.0)
         
         if scale < 1.0:
+            # Prepare new width for the next step.
             new_width = int(width * scale)
             new_height = int(height * scale)
             return cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
         
+        # Return the prepared result to the caller.
         return frame
     
+    # Section: run the save image workflow with clear inputs and outputs.
     def save_image(
         self,
         image: np.ndarray,
@@ -292,7 +324,9 @@ class ImageProcessor:
         Returns:
             True if successful
         """
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare path for the next step.
             path = Path(path)
             path.parent.mkdir(parents=True, exist_ok=True)
             
@@ -302,6 +336,7 @@ class ImageProcessor:
                 [cv2.IMWRITE_JPEG_QUALITY, quality]
             )
             
+            # Trigger the side effect required for this stage.
             logger.debug(f"Image saved: {path}")
             return True
             
@@ -317,6 +352,7 @@ class ImageProcessor:
 if __name__ == '__main__':
     import sys
     from pathlib import Path
+    # Trigger the side effect required for this stage.
     sys.path.insert(0, str(Path(__file__).parent.parent.parent.absolute()))
     from config import YOLO_CONFIG, PPE_CLASSES
     
@@ -327,6 +363,7 @@ if __name__ == '__main__':
     print("=" * 70)
     
     # Create config
+    # Prepare config for the next step.
     config = {
         'YOLO_CONFIG': YOLO_CONFIG,
         'PPE_CLASSES': PPE_CLASSES
@@ -336,6 +373,7 @@ if __name__ == '__main__':
     processor = ImageProcessor(config)
     
     print(f"\n[OK] Image Processor initialized")
+    # Trigger the side effect required for this stage.
     print(f"Model path: {processor.model_path}")
     print(f"Confidence threshold: {processor.conf_threshold}")
     print(f"Classes: {len(processor.class_names)}")
@@ -345,6 +383,7 @@ if __name__ == '__main__':
     print("\n--- Testing Annotation ---")
     dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
     
+    # Prepare dummy detections for the next step.
     dummy_detections = [
         {
             'class_id': 3,
@@ -360,6 +399,7 @@ if __name__ == '__main__':
         }
     ]
     
+    # Prepare annotated for the next step.
     annotated = processor.annotate_frame(dummy_frame, dummy_detections)
     print(f"[OK] Annotated frame shape: {annotated.shape}")
     
@@ -369,4 +409,5 @@ if __name__ == '__main__':
     print(f"[OK] Frame with overlay shape: {with_overlay.shape}")
     
     print("\n[OK] All tests passed!")
+    # Trigger the side effect required for this stage.
     print("=" * 70)

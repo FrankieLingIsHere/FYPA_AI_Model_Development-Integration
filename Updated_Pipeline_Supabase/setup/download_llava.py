@@ -1,4 +1,6 @@
 """Download LLaVA Model"""
+# Readability: Setup helper: prepare project dependencies, data, or cloud resources.
+# Trigger the side effect required for this stage.
 print("Downloading LLaVA 1.5 7B (~13GB)... This will take 10-30 minutes.")
 print("Model will be cached in: ~/.cache/huggingface/")
 
@@ -13,6 +15,7 @@ quantization_config = BitsAndBytesConfig(
     llm_int8_enable_fp32_cpu_offload=True  # Allow CPU offloading
 )
 
+# Prepare model for the next step.
 model = LlavaForConditionalGeneration.from_pretrained(
     'llava-hf/llava-1.5-7b-hf',
     quantization_config=quantization_config,
@@ -22,6 +25,7 @@ model = LlavaForConditionalGeneration.from_pretrained(
 print("✓ Model downloaded!")
 
 print("\n[2/2] Downloading processor...")
+# Prepare processor for the next step.
 processor = AutoProcessor.from_pretrained('llava-hf/llava-1.5-7b-hf')
 print("✓ Processor downloaded!")
 

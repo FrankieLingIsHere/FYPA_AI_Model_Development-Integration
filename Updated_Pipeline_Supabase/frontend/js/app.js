@@ -1,8 +1,10 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 const STARTUP_STATUS_ENDPOINT = '/api/system/startup-status';
 const STARTUP_POLL_INTERVAL_MS = 5000;
 const STARTUP_GATE_SOFT_TIMEOUT_MS = 15000;
 const STARTUP_GATE_MAX_BLOCKING_FETCH_FAILURES = 3;
 const BACKEND_PROBE_TIMEOUT_MS = 2600;
+// Prepare app bootstrapped for the next UI or data step.
 let appBootstrapped = false;
 let startupGateInFlight = false;
 let networkIndicatorBootstrapped = false;
@@ -35,9 +37,11 @@ function _fnv1aHex(str) {
         h ^= str.charCodeAt(i);
         h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
     }
+    // Return the prepared value to the caller.
     return ('00000000' + h.toString(16)).slice(-8);
 }
 
+// Section: handle the derive stable device machine id workflow.
 function _deriveStableDeviceMachineId() {
     // Combine signals that are stable across sessions on the same browser+PC
     // but vary across browsers / PCs. Avoid IP / canvas to keep this minimal
@@ -57,12 +61,15 @@ function _deriveStableDeviceMachineId() {
     ];
     const a = _fnv1aHex(signalParts.join('|'));
     const b = _fnv1aHex(signalParts.reverse().join('#'));
+    // Return the prepared value to the caller.
     return `Web-${a}${b.slice(0, 4)}`; // 12 hex chars total — matches existing format
 }
 
+// Section: handle the generate device machine id workflow.
 function _generateDeviceMachineId() {
     let suffix = '';
     try {
+        // Choose the correct browser state branch before continuing.
         if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
             const bytes = new Uint8Array(6);
             window.crypto.getRandomValues(bytes);
@@ -71,6 +78,7 @@ function _generateDeviceMachineId() {
     } catch (error) {
         suffix = '';
     }
+    // Choose the correct browser state branch before continuing.
     if (!suffix) {
         suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     }
@@ -78,10 +86,13 @@ function _generateDeviceMachineId() {
     return generated.length >= 3 ? generated : `Web-${Date.now().toString(36)}`;
 }
 
+// Section: handle the get or create device machine id workflow.
 function getOrCreateDeviceMachineId() {
     try {
         const existing = String(localStorage.getItem(LOCAL_MODE_DEVICE_MACHINE_ID_KEY) || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (/^[A-Za-z0-9._:-]{3,120}$/.test(existing)) {
+            // Return the prepared value to the caller.
             return existing;
         }
         // Prefer a deterministic fingerprint so re-derivation after a storage
@@ -95,21 +106,26 @@ function getOrCreateDeviceMachineId() {
         } catch (writeErr) {
             // ignore quota / privacy mode failures
         }
+        // Return the prepared value to the caller.
         return machineId;
     } catch (error) {
         try { return _deriveStableDeviceMachineId(); } catch (_) { return _generateDeviceMachineId(); }
     }
 }
 
+// Section: handle the get manual provider profile lock workflow.
 function getManualProviderProfileLock() {
+    // Keep this browser operation recoverable if it fails.
     try {
         const value = String(localStorage.getItem(PROVIDER_PROFILE_MANUAL_LOCK_KEY) || '').trim().toLowerCase();
         return value === 'local' ? 'local' : '';
     } catch (error) {
+        // Return the prepared value to the caller.
         return '';
     }
 }
 
+// Section: handle the set manual provider profile lock workflow.
 function setManualProviderProfileLock(profile) {
     try {
         const value = String(profile || '').trim().toLowerCase();
@@ -123,6 +139,7 @@ function setManualProviderProfileLock(profile) {
     }
 }
 
+// Section: handle the clear manual provider profile lock workflow.
 function clearManualProviderProfileLock() {
     setManualProviderProfileLock('');
 }
@@ -151,6 +168,7 @@ let localModePolicyState = {
     checkupCompleted: false,
     autoSetupAllowed: false
 };
+// Prepare provisioning tracker bootstrapped for the next UI or data step.
 let provisioningTrackerBootstrapped = false;
 let provisioningStatusPollBusy = false;
 let provisioningStatusPollInterval = null;
@@ -182,9 +200,12 @@ let provisioningStatusState = {
     source: 'startup-default',
     measuredAt: Date.now()
 };
+// Prepare provisioning last announced status for the next UI or data step.
 let provisioningLastAnnouncedStatus = '';
 
+// Section: handle the purge legacy local mode status cache workflow.
 function purgeLegacyLocalModeStatusCache() {
+    // Keep this browser operation recoverable if it fails.
     try {
         localStorage.removeItem(LEGACY_LOCAL_MODE_CHECKUP_COMPLETED_KEY);
         localStorage.removeItem(LEGACY_LOCAL_MODE_AUTO_SETUP_ALLOWED_KEY);
@@ -195,9 +216,12 @@ function purgeLegacyLocalModeStatusCache() {
 
 purgeLegacyLocalModeStatusCache();
 
+// Section: handle the load persisted local mode policy workflow.
 function loadPersistedLocalModePolicy() {
+    // Keep this browser operation recoverable if it fails.
     try {
         const raw = localStorage.getItem(LOCAL_MODE_POLICY_STATE_KEY);
+        // Choose the correct browser state branch before continuing.
         if (!raw) return null;
 
         const parsed = JSON.parse(raw);
@@ -209,11 +233,14 @@ function loadPersistedLocalModePolicy() {
             autoSetupAllowed: !!parsed.autoSetupAllowed
         };
     } catch (error) {
+        // Return the prepared value to the caller.
         return null;
     }
 }
 
+// Section: handle the persist local mode policy workflow.
 function persistLocalModePolicy(state) {
+    // Keep this browser operation recoverable if it fails.
     try {
         localStorage.setItem(
             LOCAL_MODE_POLICY_STATE_KEY,
@@ -230,6 +257,7 @@ function persistLocalModePolicy(state) {
 }
 
 const persistedLocalModePolicy = loadPersistedLocalModePolicy();
+// Choose the correct browser state branch before continuing.
 if (persistedLocalModePolicy) {
     localModePolicyState = {
         ...localModePolicyState,
@@ -237,8 +265,11 @@ if (persistedLocalModePolicy) {
     };
 }
 
+// Section: handle the is likely remote backend workflow.
 function isLikelyRemoteBackend() {
+    // Keep this browser operation recoverable if it fails.
     try {
+        // Choose the correct browser state branch before continuing.
         if (!API_CONFIG || !API_CONFIG.BASE_URL) return false;
         const resolved = new URL(API_CONFIG.BASE_URL, window.location.origin);
         const host = String(resolved.hostname || '').toLowerCase();
@@ -249,7 +280,9 @@ function isLikelyRemoteBackend() {
     }
 }
 
+// Section: handle the load persisted provisioning state workflow.
 function loadPersistedProvisioningState() {
+    // Keep this browser operation recoverable if it fails.
     try {
         // Best-effort cleanup of older cache keys so devices that
         // previously stored a long-lived 'approved' entry get unstuck
@@ -265,6 +298,7 @@ function loadPersistedProvisioningState() {
         }
 
         const raw = localStorage.getItem(LOCAL_MODE_PROVISIONING_STATUS_KEY);
+        // Choose the correct browser state branch before continuing.
         if (!raw) return null;
 
         const parsed = JSON.parse(raw);
@@ -276,11 +310,14 @@ function loadPersistedProvisioningState() {
 
         return parsed;
     } catch (error) {
+        // Return the prepared value to the caller.
         return null;
     }
 }
 
+// Section: handle the persist provisioning state workflow.
 function persistProvisioningState(state) {
+    // Keep this browser operation recoverable if it fails.
     try {
         if (!state || typeof state !== 'object') return;
         localStorage.setItem(LOCAL_MODE_PROVISIONING_STATUS_KEY, JSON.stringify(state));
@@ -289,6 +326,7 @@ function persistProvisioningState(state) {
     }
 }
 
+// Section: handle the get local mode policy workflow.
 function getLocalModePolicy() {
     return {
         setupCheckCompleted: !!(localModePolicyState.setupCheckCompleted || localModePolicyState.checkupCompleted),
@@ -297,12 +335,15 @@ function getLocalModePolicy() {
     };
 }
 
+// Section: handle the set local mode policy workflow.
 function setLocalModePolicy({ setupCheckCompleted, checkupCompleted, autoSetupAllowed } = {}) {
+    // Choose the correct browser state branch before continuing.
     if (setupCheckCompleted !== undefined) {
         localModePolicyState.setupCheckCompleted = !!setupCheckCompleted;
     }
     if (checkupCompleted !== undefined) {
         localModePolicyState.checkupCompleted = !!checkupCompleted;
+        // Choose the correct browser state branch before continuing.
         if (checkupCompleted) {
             localModePolicyState.setupCheckCompleted = true;
         }
@@ -324,8 +365,11 @@ window.PPELocalModePolicy = {
     set: (next) => setLocalModePolicy(next || {})
 };
 
+// Section: handle the notify app workflow.
 function notifyApp(message, type = 'info') {
+    // Choose the correct browser state branch before continuing.
     if (typeof NotificationManager !== 'undefined') {
+        // Choose the correct browser state branch before continuing.
         if (type === 'success') return NotificationManager.success(message);
         if (type === 'warning') return NotificationManager.warning(message);
         if (type === 'error') return NotificationManager.error(message);
@@ -334,6 +378,7 @@ function notifyApp(message, type = 'info') {
     console.log(`[App:${type}] ${message}`);
 }
 
+// Section: handle the clear offline transition state workflow.
 async function clearOfflineTransitionState(reason = 'cloud-transition') {
     const transientKeys = [
         'ppe.runtime.isOffline',
@@ -345,10 +390,12 @@ async function clearOfflineTransitionState(reason = 'cloud-transition') {
     ];
 
     transientKeys.forEach((key) => {
+        // Keep this browser operation recoverable if it fails.
         try { localStorage.removeItem(key); } catch (_) {}
         try { sessionStorage.removeItem(key); } catch (_) {}
     });
 
+    // Keep this browser operation recoverable if it fails.
     try {
         API_CONFIG.BASE_URL = null;
         lastResolvedBackendBaseUrl = null;
@@ -358,6 +405,7 @@ async function clearOfflineTransitionState(reason = 'cloud-transition') {
     }
 
     if (typeof API !== 'undefined' && typeof API.clearRuntimeTransitionCaches === 'function') {
+        // Keep this browser operation recoverable if it fails.
         try {
             await API.clearRuntimeTransitionCaches(reason);
         } catch (error) {
@@ -373,9 +421,12 @@ async function clearOfflineTransitionState(reason = 'cloud-transition') {
     }));
 }
 
+// Section: handle the normalize provisioning status workflow.
 function normalizeProvisioningStatus(rawStatus, _credentialsPresent) {
     const normalized = String(rawStatus || '').trim().toLowerCase();
+    // Choose the correct browser state branch before continuing.
     if (normalized === 'pending' || normalized === 'pending_approval') {
+        // Return the prepared value to the caller.
         return 'pending_approval';
     }
     if (normalized === 'approved') {
@@ -387,7 +438,9 @@ function normalizeProvisioningStatus(rawStatus, _credentialsPresent) {
     if (normalized === 'credentials_present') {
         return 'credentials_present';
     }
+    // Choose the correct browser state branch before continuing.
     if (normalized === 'provisioned') {
+        // Return the prepared value to the caller.
         return 'provisioned';
     }
     if (normalized === 'validation_required' || normalized === 'reauthorize_required') {
@@ -399,12 +452,15 @@ function normalizeProvisioningStatus(rawStatus, _credentialsPresent) {
     if (normalized === 'error') {
         return 'error';
     }
+    // Choose the correct browser state branch before continuing.
     if (normalized === 'idle') {
+        // Return the prepared value to the caller.
         return 'idle';
     }
     return normalized || 'idle';
 }
 
+// Section: handle the normalize cloud heartbeat state workflow.
 function normalizeCloudHeartbeatState(input = {}, fallback = {}) {
     const source = (input && typeof input === 'object') ? input : {};
     const fallbackState = (fallback && typeof fallback === 'object') ? fallback : {};
@@ -443,6 +499,7 @@ function normalizeCloudHeartbeatState(input = {}, fallback = {}) {
         ? Date.now()
         : Number(fallbackState.receivedAtMs || Date.now());
 
+    // Return the prepared value to the caller.
     return {
         available,
         machineId,
@@ -464,8 +521,10 @@ function normalizeCloudHeartbeatState(input = {}, fallback = {}) {
     };
 }
 
+// Section: handle the cloud heartbeat signature workflow.
 function cloudHeartbeatSignature(heartbeat = {}) {
     const hb = heartbeat && typeof heartbeat === 'object' ? heartbeat : {};
+    // Return the prepared value to the caller.
     return [
         String(!!hb.available),
         String(hb.machineId || ''),
@@ -485,6 +544,7 @@ function cloudHeartbeatSignature(heartbeat = {}) {
     ].join('|');
 }
 
+// Section: handle the coerce provisioning status state workflow.
 function coerceProvisioningStatusState(input = {}, fallback = {}) {
     const credentialsPresent = !!(
         input.credentials_present ??
@@ -496,6 +556,7 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
     const statusCandidate = rawStatus === 'stored'
         ? (input.device_status ?? input.provisioning_status ?? input.status)
         : (input.status ?? input.device_status);
+    // Prepare status for the next UI or data step.
     let status = normalizeProvisioningStatus(
         statusCandidate ?? fallback.status,
         credentialsPresent
@@ -519,7 +580,9 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
         credentialsPresent
     );
 
+    // Choose the correct browser state branch before continuing.
     if (isLikelyRemoteBackend()) {
+        // Choose the correct browser state branch before continuing.
         if ((status === 'idle' || status === 'credentials_present') && heartbeatProvisionStatus !== 'idle') {
             status = heartbeatProvisionStatus;
         }
@@ -531,6 +594,7 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
             && cloudHeartbeat.localModePossible
             && heartbeatMatchesThisMachine
         );
+        // Prepare heartbeat is approved for the next UI or data step.
         const heartbeatIsApproved = (
             heartbeatProvisionStatus === 'approved'
             || heartbeatProvisionStatus === 'provisioned'
@@ -541,6 +605,7 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
             || status === 'provisioned'
             || status === 'active'
         );
+        // Choose the correct browser state branch before continuing.
         if (heartbeatActive && (heartbeatIsApproved || statusIsApproved)) {
             status = 'active';
         }
@@ -583,6 +648,7 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
             && fallbackAgeMs >= 0
             && fallbackAgeMs < PROTECTION_WINDOW_MS
             && trustedSource;
+        // Choose the correct browser state branch before continuing.
         if (protectionStillFresh) {
             status = fallbackStatus;
         }
@@ -592,6 +658,7 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
     const source = String(input.source ?? fallback.source ?? 'poll').trim() || 'poll';
     const measuredAt = Number(input.measuredAt ?? Date.now()) || Date.now();
 
+    // Return the prepared value to the caller.
     return {
         status,
         machineId,
@@ -604,7 +671,9 @@ function coerceProvisioningStatusState(input = {}, fallback = {}) {
     };
 }
 
+// Section: handle the has provisioning state changed workflow.
 function hasProvisioningStateChanged(previousState, nextState) {
+    // Choose the correct browser state branch before continuing.
     if (!previousState) return true;
     return previousState.status !== nextState.status
         || previousState.machineId !== nextState.machineId
@@ -614,7 +683,9 @@ function hasProvisioningStateChanged(previousState, nextState) {
         || previousState.error !== nextState.error;
 }
 
+// Section: handle the cloud heartbeat needs followup workflow.
 function cloudHeartbeatNeedsFollowup(state = provisioningStatusState) {
+    // Choose the correct browser state branch before continuing.
     if (!isLikelyRemoteBackend()) return false;
     const heartbeat = state && state.cloudHeartbeat && typeof state.cloudHeartbeat === 'object'
         ? state.cloudHeartbeat
@@ -629,11 +700,13 @@ function cloudHeartbeatNeedsFollowup(state = provisioningStatusState) {
         || provisionStatus === 'provisioned'
         || provisionStatus === 'active'
     );
+    // Return the prepared value to the caller.
     return !heartbeat.available
         || !heartbeat.isRecent
         || (shouldExpectReadyHeartbeat && !heartbeat.localModePossible);
 }
 
+// Section: handle the stop provisioning heartbeat refresh burst workflow.
 function stopProvisioningHeartbeatRefreshBurst() {
     if (provisioningHeartbeatRefreshBurstTimer) {
         clearInterval(provisioningHeartbeatRefreshBurstTimer);
@@ -643,15 +716,19 @@ function stopProvisioningHeartbeatRefreshBurst() {
     provisioningHeartbeatRefreshBurstBusy = false;
 }
 
+// Section: handle the schedule provisioning heartbeat refresh burst workflow.
 function scheduleProvisioningHeartbeatRefreshBurst(reason = 'heartbeat-followup') {
+    // Choose the correct browser state branch before continuing.
     if (!isLikelyRemoteBackend()) return;
 
     if (provisioningHeartbeatRefreshBurstTimer) return;
 
     provisioningHeartbeatRefreshBurstUntil = Date.now() + 90000;
     const tick = async () => {
+        // Choose the correct browser state branch before continuing.
         if (Date.now() > provisioningHeartbeatRefreshBurstUntil) {
             stopProvisioningHeartbeatRefreshBurst();
+            // Return the prepared value to the caller.
             return;
         }
         if (!cloudHeartbeatNeedsFollowup()) {
@@ -662,6 +739,7 @@ function scheduleProvisioningHeartbeatRefreshBurst(reason = 'heartbeat-followup'
             return;
         }
         provisioningHeartbeatRefreshBurstBusy = true;
+        // Keep this browser operation recoverable if it fails.
         try {
             await refreshProvisioningStatus({
                 source: reason,
@@ -679,7 +757,9 @@ function scheduleProvisioningHeartbeatRefreshBurst(reason = 'heartbeat-followup'
     });
 }
 
+// Section: handle the announce provisioning status transition workflow.
 function announceProvisioningStatusTransition(previousState, nextState, options = {}) {
+    // Choose the correct browser state branch before continuing.
     if (!nextState) return;
     if (options.notify === false) return;
     if (!previousState || previousState.status === nextState.status) return;
@@ -702,6 +782,7 @@ function announceProvisioningStatusTransition(previousState, nextState, options 
     provisioningLastAnnouncedStatus = nextState.status;
 }
 
+// Section: handle the publish provisioning state workflow.
 function publishProvisioningState(nextState, options = {}) {
     const previousState = provisioningStatusState;
     const normalized = coerceProvisioningStatusState(nextState, previousState || {});
@@ -710,6 +791,7 @@ function publishProvisioningState(nextState, options = {}) {
     provisioningStatusState = normalized;
     persistProvisioningState(normalized);
 
+    // Choose the correct browser state branch before continuing.
     if (changed || options.forceDispatch) {
         window.dispatchEvent(new CustomEvent('ppe-provisioning:status', {
             detail: { ...normalized }
@@ -722,11 +804,14 @@ function publishProvisioningState(nextState, options = {}) {
     } else {
         stopProvisioningHeartbeatRefreshBurst();
     }
+    // Return the prepared value to the caller.
     return { ...normalized };
 }
 
+// Section: handle the refresh provisioning status workflow.
 async function refreshProvisioningStatus(options = {}) {
     if (provisioningStatusPollBusy && !options.force) {
+        // Return the prepared value to the caller.
         return { ...provisioningStatusState };
     }
 
@@ -736,6 +821,7 @@ async function refreshProvisioningStatus(options = {}) {
 
     provisioningStatusPollBusy = true;
 
+    // Keep this browser operation recoverable if it fails.
     try {
         const source = String(options.source || 'poll').trim() || 'poll';
         // On the cloud frontend, ALWAYS pass the per-device localStorage ID
@@ -754,7 +840,9 @@ async function refreshProvisioningStatus(options = {}) {
             ? await API.autoProvisionLocalModeCredentials(options.payload || {})
             : await API.getLocalModeProvisioningStatus({ machineId: machineIdHint });
 
+        // Choose the correct browser state branch before continuing.
         if (!result || result.success === false) {
+            // Return the prepared value to the caller.
             return { ...provisioningStatusState };
         }
 
@@ -765,13 +853,16 @@ async function refreshProvisioningStatus(options = {}) {
         }, options);
     } catch (error) {
         console.warn('Provisioning status refresh failed:', error);
+        // Return the prepared value to the caller.
         return { ...provisioningStatusState };
     } finally {
         provisioningStatusPollBusy = false;
     }
 }
 
+// Section: handle the initialize provisioning status tracker workflow.
 function initializeProvisioningStatusTracker() {
+    // Choose the correct browser state branch before continuing.
     if (provisioningTrackerBootstrapped) return;
     provisioningTrackerBootstrapped = true;
 
@@ -827,6 +918,7 @@ function initializeProvisioningStatusTracker() {
     window.addEventListener('online', () => {
         refreshProvisioningStatus({ source: 'online', force: true });
         scheduleProvisioningHeartbeatRefreshBurst('online-heartbeat-followup');
+        // Choose the correct browser state branch before continuing.
         if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
             API.warmDashboardCaches({
                 reason: 'online-reconnect',
@@ -840,6 +932,7 @@ function initializeProvisioningStatusTracker() {
     window.addEventListener('ppe-backend:resolved', () => {
         refreshProvisioningStatus({ source: 'backend-resolved', force: true });
         scheduleProvisioningHeartbeatRefreshBurst('backend-resolved-heartbeat-followup');
+        // Choose the correct browser state branch before continuing.
         if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
             API.warmDashboardCaches({
                 reason: 'backend-resolved',
@@ -851,6 +944,7 @@ function initializeProvisioningStatusTracker() {
     });
 
     document.addEventListener('visibilitychange', () => {
+        // Choose the correct browser state branch before continuing.
         if (!document.hidden) {
             refreshProvisioningStatus({ source: 'visibility', force: true });
             scheduleProvisioningHeartbeatRefreshBurst('visibility-heartbeat-followup');
@@ -867,8 +961,10 @@ document.addEventListener('DOMContentLoaded', () => {
     initializeWithStartupGate();
 });
 
+// Section: handle the ensure pwa document markers workflow.
 function ensurePwaDocumentMarkers() {
     const head = document.head;
+    // Choose the correct browser state branch before continuing.
     if (!head) return;
 
     const hasManifest = !!head.querySelector('link[rel="manifest"]');
@@ -880,6 +976,7 @@ function ensurePwaDocumentMarkers() {
     }
 
     const hasThemeColor = !!head.querySelector('meta[name="theme-color"]');
+    // Choose the correct browser state branch before continuing.
     if (!hasThemeColor) {
         const theme = document.createElement('meta');
         theme.setAttribute('name', 'theme-color');
@@ -888,11 +985,14 @@ function ensurePwaDocumentMarkers() {
     }
 }
 
+// Section: handle the initialize with startup gate workflow.
 async function initializeWithStartupGate() {
     if (startupGateInFlight) {
+        // Return the prepared value to the caller.
         return;
     }
     startupGateInFlight = true;
+    // Keep this browser operation recoverable if it fails.
     try {
     const body = document.body;
     const retryButton = document.getElementById('startupRetryBtn');
@@ -916,8 +1016,10 @@ async function initializeWithStartupGate() {
         force: true
     });
 
+    // Keep this browser operation recoverable if it fails.
     try {
         const startupResult = await waitForStartupReady();
+        // Choose the correct browser state branch before continuing.
         if (startupResult && startupResult.softReady) {
             console.warn('Startup gate released before backend readiness completed:', startupResult.reason || 'soft-ready');
         }
@@ -926,8 +1028,10 @@ async function initializeWithStartupGate() {
         return;
     }
 
+    // Choose the correct browser state branch before continuing.
     if (appBootstrapped) {
         body.classList.remove('startup-loading');
+        // Return the prepared value to the caller.
         return;
     }
 
@@ -939,6 +1043,7 @@ async function initializeWithStartupGate() {
     Router.register('analytics', AnalyticsPage);
     Router.register('about', AboutPage);
     initializeProvisioningStatusTracker();
+    // Choose the correct browser state branch before continuing.
     if (typeof API !== 'undefined' && typeof API.warmDashboardCaches === 'function') {
         API.warmDashboardCaches({ reason: 'startup', timeoutMs: 10000 });
     }
@@ -953,6 +1058,7 @@ async function initializeWithStartupGate() {
         console.log('Timezone utility initialized.');
     }
 
+    // Choose the correct browser state branch before continuing.
     if (typeof RealtimeSync !== 'undefined' && RealtimeSync.start) {
         RealtimeSync.start();
     }
@@ -967,9 +1073,11 @@ async function initializeWithStartupGate() {
     }
 }
 
+// Section: handle the wait for startup ready workflow.
 async function waitForStartupReady() {
     const startedAt = Date.now();
     const timeoutAt = Date.now() + (10 * 60 * 1000);
+    // Prepare last resolution at ms for the next UI or data step.
     let lastResolutionAtMs = 0;
     let consecutiveFetchFailures = 0;
 
@@ -978,6 +1086,7 @@ async function waitForStartupReady() {
             progress: 100,
             current_step: 'Backend startup is still finishing. Launching interface...',
         });
+        // Return the prepared value to the caller.
         return {
             softReady: true,
             reason,
@@ -985,11 +1094,14 @@ async function waitForStartupReady() {
         };
     };
 
+    // Walk through the active items and update each one consistently.
     while (Date.now() < timeoutAt) {
         if ((Date.now() - startedAt) >= STARTUP_GATE_SOFT_TIMEOUT_MS) {
+            // Return the prepared value to the caller.
             return releaseSoftStartupGate('startup_checks_soft_timeout');
         }
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const startupController = new AbortController();
             const startupTimeoutId = setTimeout(() => startupController.abort(), 12000);
@@ -1007,17 +1119,21 @@ async function waitForStartupReady() {
             updateStartupUi(payload || {});
 
             const failedCheck = findFailedStartupCheck(payload);
+            // Choose the correct browser state branch before continuing.
             if (failedCheck) {
                 const detail = failedCheck.detail ? `: ${failedCheck.detail}` : '';
                 const failureMessage = `${failedCheck.label || 'Startup check failed'}${detail}`;
+                // Choose the correct browser state branch before continuing.
                 if (/yolo|model path|pipeline modules|pipeline components/i.test(failureMessage)) {
                     throw new Error(failureMessage);
                 }
                 if ((Date.now() - startedAt) >= STARTUP_GATE_SOFT_TIMEOUT_MS) {
+                    // Return the prepared value to the caller.
                     return releaseSoftStartupGate('startup_noncritical_check_failed', failureMessage);
                 }
             }
 
+            // Choose the correct browser state branch before continuing.
             if (payload && payload.ready) {
                 updateStartupUi({
                     ...payload,
@@ -1025,12 +1141,15 @@ async function waitForStartupReady() {
                     current_step: 'Startup checks completed. Launching interface...'
                 });
                 await sleep(320);
+                // Return the prepared value to the caller.
                 return;
             }
 
+            // Choose the correct browser state branch before continuing.
             if (response.status >= 500 || (payload && payload.status === 'error')) {
                 const failureReason = (payload && payload.error_message) || 'Startup setup failed on backend.';
                 if ((Date.now() - startedAt) >= STARTUP_GATE_SOFT_TIMEOUT_MS) {
+                    // Return the prepared value to the caller.
                     return releaseSoftStartupGate('startup_status_unavailable', failureReason);
                 }
                 updateStartupUi({
@@ -1040,6 +1159,7 @@ async function waitForStartupReady() {
                 });
             }
         } catch (error) {
+            // Choose the correct browser state branch before continuing.
             if (error && error.message && /startup check failed|startup setup failed|yolo|model path|pipeline/i.test(error.message)) {
                 throw error;
             }
@@ -1066,10 +1186,12 @@ async function waitForStartupReady() {
                 current_step: 'Waiting for backend startup checks to respond...'
             });
 
+            // Choose the correct browser state branch before continuing.
             if (
                 consecutiveFetchFailures >= STARTUP_GATE_MAX_BLOCKING_FETCH_FAILURES
                 || (Date.now() - startedAt) >= STARTUP_GATE_SOFT_TIMEOUT_MS
             ) {
+                // Return the prepared value to the caller.
                 return releaseSoftStartupGate(
                     'startup_api_unreachable',
                     error && error.message ? error.message : ''
@@ -1080,19 +1202,24 @@ async function waitForStartupReady() {
         await sleep(STARTUP_POLL_INTERVAL_MS);
     }
 
+    // Return the prepared value to the caller.
     return releaseSoftStartupGate('startup_checks_long_timeout');
 }
 
+// Section: handle the find failed startup check workflow.
 function findFailedStartupCheck(payload) {
     if (!payload || !payload.checks || typeof payload.checks !== 'object') {
+        // Return the prepared value to the caller.
         return null;
     }
 
     const checks = Object.values(payload.checks);
     const failed = checks.find((item) => item && item.status === 'error');
+    // Return the prepared value to the caller.
     return failed || null;
 }
 
+// Section: handle the update startup ui workflow.
 function updateStartupUi(payload) {
     const currentStep = document.getElementById('startupCurrentStep');
     const progressFill = document.getElementById('startupProgressFill');
@@ -1104,6 +1231,7 @@ function updateStartupUi(payload) {
     const progress = Math.max(0, Math.min(100, Number(payload.progress || 0)));
     const step = payload.current_step || 'Preparing startup checks...';
 
+    // Choose the correct browser state branch before continuing.
     if (currentStep) currentStep.textContent = step;
     if (progressFill) progressFill.style.width = `${progress}%`;
     if (progressPercent) progressPercent.textContent = `${progress}%`;
@@ -1114,12 +1242,14 @@ function updateStartupUi(payload) {
         errorBox.textContent = '';
     }
 
+    // Choose the correct browser state branch before continuing.
     if (checklist && payload.checks) {
         const items = Object.values(payload.checks)
             .map((item) => {
                 const state = item.status || 'pending';
                 const label = item.label || 'Unknown check';
                 const detail = item.detail ? ` - ${item.detail}` : '';
+                // Return the prepared value to the caller.
                 return `<li class="${state}">${label}: ${state.toUpperCase()}${detail}</li>`;
             })
             .join('');
@@ -1127,9 +1257,11 @@ function updateStartupUi(payload) {
     }
 }
 
+// Section: handle the show startup error workflow.
 function showStartupError(message) {
     const errorBox = document.getElementById('startupError');
     const retryButton = document.getElementById('startupRetryBtn');
+    // Choose the correct browser state branch before continuing.
     if (errorBox) {
         errorBox.textContent = `Startup blocked: ${message}`;
         errorBox.hidden = false;
@@ -1139,16 +1271,20 @@ function showStartupError(message) {
     }
 }
 
+// Section: handle the sleep workflow.
 function sleep(ms) {
+    // Return the prepared value to the caller.
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Section: handle the normalize base url workflow.
 function normalizeBaseUrl(base) {
     const raw = String(base || '').trim();
     if (!raw || raw === window.location.origin) return '';
     return raw.replace(/\/+$/, '');
 }
 
+// Section: handle the build backend candidates workflow.
 function buildBackendCandidates(preferLocal) {
     const explicitApiOverride = normalizeBaseUrl(window.PPE_API_URL || '');
     const configured = normalizeBaseUrl(window.PPE_API_URL || (window.__PPE_CONFIG__ && window.__PPE_CONFIG__.API_BASE_URL) || '');
@@ -1176,14 +1312,17 @@ function buildBackendCandidates(preferLocal) {
     const dedup = [];
     ordered.forEach((item) => {
         const normalized = normalizeBaseUrl(item);
+        // Choose the correct browser state branch before continuing.
         if (!dedup.includes(normalized)) {
             dedup.push(normalized);
         }
     });
 
+    // Return the prepared value to the caller.
     return dedup;
 }
 
+// Section: handle the probe backend workflow.
 async function probeBackend(baseUrl, endpoint = STARTUP_STATUS_ENDPOINT, timeoutMs = BACKEND_PROBE_TIMEOUT_MS) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -1193,7 +1332,9 @@ async function probeBackend(baseUrl, endpoint = STARTUP_STATUS_ENDPOINT, timeout
             cache: 'no-store',
             signal: controller.signal
         });
+        // Choose the correct browser state branch before continuing.
         if (response.status === 200 || response.status === 202 || response.status === 500 || response.status === 503) {
+            // Return the prepared value to the caller.
             return true;
         }
         // 502/504 = Bad/Gateway Timeout → server exists but is temporarily overloaded.
@@ -1204,13 +1345,16 @@ async function probeBackend(baseUrl, endpoint = STARTUP_STATUS_ENDPOINT, timeout
         }
         return false;
     } catch (error) {
+        // Return the prepared value to the caller.
         return false;
     } finally {
         clearTimeout(timeoutId);
     }
 }
 
+// Section: handle the resolve working backend base url workflow.
 async function resolveWorkingBackendBaseUrl({ preferLocal = false, force = false } = {}) {
+    // Choose the correct browser state branch before continuing.
     if (backendResolutionInFlight && !force) {
         return backendResolutionInFlight;
     }
@@ -1224,8 +1368,10 @@ async function resolveWorkingBackendBaseUrl({ preferLocal = false, force = false
         const preferLocalNow = preferLocal || navigator.onLine === false;
         const candidates = buildBackendCandidates(preferLocalNow);
 
+        // Walk through the active items and update each one consistently.
         for (const candidate of candidates) {
             const reachable = await probeBackend(candidate, STARTUP_STATUS_ENDPOINT);
+            // Choose the correct browser state branch before continuing.
             if (!reachable) {
                 continue;
             }
@@ -1239,13 +1385,16 @@ async function resolveWorkingBackendBaseUrl({ preferLocal = false, force = false
                     measuredAt: Date.now()
                 }
             }));
+            // Return the prepared value to the caller.
             return candidate;
         }
 
+        // Return the prepared value to the caller.
         return API_CONFIG.BASE_URL || lastResolvedBackendBaseUrl || '';
     })();
 
     backendResolutionInFlight = resolution;
+    // Keep this browser operation recoverable if it fails.
     try {
         return await resolution;
     } finally {
@@ -1259,11 +1408,14 @@ async function resolveWorkingBackendBaseUrl({ preferLocal = false, force = false
 
 window.PPEResolveWorkingBackendBaseUrl = resolveWorkingBackendBaseUrl;
 
+// Section: handle the register pwa support workflow.
 function registerPwaSupport() {
+    // Choose the correct browser state branch before continuing.
     if (pwaBootstrapped) return;
     pwaBootstrapped = true;
 
     if (!('serviceWorker' in navigator)) {
+        // Return the prepared value to the caller.
         return;
     }
 
@@ -1277,7 +1429,9 @@ function registerPwaSupport() {
     }, { once: true });
 }
 
+// Section: handle the initialize network indicator workflow.
 function initializeNetworkIndicator() {
+    // Choose the correct browser state branch before continuing.
     if (networkIndicatorBootstrapped) return;
     networkIndicatorBootstrapped = true;
 
@@ -1291,6 +1445,7 @@ function initializeNetworkIndicator() {
             label: document.getElementById('startupNetworkStatusText')
         }
     ].filter((item) => item.badge && item.label);
+    // Choose the correct browser state branch before continuing.
     if (!targets.length) return;
 
     const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
@@ -1305,8 +1460,11 @@ function initializeNetworkIndicator() {
         });
     };
 
+    // Prepare score connection for the next UI or data step.
     const scoreConnection = () => {
+        // Choose the correct browser state branch before continuing.
         if (!navigator.onLine) {
+            // Return the prepared value to the caller.
             return {
                 state: 'network-offline',
                 text: 'Offline',
@@ -1326,6 +1484,7 @@ function initializeNetworkIndicator() {
         const downlink = Number(connection.downlink || 0);
         const rtt = Number(connection.rtt || 0);
 
+        // Prepare score for the next UI or data step.
         let score = 0;
         if (effectiveType === '4g') score += 3;
         else if (effectiveType === '3g') score += 2;
@@ -1340,7 +1499,9 @@ function initializeNetworkIndicator() {
 
         const detail = `Type: ${effectiveType || 'n/a'} | Downlink: ${downlink || 'n/a'} Mbps | RTT: ${rtt || 'n/a'} ms`;
 
+        // Choose the correct browser state branch before continuing.
         if (score >= 7) {
+            // Return the prepared value to the caller.
             return { state: 'network-strong', text: 'Strong', title: `Strong network. ${detail}` };
         }
         if (score >= 5) {
@@ -1352,6 +1513,7 @@ function initializeNetworkIndicator() {
         return { state: 'network-weak', text: 'Weak', title: `Weak network. ${detail}` };
     };
 
+    // Prepare refresh network indicator for the next UI or data step.
     const refreshNetworkIndicator = () => {
         const next = scoreConnection();
         setBadgeState(next.state, next.text, next.title);
@@ -1367,6 +1529,7 @@ function initializeNetworkIndicator() {
 
     window.addEventListener('online', refreshNetworkIndicator);
     window.addEventListener('offline', refreshNetworkIndicator);
+    // Choose the correct browser state branch before continuing.
     if (connection && typeof connection.addEventListener === 'function') {
         connection.addEventListener('change', refreshNetworkIndicator);
     }
@@ -1374,6 +1537,7 @@ function initializeNetworkIndicator() {
     refreshNetworkIndicator();
 }
 
+// Section: handle the initialize adaptive pipeline mode manager workflow.
 function initializeAdaptivePipelineModeManager() {
     if (adaptivePipelineBootstrapped) return;
     adaptivePipelineBootstrapped = true;
@@ -1402,7 +1566,9 @@ function initializeAdaptivePipelineModeManager() {
         manualProviderProfile: '',
 
         notify(message, type = 'info', options = {}) {
+            // Choose the correct browser state branch before continuing.
             if (typeof NotificationManager !== 'undefined') {
+                // Choose the correct browser state branch before continuing.
                 if (type === 'success') return NotificationManager.success(message, options);
                 if (type === 'warning') return NotificationManager.warning(message, options);
                 if (type === 'error') return NotificationManager.error(message, options);
@@ -1412,6 +1578,7 @@ function initializeAdaptivePipelineModeManager() {
         },
 
         shouldUseLocal(state) {
+            // Return the prepared value to the caller.
             return state === 'network-offline';
         },
 
@@ -1422,6 +1589,7 @@ function initializeAdaptivePipelineModeManager() {
 
         canAttemptBacklogSync(force = false) {
             if (force) return true;
+            // Return the prepared value to the caller.
             return (Date.now() - this.lastBacklogSyncAt) >= this.minBacklogSyncIntervalMs;
         },
 
@@ -1432,6 +1600,7 @@ function initializeAdaptivePipelineModeManager() {
 
         canAttemptDraftHandoff(force = false) {
             if (force) return true;
+            // Return the prepared value to the caller.
             return (Date.now() - this.lastDraftHandoffAt) >= this.minDraftHandoffIntervalMs;
         },
 
@@ -1444,7 +1613,9 @@ function initializeAdaptivePipelineModeManager() {
 
         releaseManualLocalHoldForReconnect(reason = 'network-reconnect') {
             const manualProfile = String(this.manualProviderProfile || getManualProviderProfileLock() || '').trim().toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (manualProfile !== 'local') {
+                // Return the prepared value to the caller.
                 return false;
             }
 
@@ -1456,6 +1627,7 @@ function initializeAdaptivePipelineModeManager() {
                 dedupeKey: 'adaptive-reconnect-release-local-hold',
                 dedupeTtlMs: 30000
             });
+            // Return the prepared value to the caller.
             return true;
         },
 
@@ -1463,6 +1635,7 @@ function initializeAdaptivePipelineModeManager() {
             const force = !!options.force;
             const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
             if (manualProfile === 'local' && options.allowWhileLocal !== true) {
+                // Return the prepared value to the caller.
                 return {
                     success: true,
                     skipped_local_profile: true,
@@ -1471,10 +1644,12 @@ function initializeAdaptivePipelineModeManager() {
                     reason: reason || 'local_profile_hold'
                 };
             }
+            // Choose the correct browser state branch before continuing.
             if (navigator.onLine === false) {
                 return null;
             }
             if (!this.canAttemptDraftHandoff(force)) {
+                // Return the prepared value to the caller.
                 return null;
             }
             if (this.draftHandoffInFlight) {
@@ -1486,6 +1661,7 @@ function initializeAdaptivePipelineModeManager() {
 
             this.lastDraftHandoffAt = Date.now();
             this.draftHandoffInFlight = true;
+            // Keep this browser operation recoverable if it fails.
             try {
                 const result = await API.handoffLocalReportDraftsToCloud({
                     limit: Number(options.limit || 10),
@@ -1495,6 +1671,7 @@ function initializeAdaptivePipelineModeManager() {
                 });
                 const attempted = Number((result && result.attempted) || 0);
                 const queued = Number((result && result.queued) || 0);
+                // Choose the correct browser state branch before continuing.
                 if (attempted > 0) {
                     console.info('Browser local draft handoff result:', {
                         reason,
@@ -1507,6 +1684,7 @@ function initializeAdaptivePipelineModeManager() {
                 return result;
             } catch (error) {
                 console.warn('Browser local draft handoff failed:', error);
+                // Return the prepared value to the caller.
                 return { success: false, error: error.message };
             } finally {
                 this.draftHandoffInFlight = false;
@@ -1517,7 +1695,9 @@ function initializeAdaptivePipelineModeManager() {
             const force = !!options.force;
             const notifyOnEnqueue = !!options.notifyOnEnqueue;
             const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (manualProfile === 'local' && options.allowWhileLocal !== true) {
+                // Return the prepared value to the caller.
                 return {
                     success: true,
                     skipped_local_profile: true,
@@ -1528,7 +1708,9 @@ function initializeAdaptivePipelineModeManager() {
             if (navigator.onLine === false) {
                 return null;
             }
+            // Choose the correct browser state branch before continuing.
             if (this.backlogSyncInFlight || this.switchInFlight) {
+                // Return the prepared value to the caller.
                 return null;
             }
             if (!this.canAttemptDirectReconnectSync(force)) {
@@ -1543,8 +1725,10 @@ function initializeAdaptivePipelineModeManager() {
                     reason: 'reconnect_auto',
                     allowLocalModeSync: true
                 });
+                // Choose the correct browser state branch before continuing.
                 if (!syncRes || syncRes.success === false) {
                     await this.handoffBrowserLocalDrafts(`${reason} (sync warning)`, { force: true, limit: 10 });
+                    // Return the prepared value to the caller.
                     return syncRes || { success: false };
                 }
 
@@ -1558,6 +1742,7 @@ function initializeAdaptivePipelineModeManager() {
                     });
                 }
                 await this.handoffBrowserLocalDrafts(reason, { force, limit: 10 });
+                // Return the prepared value to the caller.
                 return syncRes;
             } catch (error) {
                 console.warn('Direct reconnect sync failed:', error);
@@ -1571,7 +1756,9 @@ function initializeAdaptivePipelineModeManager() {
             const notifyOnEnqueue = !!options.notifyOnEnqueue;
             const deferIfInFlight = options.deferIfInFlight !== false;
             const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (manualProfile === 'local' && options.allowWhileLocal !== true) {
+                // Return the prepared value to the caller.
                 return {
                     success: true,
                     skipped_local_profile: true,
@@ -1582,10 +1769,12 @@ function initializeAdaptivePipelineModeManager() {
             if (navigator.onLine === false) {
                 return null;
             }
+            // Choose the correct browser state branch before continuing.
             if (this.backlogSyncInFlight) {
                 const inFlightAgeMs = this.backlogSyncStartedAt > 0
                     ? (Date.now() - this.backlogSyncStartedAt)
                     : 0;
+                // Choose the correct browser state branch before continuing.
                 if (inFlightAgeMs > this.maxBacklogSyncInFlightMs) {
                     console.warn('Adaptive backlog sync lock looked stale; clearing in-flight guard.', {
                         inFlightAgeMs,
@@ -1595,7 +1784,9 @@ function initializeAdaptivePipelineModeManager() {
                     this.backlogSyncStartedAt = 0;
                 }
             }
+            // Choose the correct browser state branch before continuing.
             if (this.backlogSyncInFlight) {
+                // Choose the correct browser state branch before continuing.
                 if (deferIfInFlight) {
                     this.pendingBacklogSyncReason = String(reason || 'reconnect_auto');
                 }
@@ -1609,15 +1800,18 @@ function initializeAdaptivePipelineModeManager() {
             this.backlogSyncStartedAt = Date.now();
             this.lastBacklogSyncAt = Date.now();
 
+            // Keep this browser operation recoverable if it fails.
             try {
                 const syncRes = await API.syncLocalCacheToSupabase({
                     limit: 180,
                     reason: 'reconnect_auto',
                     allowLocalModeSync: true
                 });
+                // Choose the correct browser state branch before continuing.
                 if (!syncRes || syncRes.success === false) {
                     console.warn('Local-cache reconciliation returned warning:', (syncRes && syncRes.error) || syncRes);
                     await this.handoffBrowserLocalDrafts(`${reason} (sync warning)`, { force: true, limit: 10 });
+                    // Return the prepared value to the caller.
                     return syncRes || { success: false };
                 }
 
@@ -1631,6 +1825,7 @@ function initializeAdaptivePipelineModeManager() {
                     });
                 }
                 await this.handoffBrowserLocalDrafts(reason, { force, limit: 10 });
+                // Return the prepared value to the caller.
                 return syncRes;
             } catch (error) {
                 console.warn('Adaptive backlog sync failed:', error);
@@ -1661,8 +1856,10 @@ function initializeAdaptivePipelineModeManager() {
         async evaluate(networkState, options = {}) {
             const force = !!options.force;
             const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (manualProfile === 'local' && options.overrideManualProfile !== true && options.allowWhileLocal !== true) {
                 this.currentMode = 'local';
+                // Return the prepared value to the caller.
                 return;
             }
             const weakSignalOnline = (networkState === 'network-weak' || networkState === 'network-fair') && navigator.onLine !== false;
@@ -1677,10 +1874,12 @@ function initializeAdaptivePipelineModeManager() {
                 });
             }
 
+            // Choose the correct browser state branch before continuing.
             if (this.switchInFlight) return;
             if (!this.canAttemptSwitch(force)) return;
 
             if (!force && networkState === this.lastEvaluatedNetworkState) {
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -1691,6 +1890,7 @@ function initializeAdaptivePipelineModeManager() {
                     dedupeKey: 'adaptive-weak-signal-manual-local',
                     dedupeTtlMs: 45000
                 });
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -1698,6 +1898,7 @@ function initializeAdaptivePipelineModeManager() {
                 preferLocal: this.shouldUseLocal(networkState),
                 force: this.shouldUseLocal(networkState)
             });
+            // Choose the correct browser state branch before continuing.
             if (!this.shouldUseLocal(networkState) && navigator.onLine !== false) {
                 await this.handoffBrowserLocalDrafts(`resolved cloud backend for ${networkState}`, {
                     force,
@@ -1707,16 +1908,19 @@ function initializeAdaptivePipelineModeManager() {
             }
 
             if (this.shouldUseLocal(networkState)) {
+                // Choose the correct browser state branch before continuing.
                 if (this.currentMode === 'local') return;
                 await this.switchToLocal(`network state ${networkState}`);
                 return;
             }
 
+            // Choose the correct browser state branch before continuing.
             if (navigator.onLine === false) {
                 return;
             }
 
             if (this.currentMode === 'cloud') {
+                // Return the prepared value to the caller.
                 return;
             }
             await this.switchToCloudAndSync(`network state ${networkState}`, {
@@ -1732,8 +1936,10 @@ function initializeAdaptivePipelineModeManager() {
                 dedupeTtlMs: 15000
             });
 
+            // Keep this browser operation recoverable if it fails.
             try {
                 const options = await API.getReportRecoveryOptions();
+                // Prepare local ready for the next UI or data step.
                 let localReady = !!(options && options.success !== false && options.local && options.local.local_mode_possible);
                 const policy = getLocalModePolicy();
                 const isOffline = navigator.onLine === false;
@@ -1745,7 +1951,9 @@ function initializeAdaptivePipelineModeManager() {
                 );
                 const attemptedOfflineBootstrap = allowOfflineBootstrapOnce;
 
+                // Choose the correct browser state branch before continuing.
                 if (!localReady && canAutoPrepare) {
+                    // Choose the correct browser state branch before continuing.
                     if (allowOfflineBootstrapOnce) {
                         this.offlineBootstrapAttempted = true;
                     }
@@ -1758,8 +1966,11 @@ function initializeAdaptivePipelineModeManager() {
                     localReady = !!(prep && prep.success && prep.after && prep.after.local_mode_possible);
                 }
 
+                // Choose the correct browser state branch before continuing.
                 if (!localReady) {
+                    // Choose the correct browser state branch before continuing.
                     if (!this.localUnavailableNotified) {
+                        // Choose the correct browser state branch before continuing.
                         if (isOffline && attemptedOfflineBootstrap) {
                             this.notify('Offline auto-setup attempted but local runtime is still not ready. Open Settings (gear icon) and run Local Mode Checkup for guided setup.', 'warning', {
                                 dedupeKey: 'adaptive-local-offline-bootstrap-failed',
@@ -1783,10 +1994,12 @@ function initializeAdaptivePipelineModeManager() {
                         }
                     }
                     this.localUnavailableNotified = true;
+                    // Return the prepared value to the caller.
                     return;
                 }
 
                 const switchRes = await API.switchPipelineMode('local');
+                // Choose the correct browser state branch before continuing.
                 if (switchRes && switchRes.success === false) {
                     throw new Error(switchRes.error || 'Failed to switch provider routing to local mode');
                 }
@@ -1799,6 +2012,7 @@ function initializeAdaptivePipelineModeManager() {
                     dedupeTtlMs: 30000
                 });
             } catch (error) {
+                // Choose the correct browser state branch before continuing.
                 if (!this.localUnavailableNotified) {
                     this.notify('Local mode auto-switch failed. It will retry automatically when conditions change.', 'warning', {
                         dedupeKey: 'adaptive-switch-local-failed',
@@ -1814,7 +2028,9 @@ function initializeAdaptivePipelineModeManager() {
 
         async switchToCloudAndSync(reason, options = {}) {
             const manualProfile = String(this.manualProviderProfile || '').trim().toLowerCase();
+            // Choose the correct browser state branch before continuing.
             if (manualProfile === 'local' && !(options && options.overrideManualProfile)) {
+                // Return the prepared value to the caller.
                 return {
                     success: true,
                     skipped_manual_local_profile: true,
@@ -1829,6 +2045,7 @@ function initializeAdaptivePipelineModeManager() {
                 dedupeTtlMs: 15000
             });
 
+            // Keep this browser operation recoverable if it fails.
             try {
                 await this.clearCloudTransitionFlags(`switch-to-cloud:${reason}`);
                 await resolveWorkingBackendBaseUrl({
@@ -1837,6 +2054,7 @@ function initializeAdaptivePipelineModeManager() {
                 });
 
                 const switchRes = await API.switchPipelineMode('cloud');
+                // Choose the correct browser state branch before continuing.
                 if (switchRes && switchRes.success === false) {
                     throw new Error(switchRes.error || 'Failed to switch provider routing to cloud mode');
                 }
@@ -1879,6 +2097,7 @@ function initializeAdaptivePipelineModeManager() {
         },
 
         startPeriodicEvaluation() {
+            // Choose the correct browser state branch before continuing.
             if (this.evaluationTimer) return;
             this.evaluationTimer = setInterval(() => {
                 const state = !navigator.onLine ? 'network-offline' : 'network-good';
@@ -1888,9 +2107,11 @@ function initializeAdaptivePipelineModeManager() {
 
         async hydrateStartupProviderProfile(reason = 'startup') {
             if (typeof API === 'undefined') {
+                // Return the prepared value to the caller.
                 return '';
             }
 
+            // Keep this browser operation recoverable if it fails.
             try {
                 let settings = null;
                 if (typeof API.getProviderRuntimeStatus === 'function') {
@@ -1902,6 +2123,7 @@ function initializeAdaptivePipelineModeManager() {
                 }
 
                 const profile = String((settings && settings.routing_profile) || '').trim().toLowerCase();
+                // Choose the correct browser state branch before continuing.
                 if (profile === 'local') {
                     const manualLock = getManualProviderProfileLock();
                     this.currentMode = 'local';
@@ -1915,9 +2137,11 @@ function initializeAdaptivePipelineModeManager() {
                         dedupeKey: `adaptive-startup-local-ready-${reason}`,
                         dedupeTtlMs: 30000
                     });
+                    // Return the prepared value to the caller.
                     return 'local';
                 }
 
+                // Choose the correct browser state branch before continuing.
                 if (profile === 'cloud') {
                     this.currentMode = 'cloud';
                     this.manualProviderProfile = '';
@@ -1928,10 +2152,12 @@ function initializeAdaptivePipelineModeManager() {
                 console.warn('Adaptive startup provider profile hydration failed:', error);
             }
 
+            // Return the prepared value to the caller.
             return '';
         }
     };
 
+    // Keep this browser operation recoverable if it fails.
     try {
         window.AdaptivePipelineManager = manager;
     } catch (error) {
@@ -1941,6 +2167,7 @@ function initializeAdaptivePipelineModeManager() {
     if (navigator.serviceWorker && !manager.backgroundSyncMessageHandler) {
         manager.backgroundSyncMessageHandler = (event) => {
             const data = event && event.data ? event.data : {};
+            // Choose the correct browser state branch before continuing.
             if (!data || data.type !== 'PPE_BACKGROUND_SYNC_LOCAL_REPORTS') return;
             manager.directReconnectSync('service worker background sync', {
                 force: true,
@@ -1953,6 +2180,7 @@ function initializeAdaptivePipelineModeManager() {
     window.addEventListener('ppe-network:status', (event) => {
         const networkState = event && event.detail ? event.detail.state : 'network-good';
         const recoveredFromOffline = manager.lastEvaluatedNetworkState === 'network-offline';
+        // Choose the correct browser state branch before continuing.
         if (!manager.shouldUseLocal(networkState) && navigator.onLine !== false && recoveredFromOffline) {
             manager.releaseManualLocalHoldForReconnect(`network event ${networkState}`);
         }
@@ -1969,6 +2197,7 @@ function initializeAdaptivePipelineModeManager() {
     window.addEventListener('online', async () => {
         await manager.clearCloudTransitionFlags('online event');
         manager.releaseManualLocalHoldForReconnect('online event');
+        // Choose the correct browser state branch before continuing.
         if (typeof API !== 'undefined' && typeof API.registerLocalReportBackgroundSync === 'function') {
             void API.registerLocalReportBackgroundSync('online event');
         }
@@ -1981,6 +2210,7 @@ function initializeAdaptivePipelineModeManager() {
     });
 
     window.addEventListener('offline', () => {
+        // Choose the correct browser state branch before continuing.
         if (typeof API !== 'undefined' && typeof API.registerLocalReportBackgroundSync === 'function') {
             void API.registerLocalReportBackgroundSync('offline event');
         }
@@ -2000,9 +2230,11 @@ function initializeAdaptivePipelineModeManager() {
     })();
 }
 
+// Section: handle the bind timezone selector visibility guard workflow.
 function bindTimezoneSelectorVisibilityGuard() {
     const sidebar = document.querySelector('.sidebar');
     const selector = document.getElementById('timezone-selector');
+    // Choose the correct browser state branch before continuing.
     if (!sidebar || !selector) return;
     if (selector.dataset.visibilityGuardBound === 'true') return;
 
@@ -2013,6 +2245,7 @@ function bindTimezoneSelectorVisibilityGuard() {
         const autoClearMs = Number(options.autoClearMs || 0);
         sidebar.classList.toggle('timezone-selector-open', !!isOpen);
 
+        // Choose the correct browser state branch before continuing.
         if (selectorOpenStateTimer) {
             window.clearTimeout(selectorOpenStateTimer);
             selectorOpenStateTimer = null;
@@ -2020,6 +2253,7 @@ function bindTimezoneSelectorVisibilityGuard() {
 
         if (!!isOpen && autoClearMs > 0) {
             selectorOpenStateTimer = window.setTimeout(() => {
+                // Choose the correct browser state branch before continuing.
                 if (document.activeElement !== selector && !sidebar.matches(':hover')) {
                     setSelectorOpenState(false);
                 }
@@ -2027,7 +2261,9 @@ function bindTimezoneSelectorVisibilityGuard() {
         }
     };
 
+    // Prepare close selector for the next UI or data step.
     const closeSelector = () => {
+        // Choose the correct browser state branch before continuing.
         if (typeof selector.blur === 'function') {
             selector.blur();
         }
@@ -2044,6 +2280,7 @@ function bindTimezoneSelectorVisibilityGuard() {
     selector.addEventListener('change', closeSelector);
 
     document.addEventListener('click', (event) => {
+        // Choose the correct browser state branch before continuing.
         if (!sidebar.contains(event.target)) {
             closeSelector();
         }
@@ -2056,12 +2293,14 @@ function bindTimezoneSelectorVisibilityGuard() {
     }, { passive: true });
 
     window.addEventListener('keydown', (event) => {
+        // Choose the correct browser state branch before continuing.
         if (event.key === 'Escape') {
             closeSelector();
         }
     });
 }
 
+// Section: handle the setup responsive mobile ux workflow.
 function setupResponsiveMobileUX() {
     const body = document.body;
     const navToggle = document.getElementById('navToggle');
@@ -2073,7 +2312,9 @@ function setupResponsiveMobileUX() {
 
     if (!body) return;
 
+    // Prepare close timezone selector for the next UI or data step.
     const closeTimezoneSelector = () => {
+        // Choose the correct browser state branch before continuing.
         if (timezoneSelector && typeof timezoneSelector.blur === 'function') {
             timezoneSelector.blur();
         }
@@ -2085,7 +2326,9 @@ function setupResponsiveMobileUX() {
         closeTimezoneSelector();
     };
 
+    // Prepare get device profile for the next UI or data step.
     const getDeviceProfile = () => {
+        // Prepare ua for the next UI or data step.
         const ua = (navigator.userAgent || '').toLowerCase();
         const uaDataMobile = !!(navigator.userAgentData && navigator.userAgentData.mobile);
         const explicitPhoneUA = /iphone|ipod|blackberry|windows phone|mobile/i.test(ua);
@@ -2100,11 +2343,14 @@ function setupResponsiveMobileUX() {
         const tabletLikeScreen = shortestSide > 600 && shortestSide <= 1100;
         const phoneDevice = touchCapable && !iPadLike && (explicitPhoneUA || androidPhoneUA || uaDataMobile || phoneLikeScreen || narrowTouchViewport);
         const tabletDevice = touchCapable && !phoneDevice && compactViewport && (iPadLike || tabletLikeScreen || (androidUA && !androidPhoneUA));
+        // Return the prepared value to the caller.
         return { phoneDevice, tabletDevice };
     };
 
+    // Prepare is portrait for the next UI or data step.
     const isPortrait = () => {
         if (window.matchMedia && window.matchMedia('(orientation: portrait)').matches) {
+            // Return the prepared value to the caller.
             return true;
         }
         return window.innerHeight > window.innerWidth;
@@ -2130,6 +2376,7 @@ function setupResponsiveMobileUX() {
 
     };
 
+    // Choose the correct browser state branch before continuing.
     if (navToggle) {
         navToggle.addEventListener('click', () => {
             closePhoneMoreMenu();
@@ -2142,10 +2389,12 @@ function setupResponsiveMobileUX() {
         link.addEventListener('click', () => {
             body.classList.remove('nav-open');
             closePhoneMoreMenu();
+            // Choose the correct browser state branch before continuing.
             if (navToggle) navToggle.setAttribute('aria-expanded', 'false');
         });
     });
 
+    // Choose the correct browser state branch before continuing.
     if (navMoreToggle) {
         navMoreToggle.addEventListener('click', () => {
             if (!body.classList.contains('is-phone-device')) return;
@@ -2157,6 +2406,7 @@ function setupResponsiveMobileUX() {
     }
 
     document.addEventListener('click', (event) => {
+        // Choose the correct browser state branch before continuing.
         if (!body.classList.contains('nav-more-open')) return;
         if (!navMoreToggle || !navMorePanel) return;
         const insidePanel = navMorePanel.contains(event.target);
@@ -2169,6 +2419,7 @@ function setupResponsiveMobileUX() {
     window.addEventListener('resize', applyMobileUX, { passive: true });
     window.addEventListener('orientationchange', applyMobileUX, { passive: true });
     document.addEventListener('visibilitychange', () => {
+        // Choose the correct browser state branch before continuing.
         if (!document.hidden) applyMobileUX();
     });
     window.addEventListener('pageshow', applyMobileUX, { passive: true });
@@ -2277,6 +2528,7 @@ const CASM_TUTORIAL_FLOWS = {
     ]
 };
 
+// Choose the correct browser state branch before continuing.
 if (typeof window !== 'undefined') {
     window.CASM_TUTORIAL_FLOWS = CASM_TUTORIAL_FLOWS;
 }
@@ -2286,6 +2538,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const openBtn = document.getElementById('openHandbook');
     const closeBtn = document.getElementById('closeHandbook');
 
+    // Choose the correct browser state branch before continuing.
     if (!modal || !openBtn || !closeBtn) return;
 
     let stopTutorialAutoPlay = () => {};
@@ -2297,6 +2550,7 @@ document.addEventListener('DOMContentLoaded', () => {
         modal.classList.remove('hidden');
     };
 
+    // Prepare close handbook for the next UI or data step.
     const closeHandbook = () => {
         modal.classList.add('hidden');
         stopTutorialAutoPlay();
@@ -2306,6 +2560,7 @@ document.addEventListener('DOMContentLoaded', () => {
     closeBtn.addEventListener('click', closeHandbook);
 
     modal.addEventListener('click', (e) => {
+        // Choose the correct browser state branch before continuing.
         if (e.target === modal) {
             closeHandbook();
         }
@@ -2319,7 +2574,9 @@ document.addEventListener('DOMContentLoaded', () => {
         item.classList.toggle('active');
     });
 
+    // Prepare activate usage stage for the next UI or data step.
     const activateUsageStage = (stageKey) => {
+        // Choose the correct browser state branch before continuing.
         if (!stageKey) return;
         const stageTabs = Array.from(modal.querySelectorAll('.usage-stage-tab'));
         const stagePanels = Array.from(modal.querySelectorAll('.usage-stage-panel'));
@@ -2335,6 +2592,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     modal.addEventListener('click', (event) => {
         const stageTab = event.target.closest('.usage-stage-tab');
+        // Choose the correct browser state branch before continuing.
         if (!stageTab || !modal.contains(stageTab)) return;
         activateUsageStage(stageTab.dataset.stage);
     });
@@ -2343,9 +2601,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const handbookPages = Array.from(modal.querySelectorAll('.handbook-page'));
     const handbookHeader = modal.querySelector('.handbook-header');
     const tutorialRoot = document.getElementById('handbookLiveTutorial');
+    // Prepare handbook page picker for the next UI or data step.
     let handbookPagePicker = null;
 
     const activateHandbookPage = (pageKey) => {
+        // Choose the correct browser state branch before continuing.
         if (!pageKey) return;
 
         let activated = false;
@@ -2353,6 +2613,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const isActive = link.dataset.page === pageKey;
             link.classList.toggle('active', isActive);
             link.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            // Choose the correct browser state branch before continuing.
             if (isActive) activated = true;
         });
 
@@ -2360,9 +2621,11 @@ document.addEventListener('DOMContentLoaded', () => {
             page.classList.toggle('active', page.id === `handbook-${pageKey}`);
         });
 
+        // Choose the correct browser state branch before continuing.
         if (!activated && handbookLinks.length > 0) {
             const fallbackKey = handbookLinks[0].dataset.page;
             activateHandbookPage(fallbackKey);
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2370,11 +2633,13 @@ document.addEventListener('DOMContentLoaded', () => {
             handbookPagePicker.value = pageKey;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (pageKey !== 'workflow') {
             stopTutorialAutoPlay();
         }
     };
 
+    // Choose the correct browser state branch before continuing.
     if (handbookHeader && handbookLinks.length > 0) {
         handbookPagePicker = document.createElement('select');
         handbookPagePicker.className = 'handbook-page-picker';
@@ -2400,6 +2665,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Choose the correct browser state branch before continuing.
     if (tutorialRoot) {
         const tutorialFlowButtons = Array.from(tutorialRoot.querySelectorAll('[data-tutorial-flow]'));
         const tutorialViewButtons = Array.from(tutorialRoot.querySelectorAll('[data-tutorial-view]'));
@@ -2427,6 +2693,7 @@ document.addEventListener('DOMContentLoaded', () => {
             timer: null
         };
 
+        // Prepare tutorial steps for flow for the next UI or data step.
         const tutorialStepsForFlow = () => tutorialFlows[tutorialState.flow] || tutorialFlows.cloud;
 
         const syncTutorialControls = () => {
@@ -2437,6 +2704,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 button.classList.toggle('active', button.dataset.tutorialView === tutorialState.view);
             });
 
+            // Choose the correct browser state branch before continuing.
             if (tutorialPlayBtn) {
                 const playing = tutorialState.playing;
                 tutorialPlayBtn.innerHTML = playing
@@ -2468,6 +2736,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         renderTutorial = () => {
             const steps = tutorialStepsForFlow();
+            // Choose the correct browser state branch before continuing.
             if (!steps.length) return;
 
             if (tutorialState.index < 0) tutorialState.index = 0;
@@ -2480,6 +2749,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (tutorialStepCounter) {
                 tutorialStepCounter.textContent = `Step ${tutorialState.index + 1} of ${steps.length}`;
             }
+            // Choose the correct browser state branch before continuing.
             if (tutorialProgressBar) {
                 tutorialProgressBar.style.width = `${((tutorialState.index + 1) / steps.length) * 100}%`;
             }
@@ -2490,6 +2760,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (tutorialSceneChecklist) {
                 tutorialSceneChecklist.innerHTML = step.bullets.map((bullet) => `<li>${bullet}</li>`).join('');
             }
+            // Choose the correct browser state branch before continuing.
             if (tutorialStepList) {
                 tutorialStepList.innerHTML = steps.map((item, index) => `
                     <li class="${index === tutorialState.index ? 'active' : ''}">
@@ -2501,6 +2772,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </li>
                 `).join('');
             }
+            // Choose the correct browser state branch before continuing.
             if (tutorialScene) {
                 tutorialScene.classList.remove('tutorial-scene-refresh');
                 void tutorialScene.offsetWidth;
@@ -2515,6 +2787,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 tutorialState.flow = button.dataset.tutorialFlow === 'local' ? 'local' : 'cloud';
                 tutorialState.index = 0;
                 renderTutorial();
+                // Choose the correct browser state branch before continuing.
                 if (tutorialState.view === 'autoplay') {
                     startTutorialAutoPlay();
                 }
@@ -2533,6 +2806,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
+        // Choose the correct browser state branch before continuing.
         if (tutorialPrevBtn) {
             tutorialPrevBtn.addEventListener('click', () => {
                 const steps = tutorialStepsForFlow();
@@ -2549,12 +2823,15 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // Choose the correct browser state branch before continuing.
         if (tutorialPlayBtn) {
             tutorialPlayBtn.addEventListener('click', () => {
+                // Choose the correct browser state branch before continuing.
                 if (tutorialState.playing) {
                     tutorialState.view = 'steps';
                     stopTutorialAutoPlay();
                     renderTutorial();
+                    // Return the prepared value to the caller.
                     return;
                 }
                 startTutorialAutoPlay();
@@ -2569,16 +2846,19 @@ document.addEventListener('DOMContentLoaded', () => {
         open(pageKey = 'intro', options = {}) {
             openHandbook();
             activateHandbookPage(pageKey);
+            // Choose the correct browser state branch before continuing.
             if (options.stage) {
                 activateUsageStage(options.stage);
             }
             if (tutorialRoot && pageKey === 'workflow') {
                 const flow = options.tutorialFlow === 'local' ? 'local' : 'cloud';
                 const steps = CASM_TUTORIAL_FLOWS[flow] || CASM_TUTORIAL_FLOWS.cloud;
+                // Choose the correct browser state branch before continuing.
                 if (steps.length) {
                     tutorialState.flow = flow;
                     tutorialState.index = Math.max(0, Math.min(Number(options.tutorialStep || 0), steps.length - 1));
                     tutorialState.view = options.tutorialView === 'autoplay' ? 'autoplay' : 'steps';
+                    // Choose the correct browser state branch before continuing.
                     if (tutorialState.view === 'autoplay') {
                         startTutorialAutoPlay();
                     } else {
@@ -2592,7 +2872,9 @@ document.addEventListener('DOMContentLoaded', () => {
         activatePage: activateHandbookPage,
         activateUsageStage,
         getTutorialState() {
+            // Choose the correct browser state branch before continuing.
             if (!tutorialState) {
+                // Return the prepared value to the caller.
                 return {
                     flow: 'cloud',
                     index: 0,

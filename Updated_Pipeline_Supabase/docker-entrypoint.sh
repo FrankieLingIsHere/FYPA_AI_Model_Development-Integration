@@ -1,4 +1,5 @@
 #!/bin/bash
+# Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 # CASM Docker Entrypoint Script
 # Starts the Flask app
 
@@ -16,6 +17,7 @@ is_truthy() {
 if [ -n "${RAILWAY_PROJECT_ID:-}" ] || [ -n "${RAILWAY_ENVIRONMENT:-}" ] || is_truthy "${HOSTED_ENVIRONMENT:-}"; then
 	if ! is_truthy "${ALLOW_LOCAL_OLLAMA_IN_CONTAINER:-false}"; then
 		export DISABLE_OLLAMA_EMBEDDINGS=true
+# Section: perform this operational step before continuing.
 		if [ -z "${EMBEDDING_API_URL:-}" ]; then
 			export EMBEDDING_PROVIDER_ORDER=model_api
 		fi

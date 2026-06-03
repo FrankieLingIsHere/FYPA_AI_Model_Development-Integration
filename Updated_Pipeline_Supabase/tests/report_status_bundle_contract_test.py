@@ -4,6 +4,7 @@ Contract test for the optimized report status bundle path.
 When the DB manager can provide a combined report-status bundle, the status API
 should avoid separate detection_event and violation lookups.
 """
+# Readability: Test setup: document the contract this file protects.
 
 import os
 import sys
@@ -11,6 +12,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Prepare root for the next step.
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -20,6 +22,7 @@ os.makedirs(TEST_STATE_DIR, exist_ok=True)
 os.makedirs(TEST_ULTRALYTICS_DIR, exist_ok=True)
 
 os.environ.setdefault("FLASK_DEBUG", "false")
+# Trigger the side effect required for this stage.
 os.environ.setdefault("SERVE_FRONTEND", "false")
 os.environ.setdefault("ADMIN_PASSWORD", "test-magic-password")
 os.environ.setdefault("BOOTSTRAP_TOKEN_SECRET", "test-bootstrap-secret")
@@ -30,12 +33,16 @@ os.environ.setdefault("CASM_ROUTING_PROFILE", "cloud")
 import casm_app
 
 
+# Section: group bundle only db state and behaviour in one readable unit.
 class BundleOnlyDB:
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self):
+        # Prepare bundle calls for the next step.
         self.bundle_calls = 0
         self.event_calls = 0
         self.violation_calls = 0
 
+    # Section: run the get report status bundle workflow with clear inputs and outputs.
     def get_report_status_bundle(self, report_id):
         self.bundle_calls += 1
         now = datetime.now(timezone.utc)
@@ -64,21 +71,28 @@ class BundleOnlyDB:
             "violation_device_id": "webcam_0",
         }
 
+    # Section: run the get detection event workflow with clear inputs and outputs.
     def get_detection_event(self, report_id):
         self.event_calls += 1
+        # Surface the failure with enough context for the caller.
         raise AssertionError("Separate get_detection_event should not be used when bundle is available")
 
+    # Section: run the get violation workflow with clear inputs and outputs.
     def get_violation(self, report_id):
         self.violation_calls += 1
         raise AssertionError("Separate get_violation should not be used when bundle is available")
 
 
+# Section: run the assert workflow with clear inputs and outputs.
 def _assert(condition, message):
     if not condition:
+        # Surface the failure with enough context for the caller.
         raise AssertionError(message)
 
 
+# Section: run the test report status prefers combined bundle lookup workflow with clear inputs and outputs.
 def test_report_status_prefers_combined_bundle_lookup():
+    # Prepare fake db for the next step.
     fake_db = BundleOnlyDB()
     report_id = "20260512_174500"
 
@@ -86,16 +100,20 @@ def test_report_status_prefers_combined_bundle_lookup():
     old_violations_dir = casm_app.VIOLATIONS_DIR
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare db manager for the next step.
             casm_app.db_manager = fake_db
             casm_app.VIOLATIONS_DIR = Path(tmpdir)
 
             with casm_app.app.test_client() as client:
+                # Prepare response for the next step.
                 response = client.get(f"/api/report/{report_id}/status")
                 payload = response.get_json() or {}
 
             _assert(response.status_code == 200, f"Unexpected status code: {response.status_code}")
             _assert(payload.get("status") == "generating", f"Unexpected payload: {payload}")
+            # Trigger the side effect required for this stage.
             _assert(payload.get("source_scope") == "cloud", f"Cloud source scope missing: {payload}")
             _assert(fake_db.bundle_calls == 1, f"Bundle lookup count incorrect: {fake_db.bundle_calls}")
             _assert(fake_db.event_calls == 0, f"Separate event lookups used: {fake_db.event_calls}")
@@ -105,8 +123,11 @@ def test_report_status_prefers_combined_bundle_lookup():
             casm_app.VIOLATIONS_DIR = old_violations_dir
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main():
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Trigger the side effect required for this stage.
         test_report_status_prefers_combined_bundle_lookup()
         print("PASS: test_report_status_prefers_combined_bundle_lookup")
     except Exception as exc:
@@ -116,5 +137,7 @@ def main():
     print("Report status bundle contract test passed")
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
+    # Trigger the side effect required for this stage.
     main()

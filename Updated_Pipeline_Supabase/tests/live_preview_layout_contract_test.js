@@ -1,3 +1,4 @@
+// Readability: Test setup: document the contract this file protects.
 /*
  * Static contract for Live page preview sizing.
  *
@@ -12,12 +13,15 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const LIVE_JS = path.join(ROOT, 'frontend', 'js', 'pages', 'live.js');
 
+// Section: handle the assert workflow.
 function assert(condition, message) {
+  // Choose the correct browser state branch before continuing.
   if (!condition) {
     throw new Error(message);
   }
 }
 
+// Section: handle the get style for id workflow.
 function getStyleForId(source, id) {
   const pattern = new RegExp(`<(?:img|video)[^>]+id="${id}"[^>]+style="([^"]+)"`, 'i');
   const match = source.match(pattern);
@@ -25,6 +29,7 @@ function getStyleForId(source, id) {
   return match[1];
 }
 
+// Section: handle the assert preview style workflow.
 function assertPreviewStyle(style, label) {
   assert(/width:\s*100%/.test(style), `${label} must fill preview width`);
   assert(/aspect-ratio:\s*16\s*\/\s*9/.test(style), `${label} must reserve a stable 16:9 stage`);
@@ -32,6 +37,7 @@ function assertPreviewStyle(style, label) {
   assert(/background:\s*#000/.test(style), `${label} must keep letterbox background black`);
 }
 
+// Section: handle the main workflow.
 function main() {
   const source = fs.readFileSync(LIVE_JS, 'utf8');
   assert(/id="liveStreamContainer"[^>]+background:\s*#000/i.test(source), 'live stream container must use a black stage');

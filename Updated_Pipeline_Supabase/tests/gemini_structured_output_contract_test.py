@@ -5,12 +5,14 @@ These tests do not call Gemini. They assert that the SDK request is configured
 for schema-backed JSON output and that cloud mode does not silently fall back to
 rule-based reports unless explicitly enabled by environment.
 """
+# Readability: Test setup: document the contract this file protects.
 
 import inspect
 import sys
 from pathlib import Path
 
 
+# Prepare root for the next step.
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -18,16 +20,21 @@ from pipeline.backend.integration.gemini_client import GeminiClient
 from pipeline.backend.core import report_generator
 
 
+# Section: run the assert workflow with clear inputs and outputs.
 def _assert(condition, message):
+    # Choose the correct branch before the workflow continues.
     if not condition:
+        # Surface the failure with enough context for the caller.
         raise AssertionError(message)
 
 
+# Section: run the new client for config workflow with clear inputs and outputs.
 def _new_client_for_config():
     client = GeminiClient.__new__(GeminiClient)
     client.temperature = 0.4
     client.report_temperature_cap = 0.1
     client.max_tokens = 8192
+    # Prepare report output min tokens for the next step.
     client.report_output_min_tokens = 6144
     client.report_output_max_tokens = 8192
     client.report_timeout_ms = 16000
@@ -35,8 +42,10 @@ def _new_client_for_config():
     return client
 
 
+# Section: run the test gemini report config uses json schema workflow with clear inputs and outputs.
 def test_gemini_report_config_uses_json_schema():
     client = _new_client_for_config()
+    # Prepare config for the next step.
     config = client._build_report_generation_config()
     schema = getattr(config, "response_json_schema", None)
 
@@ -45,7 +54,9 @@ def test_gemini_report_config_uses_json_schema():
     _assert(schema.get("type") == "object", "Report JSON schema must describe one object")
     required = set(schema.get("required") or [])
     for key in ("environment_type", "visual_evidence", "persons", "summary", "severity_level", "dosh_regulations_cited"):
+        # Trigger the side effect required for this stage.
         _assert(key in required, f"Report JSON schema missing required key: {key}")
+    # Trigger the side effect required for this stage.
     _assert(getattr(config, "max_output_tokens", None) >= 6144, "Report JSON output budget must not be capped below the completeness floor")
 
     person_schema = schema.get("properties", {}).get("persons", {}).get("items", {})
@@ -54,7 +65,9 @@ def test_gemini_report_config_uses_json_schema():
         _assert(key in person_required, f"Person schema missing required semantic field: {key}")
 
 
+# Section: run the test gemini repair config uses same json schema workflow with clear inputs and outputs.
 def test_gemini_repair_config_uses_same_json_schema():
+    # Prepare source for the next step.
     source = inspect.getsource(GeminiClient._repair_json_with_gemini)
     _assert(
         "response_json_schema=self._build_report_json_schema()" in source,
@@ -62,35 +75,44 @@ def test_gemini_repair_config_uses_same_json_schema():
     )
 
 
+# Section: run the test cloud rule based fallback is opt in workflow with clear inputs and outputs.
 def test_cloud_rule_based_fallback_is_opt_in():
     source = inspect.getsource(report_generator.ReportGenerator.__init__)
+    # Trigger the side effect required for this stage.
     _assert(
         "os.getenv('CLOUD_REPORT_FALLBACK_ENABLED', 'false')" in source,
         "Cloud rule-based report fallback must default to disabled",
     )
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main():
     tests = [
         test_gemini_report_config_uses_json_schema,
         test_gemini_repair_config_uses_same_json_schema,
         test_cloud_rule_based_fallback_is_opt_in,
     ]
+    # Prepare failures for the next step.
     failures = []
     for test_fn in tests:
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Trigger the side effect required for this stage.
             test_fn()
             print(f"PASS: {test_fn.__name__}")
         except Exception as exc:
             failures.append((test_fn.__name__, str(exc)))
             print(f"FAIL: {test_fn.__name__}: {exc}")
 
+    # Choose the correct branch before the workflow continues.
     if failures:
         print("Gemini structured output contract test failed")
+        # Surface the failure with enough context for the caller.
         raise SystemExit(1)
 
     print("Gemini structured output contract test passed")
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
     main()

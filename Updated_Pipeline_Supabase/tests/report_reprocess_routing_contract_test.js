@@ -1,3 +1,4 @@
+// Readability: Test setup: document the contract this file protects.
 /*
  * Contract test for manual report reprocess routing.
  *
@@ -16,19 +17,24 @@ const CONFIG_JS = path.join(ROOT, 'frontend', 'js', 'config.js');
 const API_JS = path.join(ROOT, 'frontend', 'js', 'api.js');
 const REPORTS_JS = path.join(ROOT, 'frontend', 'js', 'pages', 'reports.js');
 
+// Section: handle the assert workflow.
 function assert(condition, message) {
+  // Choose the correct browser state branch before continuing.
   if (!condition) {
     throw new Error(message);
   }
 }
 
+// Section: handle the assert equal workflow.
 function assertEqual(actual, expected, message) {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${expected}, got ${actual}`);
   }
 }
 
+// Section: handle the create response workflow.
 function createResponse(ok, status, payload) {
+  // Return the prepared value to the caller.
   return {
     ok,
     status,
@@ -36,11 +42,13 @@ function createResponse(ok, status, payload) {
   };
 }
 
+// Section: handle the create local storage mock workflow.
 function createLocalStorageMock() {
   const storage = new Map();
   return {
     storage,
     get length() {
+      // Return the prepared value to the caller.
       return storage.size;
     },
     key(index) {
@@ -62,6 +70,7 @@ function createLocalStorageMock() {
   };
 }
 
+// Section: handle the load api context workflow.
 function loadApiContext(fetchImpl, windowOverrides = {}) {
   const localStorage = createLocalStorageMock();
   const windowObject = {
@@ -96,9 +105,11 @@ function loadApiContext(fetchImpl, windowOverrides = {}) {
     context,
     { filename: API_JS },
   );
+  // Return the prepared value to the caller.
   return context;
 }
 
+// Section: handle the load reports page workflow.
 function loadReportsPage() {
   const context = {
     console,
@@ -112,13 +123,16 @@ function loadReportsPage() {
     context,
     { filename: REPORTS_JS },
   );
+  // Return the prepared value to the caller.
   return context.ReportsPage;
 }
 
+// Section: handle the test cloud page skips unusable local reprocess route workflow.
 async function testCloudPageSkipsUnusableLocalReprocessRoute() {
   const calls = [];
   const context = loadApiContext(async (url, init) => {
     calls.push({ url, init });
+    // Return the prepared value to the caller.
     return createResponse(true, 200, {
       success: true,
       status: 'pending',
@@ -151,10 +165,12 @@ async function testCloudPageSkipsUnusableLocalReprocessRoute() {
   assertEqual(result.routed_via_cloud_fallback, true, 'result should mark cloud fallback routing');
 }
 
+// Section: handle the test stale browser handoff reprocess uses cloud scope workflow.
 async function testStaleBrowserHandoffReprocessUsesCloudScope() {
   const calls = [];
   const context = loadApiContext(async (url, init) => {
     calls.push({ url, init });
+    // Return the prepared value to the caller.
     return createResponse(true, 200, {
       success: true,
       status: 'pending',
@@ -186,11 +202,13 @@ async function testStaleBrowserHandoffReprocessUsesCloudScope() {
   assert(!Object.prototype.hasOwnProperty.call(body, 'sync_source'), 'stale browser handoff should not resend local sync source');
 }
 
+// Section: handle the test local fetch failure retries cloud route when cloud override exists workflow.
 async function testLocalFetchFailureRetriesCloudRouteWhenCloudOverrideExists() {
   const calls = [];
   const context = loadApiContext(
     async (url, init) => {
       calls.push({ url, init });
+      // Choose the correct browser state branch before continuing.
       if (String(url).startsWith('http://127.0.0.1:5000')) {
         throw new TypeError('Failed to fetch');
       }
@@ -229,6 +247,7 @@ async function testLocalFetchFailureRetriesCloudRouteWhenCloudOverrideExists() {
   assertEqual(result.routed_via_cloud_fallback, true, 'fallback retry should be marked');
 }
 
+// Section: handle the test queued cloud report seeds pending cache workflow.
 async function testQueuedCloudReportSeedsPendingCache() {
   const context = loadApiContext(async () => createResponse(true, 200, {}));
 
@@ -254,6 +273,7 @@ async function testQueuedCloudReportSeedsPendingCache() {
   assert(violationRow, 'queued cloud report should seed violations cache for Reports page mount');
 }
 
+// Section: handle the test cloud fallback patch overrides stale local anchor workflow.
 function testCloudFallbackPatchOverridesStaleLocalAnchor() {
   const ReportsPage = loadReportsPage();
   ReportsPage.violations = [{
@@ -278,6 +298,7 @@ function testCloudFallbackPatchOverridesStaleLocalAnchor() {
   assertEqual(record.source_label, 'Cloud', 'cloud fallback patch source label');
 }
 
+// Section: handle the test reports page mount starts with fresh load workflow.
 function testReportsPageMountStartsWithFreshLoad() {
   const source = fs.readFileSync(REPORTS_JS, 'utf8');
   assert(
@@ -290,6 +311,7 @@ function testReportsPageMountStartsWithFreshLoad() {
   );
 }
 
+// Section: handle the test cloud fallback repairs stale local report caches workflow.
 async function testCloudFallbackRepairsStaleLocalReportCaches() {
   const context = loadApiContext(async () => createResponse(true, 200, {
     success: true,
@@ -347,6 +369,7 @@ async function testCloudFallbackRepairsStaleLocalReportCaches() {
   assertEqual(staleDetail, null, 'stale per-report detail cache should be removed');
 }
 
+// Section: handle the test cloud inference result does not create browser local draft workflow.
 function testCloudInferenceResultDoesNotCreateBrowserLocalDraft() {
   const cloudContext = loadApiContext(async () => createResponse(true, 200, {}));
   const cloudResult = {
@@ -420,6 +443,7 @@ function testCloudInferenceResultDoesNotCreateBrowserLocalDraft() {
   );
 }
 
+// Section: handle the test synced local thumbnail routes to available backend workflow.
 function testSyncedLocalThumbnailRoutesToAvailableBackend() {
   const syncedLocalRow = {
     report_id: 'synced-thumb-001',
@@ -490,6 +514,7 @@ function testSyncedLocalThumbnailRoutesToAvailableBackend() {
   );
 }
 
+// Section: handle the test cloud assets from local page ignore stale local api override workflow.
 function testCloudAssetsFromLocalPageIgnoreStaleLocalApiOverride() {
   const localContext = loadApiContext(
     async () => createResponse(true, 200, {}),
@@ -554,6 +579,7 @@ function testCloudAssetsFromLocalPageIgnoreStaleLocalApiOverride() {
   );
 }
 
+// Section: handle the test cloud report rejects stale local cached html workflow.
 async function testCloudReportRejectsStaleLocalCachedHtml() {
   const localContext = loadApiContext(
     async () => createResponse(true, 200, {}),
@@ -631,10 +657,12 @@ async function testCloudReportRejectsStaleLocalCachedHtml() {
   assert(syncedCached && syncedCached.html, 'confirmed local-synced reports should keep local cached HTML');
 }
 
+// Section: handle the test completed local sync coerces queued state workflow.
 async function testCompletedLocalSyncCoercesQueuedState() {
   const events = [];
   const context = loadApiContext(async () => createResponse(true, 200, {}));
   context.CustomEvent = function CustomEvent(type, init = {}) {
+    // Return the prepared value to the caller.
     return { type, detail: init.detail || {} };
   };
   context.window.dispatchEvent = (event) => {
@@ -679,6 +707,7 @@ async function testCompletedLocalSyncCoercesQueuedState() {
   assert(syncEvent.detail.completed_report_ids.includes(reportId), 'completed local sync event should include completed id');
 }
 
+// Section: handle the test synced local merge keeps local thumbnail bridge workflow.
 function testSyncedLocalMergeKeepsLocalThumbnailBridge() {
   const context = loadApiContext(async () => createResponse(true, 200, {}));
   const existingLocal = {
@@ -714,6 +743,7 @@ function testSyncedLocalMergeKeepsLocalThumbnailBridge() {
   assertEqual(merged.has_annotated, true, 'annotated thumbnail evidence survives sync merge');
 }
 
+// Section: handle the main workflow.
 async function main() {
   const tests = [
     testCloudPageSkipsUnusableLocalReprocessRoute,
@@ -731,7 +761,9 @@ async function main() {
     testSyncedLocalMergeKeepsLocalThumbnailBridge,
   ];
   const failures = [];
+  // Walk through the active items and update each one consistently.
   for (const testFn of tests) {
+    // Keep this browser operation recoverable if it fails.
     try {
       await testFn();
       console.log(`PASS: ${testFn.name}`);
@@ -741,6 +773,7 @@ async function main() {
     }
   }
 
+  // Choose the correct browser state branch before continuing.
   if (failures.length) {
     process.exit(1);
   }

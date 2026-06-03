@@ -1,3 +1,4 @@
+# Readability: Setup helper: prepare project dependencies, data, or cloud resources.
 
 import sys
 import os
@@ -22,13 +23,18 @@ from pipeline.config import (
     REPORTS_DIR, VIOLATIONS_DIR, SUPABASE_CONFIG
 )
 
+# Prepare report id for the next step.
 REPORT_ID = "20251223_170058"
 IMAGE_PATH = Path(f"{REPORT_ID}_original.jpg")
 
+# Section: run the check moondream workflow with clear inputs and outputs.
 def check_moondream():
+    # Protect this step so expected failures can fall back cleanly.
     try:
+        # Prepare resp for the next step.
         resp = requests.get('http://localhost:11434/api/tags')
         if resp.ok:
+            # Prepare models for the next step.
             models = [m['name'] for m in resp.json()['models']]
             print(f"Available models: {models}")
             return any('moondream' in m for m in models)
@@ -36,9 +42,12 @@ def check_moondream():
         return False
     return False
 
+# Section: run the generate moondream workflow with clear inputs and outputs.
 def generate_moondream(image_path):
+    # Trigger the side effect required for this stage.
     print("🤖 Generating Moondream caption...")
     with open(image_path, 'rb') as f:
+        # Prepare img b64 for the next step.
         img_b64 = base64.b64encode(f.read()).decode()
     
     prompt = "Describe this image briefly. Mention people and safety gear."
@@ -55,7 +64,9 @@ def generate_moondream(image_path):
             },
             timeout=180
         )
+        # Choose the correct branch before the workflow continues.
         if resp.ok:
+            # Return the prepared result to the caller.
             return resp.json()['response'].strip()
         else:
             print(f"Ollama error: {resp.text}")
@@ -63,9 +74,11 @@ def generate_moondream(image_path):
         print(f"Generation error: {e}")
     
     # Fallback if actual generation fails
+    # Trigger the side effect required for this stage.
     print("⚠️ Moondream generation failed/unavailable. Using simulation.")
     return "SCENE: 1 person detected. ACTIVITY: Walking. BODY: Upper body. TORSO: Blue shirt. PPE: None visible. ENVIRONMENT: Office interior."
 
+# Section: run the main workflow with clear inputs and outputs.
 def main():
     print(f"Start V3 Moondream update for {REPORT_ID}")
     
@@ -74,6 +87,7 @@ def main():
     storage_manager = create_storage_manager_from_env()
     
     # 2. Get Data
+    # Prepare violation for the next step.
     violation = db_manager.get_violation(REPORT_ID)
     if not violation:
         print("Violation not found")
@@ -84,7 +98,9 @@ def main():
     image_key = violation.get('original_image_key')
     print(f"Image Key: {image_key}")
     
+    # Choose the correct branch before the workflow continues.
     if not image_key:
+        # Trigger the side effect required for this stage.
         print("ERROR: No original_image_key in violation record!")
         return
 
@@ -92,14 +108,17 @@ def main():
         img_data = storage_manager.download_file_content(image_key)
         print(f"Download result type: {type(img_data)}")
         if img_data:
+            # Trigger the side effect required for this stage.
             print(f"Download size: {len(img_data)} bytes")
             with open(IMAGE_PATH, 'wb') as f:
+                # Trigger the side effect required for this stage.
                 f.write(img_data)
         else:
             print("ERROR: Download returned empty/None")
             return
             
     except Exception as e:
+        # Trigger the side effect required for this stage.
         print(f"ERROR downloading: {e}")
         return
 
@@ -112,9 +131,11 @@ def main():
     caption_v3 = generate_moondream(IMAGE_PATH) # No fallback
     
     if not caption_v3:
+        # Trigger the side effect required for this stage.
         print("ERROR: Caption generation returned None")
         return
 
+    # Trigger the side effect required for this stage.
     print(f"Caption V3: {caption_v3}")
     
     with open("caption_v3_full.txt", "w", encoding="utf-8") as f:
@@ -174,8 +195,10 @@ def main():
     """
     
     # Cleanup
+    # Choose the correct branch before the workflow continues.
     if IMAGE_PATH.exists():
         IMAGE_PATH.unlink()
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
     main()

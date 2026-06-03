@@ -1,3 +1,4 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 // Simple Router for SPA Navigation
 const Router = {
     routes: {},
@@ -5,6 +6,7 @@ const Router = {
 
     normalizePath(path) {
         const raw = String(path || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!raw) return 'home';
         let normalized = raw;
         if (normalized.startsWith('#')) normalized = normalized.slice(1);
@@ -19,6 +21,7 @@ const Router = {
 
     emitRouteChange(path, detail = {}) {
         const normalizedPath = path === 'settings-checkup' ? 'settings' : this.normalizePath(path);
+        // Keep this browser operation recoverable if it fails.
         try {
             window.dispatchEvent(new CustomEvent('ppe-route:changed', {
                 detail: {
@@ -39,13 +42,17 @@ const Router = {
         const normalizedPath = this.normalizePath(path);
         const isSettingsIntent = normalizedPath === 'settings' || normalizedPath === 'settings-checkup';
 
+        // Choose the correct browser state branch before continuing.
         if (isSettingsIntent) {
+            // Choose the correct browser state branch before continuing.
             if (!this.currentComponent) {
+                // Choose the correct browser state branch before continuing.
                 if (this.routes.home) {
                     APP_STATE.currentPage = 'home';
                     this.render(this.routes.home);
                 } else {
                     const fallbackPath = Object.keys(this.routes)[0];
+                    // Choose the correct browser state branch before continuing.
                     if (fallbackPath) {
                         APP_STATE.currentPage = fallbackPath;
                         this.render(this.routes[fallbackPath]);
@@ -70,15 +77,18 @@ const Router = {
             if (updateHash && APP_STATE.currentPage && window.location.hash !== `#${APP_STATE.currentPage}`) {
                 window.location.hash = APP_STATE.currentPage;
             }
+            // Return the prepared value to the caller.
             return;
         }
 
         const component = this.routes[normalizedPath];
 
+        // Choose the correct browser state branch before continuing.
         if (component) {
             if (APP_STATE.currentPage === normalizedPath && this.currentComponent === component) {
                 this.updateActiveNav(normalizedPath);
                 this.emitRouteChange(normalizedPath, { reused: true });
+                // Choose the correct browser state branch before continuing.
                 if (updateHash && window.location.hash !== `#${normalizedPath}`) {
                     window.location.hash = normalizedPath;
                 }
@@ -91,6 +101,7 @@ const Router = {
             this.emitRouteChange(normalizedPath);
 
             // Update URL hash
+            // Choose the correct browser state branch before continuing.
             if (updateHash && window.location.hash !== `#${normalizedPath}`) {
                 window.location.hash = normalizedPath;
             }
@@ -113,6 +124,7 @@ const Router = {
         this.currentComponent = component;
 
         // Call mount lifecycle if exists
+        // Choose the correct browser state branch before continuing.
         if (component.mount) {
             component.mount();
         }
@@ -123,6 +135,7 @@ const Router = {
         const activePath = path === 'settings-checkup' ? 'settings' : path;
         document.querySelectorAll('.sidebar-link, .nav-link').forEach(link => {
             link.classList.remove('active');
+            // Choose the correct browser state branch before continuing.
             if (link.dataset.page === activePath) {
                 link.classList.add('active');
             }
@@ -133,6 +146,7 @@ const Router = {
     init() {
         // Handle navigation clicks
         document.addEventListener('click', (e) => {
+            // Choose the correct browser state branch before continuing.
             if (
                 e.target.classList.contains('sidebar-link') ||
                 e.target.closest('.sidebar-link') ||
@@ -144,6 +158,7 @@ const Router = {
                     : e.target.closest('.sidebar-link, .nav-link');
 
                 // Ignore hash links that shouldn't trigger routing (like #)
+                // Choose the correct browser state branch before continuing.
                 if (link.getAttribute('href') === '#' && !link.dataset.page) return;
 
                 // Allow default for non-routed links
@@ -161,7 +176,9 @@ const Router = {
         window.addEventListener('hashchange', () => {
             const hash = this.normalizePath(window.location.hash);
             const isSettingsIntent = hash === 'settings' || hash === 'settings-checkup';
+            // Choose the correct browser state branch before continuing.
             if (!isSettingsIntent && APP_STATE.currentPage === hash) {
+                // Return the prepared value to the caller.
                 return;
             }
             this.navigate(hash, { updateHash: false });

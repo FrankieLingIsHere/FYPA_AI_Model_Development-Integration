@@ -1,4 +1,5 @@
 @echo off
+REM Readability: Module overview: keep the main setup, workflow, and fallback paths easy to scan.
 setlocal EnableExtensions EnableDelayedExpansion
 REM CASM Supabase Edition - Startup Script
 REM ========================================
@@ -10,6 +11,7 @@ REM   start.bat
 
 echo ==========================================
 echo CASM Supabase Edition - Starting...
+REM Section: perform this operational step before continuing.
 echo ==========================================
 echo.
 
@@ -20,6 +22,7 @@ echo.
 
 set "VENV_PYTHON=%CD%\venv\Scripts\python.exe"
 set "VENV_PIP=%CD%\venv\Scripts\pip.exe"
+REM Section: perform this operational step before continuing.
 set "OLLAMA_CMD="
 
 REM Check if .env file exists
@@ -35,6 +38,7 @@ if not exist .env (
 )
 
 REM Normalize .env local defaults so stale cloud settings do not override local BAT startup.
+REM Section: perform this operational step before continuing.
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$envPath='.env'; $lines=@(Get-Content -Path $envPath -ErrorAction SilentlyContinue); if($null -eq $lines){$lines=@()}; " ^
     "$updates=[ordered]@{ 'CASM_ROUTING_PROFILE'='local'; 'ALLOW_OFFLINE_LOCAL_MODE'='true'; 'GEMINI_ENABLED'='false'; 'MODEL_API_ENABLED'='false'; 'STARTUP_AUTO_PREPARE_LOCAL_MODE'='true'; 'STARTUP_AUTO_PULL_LOCAL_MODEL'='true'; 'STARTUP_AUTO_PROVISION_LOCAL_MODE'='true'; 'STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS'='15'; 'STARTUP_AUTO_PROVISION_MAX_ATTEMPTS'='0'; 'LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS'='15'; 'LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS'='60'; 'LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N'='1'; 'LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS'='45'; 'LOCAL_OLLAMA_UNIFIED_MODEL'='gemma3:4b'; 'OLLAMA_MODEL'='gemma3:4b'; 'NLP_PROVIDER_ORDER'='ollama,local'; 'VISION_PROVIDER_ORDER'='ollama'; 'EMBEDDING_PROVIDER_ORDER'='ollama'; 'OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL'='true'; 'CASM_STATE_DIR'='C:\CASM_System\CASM_LocalState'; 'SUPABASE_OFFLINE_LOG_LEVEL'='info'; 'QUEUE_WORKER_WATCHDOG_ENABLED'='true'; 'QUEUE_WORKER_WATCHDOG_INTERVAL_SECONDS'='20'; 'QUEUE_WORKER_HEARTBEAT_STALE_SECONDS'='180'; 'QUEUE_WORKER_FORCED_RESTART_MIN_INTERVAL_SECONDS'='300'; 'QUEUE_STUCK_REPORT_SWEEP_ENABLED'='true'; 'QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS'='300'; 'QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS'='20'; 'LOCAL_PENDING_RECOVERY_ENABLED'='true'; 'LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS'='180'; 'LOCAL_PENDING_RECOVERY_STALE_SECONDS'='240'; 'LOCAL_PENDING_RECOVERY_MAX_ENQUEUE_PER_SWEEP'='2'; 'LOCAL_PENDING_RECOVERY_DEFER_QUEUE_THRESHOLD'='8'; 'LOCAL_PENDING_RECOVERY_SCAN_LIMIT'='300' }; " ^
@@ -46,6 +50,7 @@ if %errorlevel% neq 0 (
 )
 
 REM Local-first runtime profile (avoid cloud-only provider checks in local BAT flow)
+REM Section: perform this operational step before continuing.
 set "CASM_ROUTING_PROFILE=local"
 set "ALLOW_OFFLINE_LOCAL_MODE=true"
 set "GEMINI_ENABLED=false"
@@ -56,6 +61,7 @@ set "STARTUP_AUTO_PROVISION_LOCAL_MODE=true"
 set "STARTUP_AUTO_PROVISION_POLL_INTERVAL_SECONDS=15"
 set "STARTUP_AUTO_PROVISION_MAX_ATTEMPTS=0"
 set "LOCAL_MODE_CLOUD_HEARTBEAT_MIN_INTERVAL_SECONDS=15"
+REM Section: perform this operational step before continuing.
 set "LOCAL_MODE_CLOUD_HEARTBEAT_MAX_INTERVAL_SECONDS=60"
 set "LOCAL_MODE_CLOUD_HEARTBEAT_AUTH_FETCH_EVERY_N=1"
 set "LOCAL_MODE_PROVISION_SECRET_STALE_RECOVERY_SECONDS=45"
@@ -66,6 +72,7 @@ set "QUEUE_WORKER_HEARTBEAT_STALE_SECONDS=180"
 set "QUEUE_WORKER_FORCED_RESTART_MIN_INTERVAL_SECONDS=300"
 set "QUEUE_STUCK_REPORT_SWEEP_ENABLED=true"
 set "QUEUE_STUCK_REPORT_SWEEP_INTERVAL_SECONDS=300"
+REM Section: perform this operational step before continuing.
 set "QUEUE_STUCK_REPORT_SWEEP_TIMEOUT_SECONDS=20"
 set "LOCAL_PENDING_RECOVERY_ENABLED=true"
 set "LOCAL_PENDING_RECOVERY_INTERVAL_SECONDS=180"
@@ -79,6 +86,7 @@ for /f "tokens=2 delims==" %%A in ('findstr /B /I "OLLAMA_MODEL=" .env 2^>nul') 
 for /f "tokens=2 delims==" %%A in ('findstr /B /I "LOCAL_OLLAMA_UNIFIED_MODEL=" .env 2^>nul') do set "LOCAL_OLLAMA_UNIFIED_MODEL=%%~A"
 for /f "tokens=2 delims==" %%A in ('findstr /B /I "OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL=" .env 2^>nul') do set "OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL=%%~A"
 
+REM Section: perform this operational step before continuing.
 if "%LOCAL_OLLAMA_UNIFIED_MODEL%"=="" set "LOCAL_OLLAMA_UNIFIED_MODEL=gemma3:4b"
 if "%OLLAMA_MODEL%"=="" set "OLLAMA_MODEL=%LOCAL_OLLAMA_UNIFIED_MODEL%"
 if "%OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL%"=="" set "OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL=true"
@@ -90,6 +98,7 @@ set "NLP_PROVIDER_ORDER=ollama,local"
 set "VISION_PROVIDER_ORDER=ollama"
 set "EMBEDDING_PROVIDER_ORDER=ollama"
 
+REM Section: perform this operational step before continuing.
 echo Local mode profile: GEMINI_ENABLED=%GEMINI_ENABLED%, MODEL_API_ENABLED=%MODEL_API_ENABLED%
 echo Ollama model for startup checks: %OLLAMA_MODEL%
 echo Ollama auto-upgrade on pull fail: %OLLAMA_AUTO_UPGRADE_ON_PULL_FAIL%
@@ -101,6 +110,7 @@ if not exist "pipeline\backend\integration\safety_knowledge.txt" (
         if errorlevel 1 (
             echo Warning: Failed to restore safety knowledge file from NLP_CASM\Trim1.csv.
         ) else (
+REM Section: perform this operational step before continuing.
             echo Restored missing safety knowledge file from NLP_CASM\Trim1.csv.
         )
     ) else (
@@ -113,6 +123,7 @@ REM Check if venv exists and activate it
 if not exist venv\Scripts\activate.bat (
     echo Virtual environment not found. Creating...
     py -3 -m venv venv
+REM Section: perform this operational step before continuing.
     if errorlevel 1 (
         python -m venv venv
     )
@@ -125,6 +136,7 @@ if not exist venv\Scripts\activate.bat (
     echo.
 )
 
+REM Section: perform this operational step before continuing.
 echo Activating virtual environment...
 call venv\Scripts\activate.bat
 if %errorlevel% neq 0 (
@@ -135,6 +147,7 @@ if %errorlevel% neq 0 (
 echo Virtual environment activated: %VIRTUAL_ENV%
 echo.
 
+REM Section: perform this operational step before continuing.
 if not exist "%VENV_PYTHON%" (
     echo Error: venv Python not found at:
     echo   %VENV_PYTHON%
@@ -149,6 +162,7 @@ if not exist "%VENV_PIP%" (
     exit /b 1
 )
 
+REM Section: perform this operational step before continuing.
 set "CASM_TORCH_INSTALL_MODE=cpu"
 set "CASM_TORCH_STRICT_CPU=true"
 echo Selecting CPU-only PyTorch runtime...
@@ -162,6 +176,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+REM Section: perform this operational step before continuing.
 echo CPU-only PyTorch runtime checked.
 echo.
 
@@ -174,6 +189,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+REM Section: perform this operational step before continuing.
 echo Dependencies synchronized.
 echo.
 
@@ -184,6 +200,7 @@ if errorlevel 1 (
     "%VENV_PIP%" install --disable-pip-version-check pyrealsense2
     if errorlevel 1 (
         echo Warning: Could not install pyrealsense2 automatically.
+REM Section: perform this operational step before continuing.
         echo RealSense USB will stay unavailable until pyrealsense2 / Intel RealSense SDK is installed.
         echo The app can still use webcam and cloud mode.
     ) else (
@@ -194,6 +211,7 @@ if errorlevel 1 (
 )
 echo.
 
+REM Section: perform this operational step before continuing.
 echo.
 echo ==========================================
 echo Checking Ollama Installation...
@@ -204,6 +222,7 @@ REM Resolve Ollama executable from PATH or known install locations.
 call :resolve_ollama_cmd
 if errorlevel 1 (
     echo Error: Ollama executable not found.
+REM Section: perform this operational step before continuing.
     echo Please install Ollama from: https://ollama.com/download
     echo.
     pause
@@ -214,6 +233,7 @@ echo Ollama found at: %OLLAMA_CMD%
 echo Starting server in background...
 set "OLLAMA_READY_STATUS=1"
 call :safe_start_ollama_and_wait_ready 30 >nul 2>&1
+REM Section: perform this operational step before continuing.
 set "OLLAMA_READY_STATUS=!errorlevel!"
 if not "!OLLAMA_READY_STATUS!"=="0" (
     call :start_ollama_and_wait_ready 30 >nul 2>&1
@@ -226,6 +246,7 @@ if not "!OLLAMA_READY_STATUS!"=="0" (
     pause
     exit /b 1
 )
+REM Section: perform this operational step before continuing.
 echo Ollama server is ready
 echo.
 
@@ -238,6 +259,7 @@ REM Check if configured model is installed
 "%OLLAMA_CMD%" list | findstr /I /C:"%OLLAMA_MODEL%" >nul 2>&1
 if errorlevel 1 (
     echo Model '%OLLAMA_MODEL%' not found. Pulling from Ollama...
+REM Section: perform this operational step before continuing.
     echo This is a one-time download and may take a few minutes.
     echo.
     call :pull_ollama_model_with_upgrade "%OLLAMA_MODEL%"
@@ -249,6 +271,7 @@ if errorlevel 1 (
         echo Model pulled successfully!
     )
 ) else (
+REM Section: perform this operational step before continuing.
     echo Model '%OLLAMA_MODEL%' is already installed.
 )
 echo.
@@ -259,6 +282,7 @@ echo Starting CASM Application...
 echo ==========================================
 echo.
 echo Once started, open your browser to:
+REM Section: perform this operational step before continuing.
 echo   http://localhost:5000
 echo.
 echo To stop: Close this window or press Ctrl+C
@@ -270,6 +294,7 @@ REM Start the application
 
 goto :eof
 
+REM Section: perform this operational step before continuing.
 :resolve_ollama_cmd
 set "OLLAMA_CMD="
 
@@ -283,6 +308,7 @@ if exist "%ProgramFiles%\Ollama\ollama.exe" (
     exit /b 0
 )
 
+REM Section: perform this operational step before continuing.
 if defined ProgramFiles(x86) if exist "%ProgramFiles(x86)%\Ollama\ollama.exe" (
     set "OLLAMA_CMD=%ProgramFiles(x86)%\Ollama\ollama.exe"
     exit /b 0
@@ -295,6 +321,7 @@ for /f "delims=" %%P in ('where ollama 2^>nul') do (
         set "OLLAMA_CMD=!OLLAMA_CANDIDATE!"
         exit /b 0
     )
+REM Section: perform this operational step before continuing.
     if "!OLLAMA_CMD!"=="" set "OLLAMA_CMD=!OLLAMA_CANDIDATE!"
 )
 
@@ -305,6 +332,7 @@ exit /b 1
 :pull_ollama_model_with_upgrade
 set "MODEL_TO_PULL=%~1"
 set "PULL_LOG=%TEMP%\casm_ollama_pull_%RANDOM%.log"
+REM Section: perform this operational step before continuing.
 set "PULL_STATUS=1"
 
 "%OLLAMA_CMD%" pull "%MODEL_TO_PULL%" > "%PULL_LOG%" 2>&1
@@ -316,6 +344,7 @@ if "!PULL_STATUS!"=="0" (
     exit /b 0
 )
 
+REM Section: perform this operational step before continuing.
 set "UPGRADE_REASON="
 findstr /I /C:"requires a newer version of Ollama" /C:"please download the latest version" /C:"pull model manifest: 412" "%PULL_LOG%" >nul 2>&1
 if "!errorlevel!"=="0" set "UPGRADE_REASON=model manifest requires a newer Ollama runtime"
@@ -326,6 +355,7 @@ if "!UPGRADE_REASON!"=="" (
     )
 )
 
+REM Section: perform this operational step before continuing.
 if not "!UPGRADE_REASON!"=="" (
     echo.
     echo Pull failed because !UPGRADE_REASON!.
@@ -338,6 +368,7 @@ if not "!UPGRADE_REASON!"=="" (
             set "PULL_STATUS=1"
         ) else (
             "%OLLAMA_CMD%" pull "%MODEL_TO_PULL%"
+REM Section: perform this operational step before continuing.
             set "PULL_STATUS=!errorlevel!"
         )
     ) else (
@@ -348,6 +379,7 @@ if not "!UPGRADE_REASON!"=="" (
 del "%PULL_LOG%" >nul 2>&1
 exit /b !PULL_STATUS!
 
+REM Section: perform this operational step before continuing.
 :upgrade_ollama_runtime
 set "UPGRADE_STATUS=1"
 
@@ -358,6 +390,7 @@ where winget >nul 2>&1
 if not errorlevel 1 (
     winget upgrade --id Ollama.Ollama -e --accept-source-agreements --accept-package-agreements
     if !errorlevel! equ 0 (
+REM Section: perform this operational step before continuing.
         set "UPGRADE_STATUS=0"
         goto :upgrade_ollama_runtime_restart
     )
@@ -369,6 +402,7 @@ if not errorlevel 1 (
     )
 )
 
+REM Section: perform this operational step before continuing.
 echo Falling back to direct Ollama installer download...
 curl -L "https://ollama.com/download/OllamaSetup.exe" -o "%TEMP%\OllamaSetup.exe"
 if !errorlevel! neq 0 goto :upgrade_ollama_runtime_done
@@ -380,6 +414,7 @@ if !INSTALL_STATUS! neq 0 goto :upgrade_ollama_runtime_done
 
 set "UPGRADE_STATUS=0"
 
+REM Section: perform this operational step before continuing.
 :upgrade_ollama_runtime_restart
 
 echo Restarting Ollama service after upgrade...
@@ -392,6 +427,7 @@ if not "!OLLAMA_READY_STATUS!"=="0" (
     set "OLLAMA_READY_STATUS=!errorlevel!"
 )
 
+REM Section: perform this operational step before continuing.
 if not "!OLLAMA_READY_STATUS!"=="0" (
     echo Warning: Ollama service did not become ready after upgrade.
     set "UPGRADE_STATUS=1"
@@ -402,6 +438,7 @@ exit /b !UPGRADE_STATUS!
 
 :spawn_ollama_server
 call :resolve_ollama_cmd
+REM Section: perform this operational step before continuing.
 if errorlevel 1 exit /b 1
 
 start "" /min "%OLLAMA_CMD%" serve >nul 2>&1
@@ -415,6 +452,7 @@ if not errorlevel 1 exit /b 0
 
 exit /b 1
 
+REM Section: perform this operational step before continuing.
 :spawn_ollama_app
 set "OLLAMA_APP_CMD="
 
@@ -425,6 +463,7 @@ if not "%OLLAMA_CMD%"=="" (
 
 if "!OLLAMA_APP_CMD!"=="" if exist "%LOCALAPPDATA%\Programs\Ollama\ollama app.exe" set "OLLAMA_APP_CMD=%LOCALAPPDATA%\Programs\Ollama\ollama app.exe"
 if "!OLLAMA_APP_CMD!"=="" if exist "%ProgramFiles%\Ollama\ollama app.exe" set "OLLAMA_APP_CMD=%ProgramFiles%\Ollama\ollama app.exe"
+REM Section: perform this operational step before continuing.
 if defined ProgramFiles(x86) if "!OLLAMA_APP_CMD!"=="" if exist "%ProgramFiles(x86)%\Ollama\ollama app.exe" set "OLLAMA_APP_CMD=%ProgramFiles(x86)%\Ollama\ollama app.exe"
 
 if "!OLLAMA_APP_CMD!"=="" exit /b 1
@@ -437,6 +476,7 @@ if not errorlevel 1 exit /b 0
 
 exit /b 1
 
+REM Section: perform this operational step before continuing.
 :is_ollama_ready
 call :resolve_ollama_cmd
 if errorlevel 1 exit /b 1
@@ -450,6 +490,7 @@ if !errorlevel! equ 0 exit /b 0
 
 exit /b 1
 
+REM Section: perform this operational step before continuing.
 :safe_start_ollama_and_wait_ready
 set "OLLAMA_WAIT_SECONDS=%~1"
 if "%OLLAMA_WAIT_SECONDS%"=="" set "OLLAMA_WAIT_SECONDS=30"
@@ -460,6 +501,7 @@ if !errorlevel! equ 0 exit /b 0
 
 call :spawn_ollama_server
 if errorlevel 1 exit /b 1
+REM Section: perform this operational step before continuing.
 for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
     call :is_ollama_ready
     if !errorlevel! equ 0 (
@@ -472,6 +514,7 @@ for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
 )
 exit /b 1
 
+REM Section: perform this operational step before continuing.
 :start_ollama_and_wait_ready
 set "OLLAMA_WAIT_SECONDS=%~1"
 if "%OLLAMA_WAIT_SECONDS%"=="" set "OLLAMA_WAIT_SECONDS=30"
@@ -482,6 +525,7 @@ if errorlevel 1 exit /b 1
 
 for /L %%I in (1,1,%OLLAMA_WAIT_SECONDS%) do (
     call :is_ollama_ready
+REM Section: perform this operational step before continuing.
     if !errorlevel! equ 0 (
         exit /b 0
     )

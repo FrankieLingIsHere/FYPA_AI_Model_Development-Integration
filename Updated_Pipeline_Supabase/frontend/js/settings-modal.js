@@ -1,3 +1,4 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 // Global Settings Modal (page-agnostic popup)
 const GlobalSettingsModal = {
     initialized: false,
@@ -18,9 +19,12 @@ const GlobalSettingsModal = {
     },
 
     setProviderProfileManualLock(profile) {
+        // Keep this browser operation recoverable if it fails.
         try {
+            // Choose the correct browser state branch before continuing.
             if (window.PPEProviderProfileManualLock && typeof window.PPEProviderProfileManualLock.set === 'function') {
                 window.PPEProviderProfileManualLock.set(profile);
+                // Return the prepared value to the caller.
                 return;
             }
             const normalized = String(profile || '').trim().toLowerCase();
@@ -78,6 +82,7 @@ const GlobalSettingsModal = {
     },
 
     ensureStyles() {
+        // Choose the correct browser state branch before continuing.
         if (document.getElementById('globalSettingsModalStyles')) return;
 
         const style = document.createElement('style');
@@ -223,6 +228,7 @@ const GlobalSettingsModal = {
     },
 
     ensureDom() {
+        // Choose the correct browser state branch before continuing.
         if (document.getElementById('globalSettingsModal')) return;
 
         const modal = document.createElement('div');
@@ -377,11 +383,13 @@ const GlobalSettingsModal = {
     },
 
     getEl(id) {
+        // Return the prepared value to the caller.
         return document.getElementById(id);
     },
 
     showNotification(message, type = 'info') {
         if (typeof NotificationManager !== 'undefined') {
+            // Choose the correct browser state branch before continuing.
             if (type === 'success') return NotificationManager.success(message);
             if (type === 'warning') return NotificationManager.warning(message);
             if (type === 'error') return NotificationManager.error(message);
@@ -392,6 +400,7 @@ const GlobalSettingsModal = {
 
     setProviderStatus(message, type = 'info') {
         const statusEl = this.getEl('globalProviderRoutingStatus');
+        // Choose the correct browser state branch before continuing.
         if (!statusEl) return;
 
         statusEl.textContent = String(message || '').trim();
@@ -407,12 +416,14 @@ const GlobalSettingsModal = {
     },
 
     setSelectValueOrInject(selectEl, value, customPrefix) {
+        // Choose the correct browser state branch before continuing.
         if (!selectEl) return;
         const normalizedValue = String(value || '').trim();
         if (!normalizedValue) return;
         const existing = Array.from(selectEl.options || []).find((opt) => opt.value === normalizedValue);
         if (existing) {
             selectEl.value = normalizedValue;
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -425,6 +436,7 @@ const GlobalSettingsModal = {
 
     lockBodyScroll() {
         const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+        // Choose the correct browser state branch before continuing.
         if (scrollbarWidth > 0) {
             document.body.style.paddingRight = `${scrollbarWidth}px`;
         }
@@ -438,6 +450,7 @@ const GlobalSettingsModal = {
 
     normalizeLocalProvisionStatus(statusRaw) {
         const normalized = String(statusRaw || '').toLowerCase().trim();
+        // Choose the correct browser state branch before continuing.
         if (normalized === 'pending' || normalized === 'pending_approval') return 'pending_approval';
         if (normalized === 'credentials_present') return 'credentials_present';
         if (normalized === 'active') return 'active';
@@ -451,6 +464,7 @@ const GlobalSettingsModal = {
 
     isCloudEndpointUnreachable(errorText) {
         const normalized = String(errorText || '').toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (!normalized) return false;
 
         const markers = [
@@ -462,11 +476,13 @@ const GlobalSettingsModal = {
             'nxdomain',
             'no address associated with hostname'
         ];
+        // Return the prepared value to the caller.
         return markers.some((marker) => normalized.includes(marker));
     },
 
     isLikelyRemoteBackend() {
         try {
+            // Choose the correct browser state branch before continuing.
             if (!API_CONFIG.BASE_URL) return false;
             const resolved = new URL(API_CONFIG.BASE_URL, window.location.origin);
             const host = String(resolved.hostname || '').toLowerCase();
@@ -478,6 +494,7 @@ const GlobalSettingsModal = {
     },
 
     loadRemoteProvisionState() {
+        // Keep this browser operation recoverable if it fails.
         try {
             // Provisioning state (machineId + provision_secret + status) is
             // persisted to localStorage so that tab close, hard refresh, or
@@ -491,12 +508,15 @@ const GlobalSettingsModal = {
             let raw = localStorage.getItem(this.REMOTE_PROVISION_STATE_KEY);
             if (!raw) {
                 const legacy = sessionStorage.getItem(this.REMOTE_PROVISION_STATE_KEY);
+                // Choose the correct browser state branch before continuing.
                 if (legacy) {
+                    // Keep this browser operation recoverable if it fails.
                     try { localStorage.setItem(this.REMOTE_PROVISION_STATE_KEY, legacy); } catch (_) {}
                     try { sessionStorage.removeItem(this.REMOTE_PROVISION_STATE_KEY); } catch (_) {}
                     raw = legacy;
                 }
             }
+            // Choose the correct browser state branch before continuing.
             if (!raw) return {};
             const parsed = JSON.parse(raw);
             if (!parsed || typeof parsed !== 'object') return {};
@@ -509,6 +529,7 @@ const GlobalSettingsModal = {
     resolveStableMachineId(currentMachineId = '', candidateMachineId = '', source = 'unknown') {
         const current = String(currentMachineId || '').trim();
         const candidate = String(candidateMachineId || '').trim();
+        // Prepare is valid for the next UI or data step.
         const isValid = (value) => /^[A-Za-z0-9._:-]{3,120}$/.test(value);
 
         if (isValid(current) && isValid(candidate) && current !== candidate) {
@@ -516,9 +537,11 @@ const GlobalSettingsModal = {
                 `[Provisioning] Ignoring machine_id mismatch from ${source}. Keeping stable device id.`,
                 { currentMachineId: current, candidateMachineId: candidate }
             );
+            // Return the prepared value to the caller.
             return current;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (isValid(candidate)) return candidate;
         return current;
     },
@@ -534,6 +557,7 @@ const GlobalSettingsModal = {
                 status: this.normalizeLocalProvisionStatus(nextState.status ?? current.status ?? 'idle'),
                 updatedAt: new Date().toISOString()
             };
+            // Choose the correct browser state branch before continuing.
             if (!merged.machineId) return merged;
             // Persist to localStorage so credentials survive tab close /
             // refresh / browser restart (see loadRemoteProvisionState).
@@ -552,12 +576,14 @@ const GlobalSettingsModal = {
                     merged.machineId,
                     'saveRemoteProvisionState'
                 );
+                // Choose the correct browser state branch before continuing.
                 if (localMachineId) {
                     localStorage.setItem(localKey, localMachineId);
                     // Keep session state aligned with the stable local identity.
                     merged.machineId = localMachineId;
                 }
             } catch (_) { /* quota / privacy mode — best-effort only */ }
+            // Return the prepared value to the caller.
             return merged;
         } catch (error) {
             return this.loadRemoteProvisionState();
@@ -566,6 +592,7 @@ const GlobalSettingsModal = {
 
     ensureRemoteProvisionMachineId(machineIdHint = '') {
         const hint = String(machineIdHint || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (/^[A-Za-z0-9._:-]{3,120}$/.test(hint)) {
             return hint;
         }
@@ -578,7 +605,9 @@ const GlobalSettingsModal = {
         try {
             if (window.PPEProvisioningStatus && typeof window.PPEProvisioningStatus.getDeviceMachineId === 'function') {
                 const deviceId = String(window.PPEProvisioningStatus.getDeviceMachineId() || '').trim();
+                // Choose the correct browser state branch before continuing.
                 if (/^[A-Za-z0-9._:-]{3,120}$/.test(deviceId)) {
+                    // Return the prepared value to the caller.
                     return deviceId;
                 }
             }
@@ -588,7 +617,9 @@ const GlobalSettingsModal = {
 
         const stored = this.loadRemoteProvisionState();
         const storedMachineId = String((stored && stored.machineId) || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (/^[A-Za-z0-9._:-]{3,120}$/.test(storedMachineId)) {
+            // Return the prepared value to the caller.
             return storedMachineId;
         }
 
@@ -603,12 +634,14 @@ const GlobalSettingsModal = {
             suffix = '';
         }
 
+        // Choose the correct browser state branch before continuing.
         if (!suffix) {
             suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
         }
 
         const generated = `Web-${suffix}`.replace(/[^A-Za-z0-9._:-]/g, '').slice(0, 120);
         if (generated.length >= 3) {
+            // Return the prepared value to the caller.
             return generated;
         }
 
@@ -622,6 +655,7 @@ const GlobalSettingsModal = {
 
         const stored = this.loadRemoteProvisionState();
         const storedStatus = this.normalizeLocalProvisionStatus((stored && stored.status) || 'idle');
+        // Prepare machine id for the next UI or data step.
         let machineId = this.ensureRemoteProvisionMachineId(machineIdHint || stored.machineId || this.localProvisionState.machineId);
         let provisionSecret = String((stored && stored.provisionSecret) || '').trim();
         const hasStoredProvisionSecret = !!provisionSecret;
@@ -635,6 +669,7 @@ const GlobalSettingsModal = {
                 currentProvisionSecret: provisionSecret || ''
             });
             if (!requestResult || requestResult.success === false) {
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     status: this.normalizeLocalProvisionStatus((stored && stored.status) || 'idle'),
@@ -658,7 +693,9 @@ const GlobalSettingsModal = {
             });
         }
 
+        // Choose the correct browser state branch before continuing.
         if (!provisionSecret) {
+            // Return the prepared value to the caller.
             return {
                 success: false,
                 status: this.normalizeLocalProvisionStatus((stored && stored.status) || 'idle'),
@@ -668,6 +705,7 @@ const GlobalSettingsModal = {
             };
         }
 
+        // Prepare status result for the next UI or data step.
         let statusResult = await API.getCloudProvisioningStatus({
             machineId,
             provisionSecret
@@ -689,6 +727,7 @@ const GlobalSettingsModal = {
                         provisionSecret
                     });
                     statusResult = retryStatusResult || statusResult;
+                    // Choose the correct browser state branch before continuing.
                     if (retryStatusResult && retryStatusResult.success) {
                         break;
                     }
@@ -697,6 +736,7 @@ const GlobalSettingsModal = {
 
             const refreshedError = String((statusResult && statusResult.error) || '').toLowerCase();
             const shouldRetryRequest = invalidSecret || (!hasStoredProvisionSecret && refreshedError.includes('not_found'));
+            // Choose the correct browser state branch before continuing.
             if ((statusResult && statusResult.success === false) && shouldRetryRequest) {
                 attemptedSecretlessRecovery = !!invalidSecret;
                 const retryRequest = await API.requestCloudProvisioningApproval({
@@ -731,6 +771,7 @@ const GlobalSettingsModal = {
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (!statusResult || statusResult.success === false) {
             // Only trust the cached storedStatus if the failure was a network
             // error (not a 401/403 invalid-secret). A 401 means the device was
@@ -740,7 +781,9 @@ const GlobalSettingsModal = {
             const isAuthError = statusError.includes('invalid provision_secret')
                 || statusError.includes('401')
                 || statusError.includes('403');
+            // Choose the correct browser state branch before continuing.
             if (!isAuthError && (storedStatus === 'approved' || storedStatus === 'provisioned' || storedStatus === 'active')) {
+                // Return the prepared value to the caller.
                 return {
                     success: true,
                     status: storedStatus,
@@ -768,6 +811,7 @@ const GlobalSettingsModal = {
                         status: fallbackStatus,
                         adminPortalUrl
                     });
+                    // Return the prepared value to the caller.
                     return {
                         success: false,
                         status: fallbackStatus,
@@ -783,6 +827,7 @@ const GlobalSettingsModal = {
                     status: 'validation_required',
                     adminPortalUrl
                 });
+                // Return the prepared value to the caller.
                 return {
                     success: false,
                     status: 'validation_required',
@@ -792,6 +837,7 @@ const GlobalSettingsModal = {
                 };
             }
 
+            // Return the prepared value to the caller.
             return {
                 success: false,
                 status: storedStatus,
@@ -824,6 +870,7 @@ const GlobalSettingsModal = {
             });
         }
 
+        // Return the prepared value to the caller.
         return {
             success: true,
             status: normalizedStatus,
@@ -860,6 +907,7 @@ const GlobalSettingsModal = {
             source.provision_status ?? source.provisionStatus ?? fallback.provisionStatus ?? 'idle'
         );
 
+        // Return the prepared value to the caller.
         return {
             available,
             machineId,
@@ -882,7 +930,9 @@ const GlobalSettingsModal = {
     },
 
     getCloudHeartbeatAgeSeconds(heartbeat) {
+        // Choose the correct browser state branch before continuing.
         if (!heartbeat || typeof heartbeat !== 'object') {
+            // Return the prepared value to the caller.
             return null;
         }
 
@@ -892,7 +942,9 @@ const GlobalSettingsModal = {
         }
 
         const baseAge = Number(heartbeat.ageSeconds);
+        // Choose the correct browser state branch before continuing.
         if (!Number.isFinite(baseAge)) {
+            // Return the prepared value to the caller.
             return null;
         }
 
@@ -906,6 +958,7 @@ const GlobalSettingsModal = {
 
     formatDurationSeconds(rawSeconds) {
         const total = Math.max(0, Math.floor(Number(rawSeconds) || 0));
+        // Choose the correct browser state branch before continuing.
         if (total < 60) return `${total}s`;
         const mins = Math.floor(total / 60);
         const secs = total % 60;
@@ -917,10 +970,12 @@ const GlobalSettingsModal = {
 
     updateHeartbeatBadge() {
         const badgeEl = this.getEl('globalLocalModeHeartbeatBadge');
+        // Choose the correct browser state branch before continuing.
         if (!badgeEl) return;
 
         if (!this.isLikelyRemoteBackend()) {
             badgeEl.style.display = 'none';
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -948,6 +1003,7 @@ const GlobalSettingsModal = {
             }
         };
 
+        // Prepare paint badge for the next UI or data step.
         const paintBadge = (tone, text) => {
             const resolvedTone = toneMap[tone] || toneMap.info;
             badgeEl.textContent = text;
@@ -958,8 +1014,10 @@ const GlobalSettingsModal = {
             badgeEl.style.borderColor = resolvedTone.border;
         };
 
+        // Choose the correct browser state branch before continuing.
         if (!heartbeat.available) {
             paintBadge('info', 'Cloud heartbeat: waiting for edge update');
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -968,6 +1026,7 @@ const GlobalSettingsModal = {
         const ageText = ageSeconds == null ? 'unknown' : this.formatDurationSeconds(ageSeconds);
         const scopeLabel = heartbeat.matchesRequestedMachine === false ? 'host ' : '';
 
+        // Choose the correct browser state branch before continuing.
         if (heartbeat.isRecent) {
             const expiresInSeconds = ageSeconds == null
                 ? freshWindow
@@ -977,6 +1036,7 @@ const GlobalSettingsModal = {
             const heartbeatLabel = `Cloud heartbeat: fresh ${scopeLabel}(${readinessLabel})`
                 + ` • age ${ageText} • expires in ${expiresText}`;
             paintBadge(heartbeat.localModePossible ? 'success' : 'warning', heartbeatLabel);
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -988,6 +1048,7 @@ const GlobalSettingsModal = {
     },
 
     ensureHeartbeatCountdown() {
+        // Choose the correct browser state branch before continuing.
         if (this.heartbeatCountdownInterval) return;
         this.heartbeatCountdownInterval = setInterval(() => {
             this.updateHeartbeatBadge();
@@ -999,6 +1060,7 @@ const GlobalSettingsModal = {
         const heartbeat = this.normalizeCloudHeartbeatPayload(this.localProvisionState.cloudHeartbeat);
         const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status || 'idle');
         const provisionStatus = this.normalizeLocalProvisionStatus(heartbeat.provisionStatus || 'idle');
+        // Prepare should expect ready heartbeat for the next UI or data step.
         const shouldExpectReadyHeartbeat = (
             status === 'approved'
             || status === 'provisioned'
@@ -1013,12 +1075,15 @@ const GlobalSettingsModal = {
     },
 
     ensureHeartbeatRefreshPolling() {
+        // Choose the correct browser state branch before continuing.
         if (!this.isLikelyRemoteBackend()) return;
         if (this.heartbeatRefreshPollInterval) return;
 
         const tick = async () => {
+            // Choose the correct browser state branch before continuing.
             if (!this.isOpen) {
                 this.stopHeartbeatRefreshPolling();
+                // Return the prepared value to the caller.
                 return;
             }
             if (!this.heartbeatNeedsRemoteRefresh()) {
@@ -1029,6 +1094,7 @@ const GlobalSettingsModal = {
                 return;
             }
             this.heartbeatRefreshPollBusy = true;
+            // Keep this browser operation recoverable if it fails.
             try {
                 await this.refreshProvisioningState();
             } catch (error) {
@@ -1043,6 +1109,7 @@ const GlobalSettingsModal = {
     },
 
     stopHeartbeatRefreshPolling() {
+        // Choose the correct browser state branch before continuing.
         if (!this.heartbeatRefreshPollInterval) return;
         clearInterval(this.heartbeatRefreshPollInterval);
         this.heartbeatRefreshPollInterval = null;
@@ -1066,10 +1133,12 @@ const GlobalSettingsModal = {
         const sourceStatus = String(source.status || '').trim().toLowerCase() === 'stored'
             ? (source.device_status || source.provisioning_status || source.status)
             : source.status;
+        // Prepare normalized status for the next UI or data step.
         let normalizedStatus = this.normalizeLocalProvisionStatus(sourceStatus || previousStatus);
         const heartbeatProvisionStatus = this.normalizeLocalProvisionStatus(normalizedHeartbeat.provisionStatus || 'idle');
         if (this.isLikelyRemoteBackend()) {
             const previousIsApprovedLike = previousStatus === 'approved' || previousStatus === 'provisioned' || previousStatus === 'active';
+            // Prepare incoming is weaker status for the next UI or data step.
             const incomingIsWeakerStatus = (
                 normalizedStatus === 'idle'
                 || normalizedStatus === 'pending_approval'
@@ -1085,6 +1154,7 @@ const GlobalSettingsModal = {
             const protectionStillFresh = previousIsApprovedLike
                 && incomingIsWeakerStatus
                 && previousAgeMs < PROTECTION_WINDOW_MS;
+            // Choose the correct browser state branch before continuing.
             if (protectionStillFresh) {
                 normalizedStatus = previousStatus;
             }
@@ -1100,6 +1170,7 @@ const GlobalSettingsModal = {
                 && normalizedHeartbeat.localModePossible
                 && heartbeatMatchesThisMachine
             );
+            // Prepare heartbeat is approved for the next UI or data step.
             const heartbeatIsApproved = (
                 heartbeatProvisionStatus === 'approved'
                 || heartbeatProvisionStatus === 'provisioned'
@@ -1110,6 +1181,7 @@ const GlobalSettingsModal = {
                 || normalizedStatus === 'provisioned'
                 || normalizedStatus === 'active'
             );
+            // Choose the correct browser state branch before continuing.
             if (heartbeatActive && (heartbeatIsApproved || statusIsApproved)) {
                 normalizedStatus = 'active';
             }
@@ -1127,6 +1199,7 @@ const GlobalSettingsModal = {
         this.updateInstallerRedownloadButton();
         this.updateRequestProvisioningButton();
         this.updateHeartbeatBadge();
+        // Choose the correct browser state branch before continuing.
         if (this.isOpen && this.heartbeatNeedsRemoteRefresh()) {
             this.ensureHeartbeatRefreshPolling();
         }
@@ -1165,6 +1238,7 @@ const GlobalSettingsModal = {
     canIssueInstallerRedownload(statusRaw, machineIdRaw) {
         const status = this.normalizeLocalProvisionStatus(statusRaw);
         const machineId = String(machineIdRaw || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!machineId) return false;
         // Only allow re-download for explicitly admin-approved or provisioned devices.
         // credentials_present is NOT sufficient — those credentials may not be admin-authorised.
@@ -1176,8 +1250,10 @@ const GlobalSettingsModal = {
         const requestedMachineId = String(machineIdRaw || '').trim();
         const storedMachineId = String(stored.machineId || '').trim();
         const provisionSecret = String(stored.provisionSecret || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!provisionSecret) return '';
         if (requestedMachineId && storedMachineId && requestedMachineId !== storedMachineId) {
+            // Return the prepared value to the caller.
             return '';
         }
         return provisionSecret;
@@ -1194,7 +1270,9 @@ const GlobalSettingsModal = {
             || (this.loadRemoteProvisionState() || {}).machineId
             || ''
         ).trim();
+        // Choose the correct browser state branch before continuing.
         if (!machineId) {
+            // Return the prepared value to the caller.
             return this.loadRemoteProvisionState() || {};
         }
 
@@ -1207,7 +1285,9 @@ const GlobalSettingsModal = {
             || (this.loadRemoteProvisionState() || {}).status
             || 'idle'
         );
+        // Choose the correct browser state branch before continuing.
         if (knownStatus !== 'approved' && knownStatus !== 'provisioned' && knownStatus !== 'active') {
+            // Return the prepared value to the caller.
             return this.loadRemoteProvisionState() || {};
         }
 
@@ -1219,6 +1299,7 @@ const GlobalSettingsModal = {
         if (refreshed && typeof refreshed === 'object') {
             this.syncLocalProvisionStateFromPayload(refreshed);
         }
+        // Return the prepared value to the caller.
         return this.loadRemoteProvisionState() || {};
     },
 
@@ -1233,22 +1314,27 @@ const GlobalSettingsModal = {
         btn.style.display = 'inline-flex';
         btn.disabled = !canRedownload;
 
+        // Choose the correct browser state branch before continuing.
         if (!machineId) {
             btn.title = 'Run Local Mode Checkup first to register this device and obtain machine ID.';
+            // Return the prepared value to the caller.
             return;
         }
 
         if (canRedownload) {
             if (status === 'credentials_present') {
                 btn.title = 'Issue a fresh installer BAT to recover cloud sync linkage while credentials are already present.';
+                // Return the prepared value to the caller.
                 return;
             }
             btn.title = 'Re-issue a fresh one-time installer BAT for this approved machine.';
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (status === 'pending_approval') {
             btn.title = 'Installer re-issue becomes available after admin approval.';
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -1257,8 +1343,10 @@ const GlobalSettingsModal = {
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (status === 'validation_required') {
             btn.title = 'Installer access needs a fresh validation request before re-download is available.';
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -1267,6 +1355,7 @@ const GlobalSettingsModal = {
 
     updateRequestProvisioningButton() {
         const btn = this.getEl('globalRequestProvisioningBtn');
+        // Choose the correct browser state branch before continuing.
         if (!btn) return;
         const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
         const machineId = String(this.localProvisionState.machineId || '').trim();
@@ -1291,6 +1380,7 @@ const GlobalSettingsModal = {
         btn.style.opacity = isPending ? '0.45' : '';
         btn.style.cursor = isPending ? 'not-allowed' : '';
 
+        // Choose the correct browser state branch before continuing.
         if (needsValidation) {
             btn.title = remoteHeartbeatMissing
                 ? 'Cloud has not received a fresh local heartbeat. Re-validate installer access for this machine.'
@@ -1310,6 +1400,7 @@ const GlobalSettingsModal = {
 
     async requestProvisioning() {
         const btn = this.getEl('globalRequestProvisioningBtn');
+        // Choose the correct browser state branch before continuing.
         if (!btn || btn.disabled) return;
 
         // --- Anti-flood: 60-second cooldown between requests ---
@@ -1321,6 +1412,7 @@ const GlobalSettingsModal = {
                 `Please wait ${remainSec}s before sending another provisioning request.`,
                 'warning'
             );
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -1333,6 +1425,7 @@ const GlobalSettingsModal = {
                 + 'Use this when the local installer BAT is broken or credentials were cleared.\n\n'
                 + 'Continue?'
             );
+            // Choose the correct browser state branch before continuing.
             if (!confirmed) return;
         }
 
@@ -1340,9 +1433,11 @@ const GlobalSettingsModal = {
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending…';
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const stored = this.loadRemoteProvisionState();
             const localStoredId = (() => {
+                // Keep this browser operation recoverable if it fails.
                 try { return String(localStorage.getItem('ppe.localMode.deviceMachineId.v1') || '').trim(); } catch (_) { return ''; }
             })();
             const machineIdHint = String(this.localProvisionState.machineId || stored.machineId || localStoredId || '').trim();
@@ -1358,7 +1453,9 @@ const GlobalSettingsModal = {
                 currentProvisionSecret: currentSecret
             });
 
+            // Choose the correct browser state branch before continuing.
             if (!requestResult || requestResult.success === false) {
+                // Prepare err msg for the next UI or data step.
                 let errMsg = String((requestResult && requestResult.error) || 'Failed to submit provisioning request.');
                 if (/unauthorized|timeout|timed out|failed to fetch/i.test(errMsg) && refreshExistingApproval) {
                     errMsg = currentSecret
@@ -1370,6 +1467,7 @@ const GlobalSettingsModal = {
                 this._lastProvisionRequestAt = 0;
                 btn.disabled = false;
                 this.updateRequestProvisioningButton();
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -1394,6 +1492,7 @@ const GlobalSettingsModal = {
 
             this.updateLocalModeCheckupStatus();
             this.updateRequestProvisioningButton();
+            // Choose the correct browser state branch before continuing.
             if (requestStatus === 'pending_approval') {
                 this.ensureLocalProvisionPolling();
                 const successMsg = `Provisioning request sent for machine ${newMachineId}. Waiting for admin approval.`;
@@ -1409,6 +1508,7 @@ const GlobalSettingsModal = {
                 this.setProviderStatus(`Provisioning status: ${requestStatus}`, 'info');
             }
         } catch (error) {
+            // Prepare err msg for the next UI or data step.
             const errMsg = (error && error.message) || 'Failed to submit provisioning request.';
             this.setProviderStatus(errMsg, 'error');
             this.showNotification(errMsg, 'error');
@@ -1420,6 +1520,7 @@ const GlobalSettingsModal = {
 
     updateLocalModeCheckupStatus() {
         const statusEl = this.getEl('globalLocalModeCheckupStatus');
+        // Choose the correct browser state branch before continuing.
         if (!statusEl) return;
 
         this.updateHeartbeatBadge();
@@ -1434,11 +1535,13 @@ const GlobalSettingsModal = {
         const heartbeatHostLabel = heartbeat.machineId ? ` (${heartbeat.machineId})` : '';
         const heartbeatCatchingUp = this.isLikelyRemoteBackend() && (!heartbeatVisible || !heartbeatFresh);
 
+        // Choose the correct browser state branch before continuing.
         if (status === 'pending_approval') {
             const machineText = machineId ? ` for machine ${machineId}` : '';
             const portalText = adminPortalUrl ? ` Admin portal: ${adminPortalUrl}` : '';
             statusEl.textContent = `Provision request submitted${machineText}. Waiting for admin approval.${portalText}`;
             statusEl.style.color = 'var(--warning-color)';
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -1450,21 +1553,26 @@ const GlobalSettingsModal = {
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (status === 'provisioned') {
+            // Choose the correct browser state branch before continuing.
             if (heartbeatCatchingUp) {
                 statusEl.textContent = this.isLikelyRemoteBackend()
                     ? 'Device is approved, but cloud has not received a fresh local backend heartbeat yet. Start or restart the local BAT, then use Re-Validate Provisioning if the heartbeat stays missing.'
                     : 'Local mode checkup passed. Cloud credentials are present; use installer re-download below if you need to refresh launcher linkage while heartbeat sync catches up.';
                 statusEl.style.color = 'var(--warning-color)';
+                // Return the prepared value to the caller.
                 return;
             }
             statusEl.textContent = heartbeatMatches
                 ? 'Local mode is approved and provisioned. Cloud heartbeat confirms this backend is reachable.'
                 : `Local mode is approved and provisioned. Cloud heartbeat is fresh from the local host${heartbeatHostLabel}.`;
             statusEl.style.color = 'var(--success-color)';
+            // Return the prepared value to the caller.
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (status === 'approved') {
             statusEl.textContent = 'Device is approved. You can re-issue a fresh installer BAT below.';
             statusEl.style.color = 'var(--success-color)';
@@ -1476,9 +1584,11 @@ const GlobalSettingsModal = {
                 ? 'Cloud has not received a paired local backend heartbeat yet. Start or restart the local BAT on the host PC, then run Local Mode Checkup again.'
                 : 'Local mode checkup passed. Cloud credentials are present; use installer re-download below if you need to refresh launcher linkage while heartbeat sync catches up.';
             statusEl.style.color = 'var(--warning-color)';
+            // Return the prepared value to the caller.
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (status === 'validation_required') {
             statusEl.textContent = 'This device appears known, but the stored validation token could not be confirmed. This is not an admin rejection; use Re-Validate Provisioning to refresh access.';
             statusEl.style.color = 'var(--warning-color)';
@@ -1488,6 +1598,7 @@ const GlobalSettingsModal = {
         if (status === 'rejected') {
             statusEl.textContent = 'Provision request was rejected by administrator. Contact admin and rerun Local Mode Checkup.';
             statusEl.style.color = 'var(--error-color)';
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -1496,9 +1607,11 @@ const GlobalSettingsModal = {
             ? policyApi.get()
             : { setupCheckCompleted: false, checkupCompleted: false, autoSetupAllowed: false };
 
+        // Choose the correct browser state branch before continuing.
         if (!policy.checkupCompleted && policy.setupCheckCompleted) {
             statusEl.textContent = 'First-time setup check completed. Request provisioning, then download and run the installer before local mode can be marked ready.';
             statusEl.style.color = 'var(--text-secondary)';
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -1508,9 +1621,11 @@ const GlobalSettingsModal = {
             return;
         }
 
+        // Choose the correct browser state branch before continuing.
         if (policy.autoSetupAllowed) {
             statusEl.textContent = 'Local mode checkup completed. Offline auto-setup is enabled.';
             statusEl.style.color = 'var(--success-color)';
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -1520,11 +1635,13 @@ const GlobalSettingsModal = {
 
     updateEnvValidationStatus(enabled) {
         const statusEl = this.getEl('globalEnvValidationStatus');
+        // Choose the correct browser state branch before continuing.
         if (!statusEl) return;
 
         if (enabled) {
             statusEl.innerHTML = '<i class="fas fa-check-circle" style="color: var(--success-color);"></i> Environment filtering is enabled.';
             statusEl.style.color = 'var(--success-color)';
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -1539,6 +1656,7 @@ const GlobalSettingsModal = {
             body: JSON.stringify({ enabled: !!enabled })
         });
         const data = await response.json().catch(() => ({}));
+        // Choose the correct browser state branch before continuing.
         if (!response.ok || !data.success) {
             throw new Error(data.error || 'Failed to update environment validation');
         }
@@ -1552,6 +1670,7 @@ const GlobalSettingsModal = {
             body: JSON.stringify({ cooldown_seconds: Number(seconds) })
         });
         const data = await response.json().catch(() => ({}));
+        // Choose the correct browser state branch before continuing.
         if (!response.ok || !data.success) {
             throw new Error(data.error || 'Failed to update cooldown');
         }
@@ -1572,6 +1691,7 @@ const GlobalSettingsModal = {
             const cooldownSlider = this.getEl('globalCooldownSlider');
             const cooldownValue = this.getEl('globalCooldownValue');
 
+            // Choose the correct browser state branch before continuing.
             if (envToggle && envData && typeof envData.enabled === 'boolean') {
                 envToggle.checked = !!envData.enabled;
                 this.updateEnvValidationStatus(envToggle.checked);
@@ -1591,6 +1711,7 @@ const GlobalSettingsModal = {
     },
 
     async loadAudioSettings() {
+        // Keep this browser operation recoverable if it fails.
         try {
             const volumeSlider = this.getEl('globalVolumeSlider');
             const volumeValue = this.getEl('globalVolumeValue');
@@ -1606,6 +1727,7 @@ const GlobalSettingsModal = {
             const storedMuted = String(localStorage.getItem('casm_voice_muted') || 'false').toLowerCase() === 'true';
             const storedChime = String(localStorage.getItem('casm_notification_chime') || 'true').toLowerCase() !== 'false';
 
+            // Choose the correct browser state branch before continuing.
             if (volumeSlider && !Number.isNaN(storedVolume)) {
                 volumeSlider.value = String(Math.max(0, Math.min(100, Math.round(storedVolume))));
             }
@@ -1620,6 +1742,7 @@ const GlobalSettingsModal = {
             }
 
             // Populate voices if available
+            // Choose the correct browser state branch before continuing.
             if (voiceSelect && typeof window.speechSynthesis !== 'undefined') {
                 const populate = () => {
                     const voices = window.speechSynthesis.getVoices() || [];
@@ -1634,8 +1757,10 @@ const GlobalSettingsModal = {
                         opt.textContent = `${v.name} (${v.lang})`;
                         voiceSelect.appendChild(opt);
                     });
+                    // Choose the correct browser state branch before continuing.
                     if (storedVoice) {
                         const found = Array.from(voiceSelect.options).find(o => o.value === storedVoice || o.text === storedVoice);
+                        // Choose the correct browser state branch before continuing.
                         if (found) voiceSelect.value = found.value;
                         else if (voiceCustom) voiceCustom.value = storedVoice;
                     }
@@ -1653,11 +1778,14 @@ const GlobalSettingsModal = {
     },
 
     async loadProviderRoutingSettings() {
+        // Keep this browser operation recoverable if it fails.
         try {
             this.setProviderStatus('Loading provider settings...');
             const settings = await API.getProviderRoutingSettings();
+            // Choose the correct browser state branch before continuing.
             if (!settings) {
                 this.setProviderStatus('Unable to load provider routing settings', 'warning');
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -1685,7 +1813,9 @@ const GlobalSettingsModal = {
 
     async applyProviderRoutingLocalProfile() {
         const applyBtn = this.getEl('globalApplyProviderRoutingBtn');
+        // Choose the correct browser state branch before continuing.
         if (!applyBtn) {
+            // Return the prepared value to the caller.
             return { success: false, message: 'Local profile button is unavailable.' };
         }
 
@@ -1697,6 +1827,7 @@ const GlobalSettingsModal = {
                 ...this.LOCAL_ONLY_PROVIDER_SETTINGS
             });
 
+            // Choose the correct browser state branch before continuing.
             if (!result || !result.success) {
                 throw new Error((result && result.error) || 'Failed to apply local provider profile');
             }
@@ -1721,12 +1852,14 @@ const GlobalSettingsModal = {
                     'warning'
                 );
             } else if (typeof window.PPEResolveWorkingBackendBaseUrl === 'function') {
+                // Keep this browser operation recoverable if it fails.
                 try {
                     await window.PPEResolveWorkingBackendBaseUrl({ preferLocal: true, force: true });
                 } catch (resolveErr) {
                     console.warn('GlobalSettingsModal: backend URL resolution after local profile apply failed', resolveErr);
                 }
             }
+            // Return the prepared value to the caller.
             return { success: true, profile: 'local', message: 'Local provider profile applied' };
         } catch (error) {
             console.error('GlobalSettingsModal: apply local profile failed', error);
@@ -1741,7 +1874,9 @@ const GlobalSettingsModal = {
 
     async applyApiModeProfile() {
         const btn = this.getEl('globalApplyApiModeBtn');
+        // Choose the correct browser state branch before continuing.
         if (!btn) {
+            // Return the prepared value to the caller.
             return { success: false, message: 'API mode button is unavailable.' };
         }
 
@@ -1753,6 +1888,7 @@ const GlobalSettingsModal = {
                 ...this.API_MODE_SETTINGS
             });
 
+            // Choose the correct browser state branch before continuing.
             if (!result || !result.success) {
                 throw new Error((result && result.error) || 'Failed to switch to API mode');
             }
@@ -1765,6 +1901,7 @@ const GlobalSettingsModal = {
             }
             this.setProviderProfileManualLock('');
             await this.loadProviderRoutingSettings();
+            // Return the prepared value to the caller.
             return { success: true, profile: 'api', message: 'API mode profile applied' };
         } catch (error) {
             console.error('GlobalSettingsModal: apply API mode failed', error);
@@ -1779,7 +1916,9 @@ const GlobalSettingsModal = {
 
     async applyRecommendedSettings() {
         const btn = this.getEl('globalSettingsRecommendedBtn');
+        // Choose the correct browser state branch before continuing.
         if (!btn) {
+            // Return the prepared value to the caller.
             return { success: false, message: 'Recommended settings button is unavailable.' };
         }
 
@@ -1793,6 +1932,7 @@ const GlobalSettingsModal = {
             const providerResult = await API.updateProviderRoutingSettings({
                 ...this.RECOMMENDED_SETTINGS.provider_routing
             });
+            // Choose the correct browser state branch before continuing.
             if (!providerResult || !providerResult.success) {
                 throw new Error((providerResult && providerResult.error) || 'Failed to apply recommended provider settings');
             }
@@ -1808,6 +1948,7 @@ const GlobalSettingsModal = {
                 ).trim().toLowerCase() === 'local' ? 'local' : 'cloud';
             }
             this.setProviderProfileManualLock('');
+            // Return the prepared value to the caller.
             return { success: true, profile: 'recommended', message: 'Recommended settings applied' };
         } catch (error) {
             console.error('GlobalSettingsModal: apply recommended failed', error);
@@ -1821,6 +1962,7 @@ const GlobalSettingsModal = {
     },
 
     async refreshProvisioningState() {
+        // Choose the correct browser state branch before continuing.
         if (window.PPEProvisioningStatus && typeof window.PPEProvisioningStatus.refresh === 'function') {
             const state = await window.PPEProvisioningStatus.refresh({
                 source: 'global-settings-open',
@@ -1831,11 +1973,13 @@ const GlobalSettingsModal = {
             this.syncLocalProvisionStateFromPayload(state);
 
             const normalized = this.normalizeLocalProvisionStatus((state && state.status) || 'idle');
+            // Choose the correct browser state branch before continuing.
             if (this.isLikelyRemoteBackend() && (normalized === 'idle' || normalized === 'error')) {
                 const remoteState = await this.refreshRemoteProvisioningStatus({
                     allowRequest: false,
                     machineIdHint: this.localProvisionState.machineId
                 });
+                // Choose the correct browser state branch before continuing.
                 if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'active' || remoteState.status === 'validation_required' || remoteState.status === 'rejected')) {
                     this.syncLocalProvisionStateFromPayload(remoteState);
                 }
@@ -1849,11 +1993,13 @@ const GlobalSettingsModal = {
         this.syncLocalProvisionStateFromPayload(state);
 
         const normalized = this.normalizeLocalProvisionStatus((state && state.status) || 'idle');
+        // Choose the correct browser state branch before continuing.
         if (this.isLikelyRemoteBackend() && (normalized === 'idle' || normalized === 'error')) {
             const remoteState = await this.refreshRemoteProvisioningStatus({
                 allowRequest: false,
                 machineIdHint: this.localProvisionState.machineId
             });
+            // Choose the correct browser state branch before continuing.
             if (remoteState && (remoteState.status === 'pending_approval' || remoteState.status === 'approved' || remoteState.status === 'provisioned' || remoteState.status === 'active' || remoteState.status === 'validation_required' || remoteState.status === 'rejected')) {
                 this.syncLocalProvisionStateFromPayload(remoteState);
             }
@@ -1862,6 +2008,7 @@ const GlobalSettingsModal = {
 
     _restoreLocalCheckupButton() {
         const btn = this.getEl('globalRunLocalModeCheckupBtn');
+        // Choose the correct browser state branch before continuing.
         if (!btn) return;
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-wifi"></i> Run Local Mode Checkup';
@@ -1876,6 +2023,7 @@ const GlobalSettingsModal = {
             return;
         }
         const btn = this.getEl('globalRunLocalModeCheckupBtn');
+        // Choose the correct browser state branch before continuing.
         if (!btn) return;
 
         this._localCheckupRunning = true;
@@ -1894,6 +2042,7 @@ const GlobalSettingsModal = {
             } catch (_) { /* best-effort */ }
         }, 60000);
 
+        // Keep this browser operation recoverable if it fails.
         try {
             btn.disabled = true;
             btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
@@ -1905,6 +2054,7 @@ const GlobalSettingsModal = {
                 machineId: (this.localProvisionState && this.localProvisionState.machineId) || '',
                 checkupOnly: true
             });
+            // Prepare local for the next UI or data step.
             const local = (options && options.local) || {};
             const rawCloudHeartbeat = (options && options.cloud_local_heartbeat) || {};
             const cloudHeartbeat = this.normalizeCloudHeartbeatPayload(rawCloudHeartbeat);
@@ -1915,6 +2065,7 @@ const GlobalSettingsModal = {
                 machine_id: heartbeatMachineId || this.localProvisionState.machineId,
                 cloud_local_heartbeat: rawCloudHeartbeat
             });
+            // Choose the correct browser state branch before continuing.
             if (this.heartbeatNeedsRemoteRefresh()) {
                 this.ensureHeartbeatRefreshPolling();
             }
@@ -1926,7 +2077,9 @@ const GlobalSettingsModal = {
             let firstRunSetupMessage = '';
             let remoteSetupKnown = false;
 
+            // Choose the correct browser state branch before continuing.
             if (!ready) {
+                // Choose the correct browser state branch before continuing.
                 if (isLikelyRemoteBackend) {
                     // Keep first-run onboarding separate from installed-runtime
                     // readiness. A brand-new cloud user cannot have an installer
@@ -1941,6 +2094,7 @@ const GlobalSettingsModal = {
                             && (window.PPEProvisioningStatus.get() || {}).status)
                         || ''
                     ).toLowerCase();
+                    // Prepare is provisioned for the next UI or data step.
                     const isProvisioned = (
                         provisionStatus === 'provisioned'
                         || provisionStatus === 'approved'
@@ -1953,6 +2107,7 @@ const GlobalSettingsModal = {
                         provisionStatus === 'pending_approval'
                         || globalProvisionStatus === 'pending_approval'
                     );
+                    // Prepare needs validation for the next UI or data step.
                     const needsValidation = (
                         provisionStatus === 'validation_required'
                         || globalProvisionStatus === 'validation_required'
@@ -1963,6 +2118,7 @@ const GlobalSettingsModal = {
                     );
                     remoteSetupKnown = isProvisioned || isPendingApproval || needsValidation;
 
+                    // Choose the correct browser state branch before continuing.
                     if (heartbeatRecent) {
                         const remoteHint = `Edge heartbeat${heartbeatMachineId ? ` (${heartbeatMachineId})` : ''} reports local mode is not ready yet.`;
                         this.setProviderStatus(remoteHint, 'warning');
@@ -2004,6 +2160,7 @@ const GlobalSettingsModal = {
                         pullTimeoutSeconds
                     });
 
+                    // Prepare prep local for the next UI or data step.
                     const prepLocal = (prep && (prep.after || prep.local)) || {};
                     ready = !!(prep && prep.success && prepLocal.local_mode_possible);
                     if (!ready) {
@@ -2014,6 +2171,7 @@ const GlobalSettingsModal = {
                 }
             }
 
+            // Choose the correct browser state branch before continuing.
             if (window.PPELocalModePolicy && typeof window.PPELocalModePolicy.set === 'function') {
                 window.PPELocalModePolicy.set({
                     setupCheckCompleted: ready || firstRunSetupReady || remoteSetupKnown,
@@ -2038,6 +2196,7 @@ const GlobalSettingsModal = {
                 || (provisionResult && provisionResult.status)
                 || 'idle'
             );
+            // Choose the correct browser state branch before continuing.
             if (status === 'active') {
                 this.setProviderStatus('Device provisioned and active. Local backend is running.', 'success');
             } else if (status === 'provisioned') {
@@ -2080,6 +2239,7 @@ const GlobalSettingsModal = {
                     || status === 'validation_required'
                     || status === 'rejected'
                 );
+            // Choose the correct browser state branch before continuing.
             if (!shouldSkipRemoteRefresh) {
                 await this.refreshProvisioningState();
             }
@@ -2095,6 +2255,7 @@ const GlobalSettingsModal = {
                 || finalStatus === 'credentials_present'
                 || finalStatus === 'error'
             );
+            // Choose the correct browser state branch before continuing.
             if ((provisionResultStatus === 'approved' || provisionResultStatus === 'provisioned' || provisionResultStatus === 'active') && finalIsWeaker) {
                 finalStatus = provisionResultStatus;
                 this.localProvisionState.status = provisionResultStatus;
@@ -2106,8 +2267,10 @@ const GlobalSettingsModal = {
                 && (finalStatus === 'approved' || finalStatus === 'provisioned' || finalStatus === 'active')
                 && !this.getStoredProvisionSecretForMachine(this.localProvisionState.machineId)
             ) {
+                // Keep this browser operation recoverable if it fails.
                 try {
                     const refreshedStored = await this.recoverRemoteInstallerCredentials(this.localProvisionState.machineId);
+                    // Choose the correct browser state branch before continuing.
                     if (String((refreshedStored || {}).provisionSecret || '').trim()) {
                         finalStatus = this.normalizeLocalProvisionStatus(
                             this.localProvisionState.status || refreshedStored.status || finalStatus
@@ -2119,6 +2282,7 @@ const GlobalSettingsModal = {
                 }
             }
 
+            // Choose the correct browser state branch before continuing.
             if (finalStatus === 'active') {
                 this.setProviderStatus('Device provisioned and active. Local backend is running.', 'success');
             } else if (finalStatus === 'provisioned') {
@@ -2132,6 +2296,7 @@ const GlobalSettingsModal = {
             }
         } catch (error) {
             console.error('GlobalSettingsModal: local checkup failed', error);
+            // Prepare message for the next UI or data step.
             const message = (error && error.name === 'TimeoutError')
                 ? 'Local mode checkup timed out waiting for the cloud. Local mode can still run offline; rerun once connectivity returns.'
                 : (error && error.message) || 'Local mode checkup failed';
@@ -2147,6 +2312,7 @@ const GlobalSettingsModal = {
     async pingGemma() {
         const btn = this.getEl('globalPingGemmaBtn');
         const statusEl = this.getEl('globalTestModeStatus');
+        // Choose the correct browser state branch before continuing.
         if (!btn) return;
 
         const originalLabel = btn.innerHTML;
@@ -2163,6 +2329,7 @@ const GlobalSettingsModal = {
         const localBase = (API_CONFIG.LOCAL_BACKEND_URL || 'http://localhost:5000').replace(/\/+$/, '');
         const pingUrl = `${localBase}/api/llm/ping`;
 
+        // Keep this browser operation recoverable if it fails.
         try {
             const resp = await fetch(pingUrl, {
                 method: 'POST',
@@ -2171,7 +2338,9 @@ const GlobalSettingsModal = {
             });
             const data = await resp.json().catch(() => ({}));
 
+            // Choose the correct browser state branch before continuing.
             if (resp.ok && data.ok) {
+                // Choose the correct browser state branch before continuing.
                 if (statusEl) {
                     statusEl.textContent =
                         `\u2705 Gemma is working\n` +
@@ -2182,6 +2351,7 @@ const GlobalSettingsModal = {
                 }
             } else {
                 const errMsg = data.error || `HTTP ${resp.status}`;
+                // Choose the correct browser state branch before continuing.
                 if (statusEl) {
                     statusEl.textContent =
                         `\u274C Gemma is not responding\n` +
@@ -2194,6 +2364,7 @@ const GlobalSettingsModal = {
                 }
             }
         } catch (err) {
+            // Choose the correct browser state branch before continuing.
             if (statusEl) {
                 statusEl.textContent =
                     `\u274C Could not reach local backend at ${pingUrl}\n` +
@@ -2210,6 +2381,7 @@ const GlobalSettingsModal = {
     async fetchLocalModeSnapshot() {
         const btn = this.getEl('globalLocalSnapshotBtn');
         const statusEl = this.getEl('globalTestModeStatus');
+        // Choose the correct browser state branch before continuing.
         if (!btn) return;
 
         const originalLabel = btn.innerHTML;
@@ -2219,6 +2391,7 @@ const GlobalSettingsModal = {
         try {
             const resp = await fetch(`${API_CONFIG.BASE_URL}/api/system/local-mode-snapshot`);
             const data = await resp.json().catch(() => ({}));
+            // Choose the correct browser state branch before continuing.
             if (statusEl) {
                 const lines = [
                     `Routing profile: ${data.routing_profile}`,
@@ -2235,6 +2408,7 @@ const GlobalSettingsModal = {
                     : 'var(--text-secondary)';
             }
         } catch (err) {
+            // Choose the correct browser state branch before continuing.
             if (statusEl) {
                 statusEl.textContent = `Snapshot failed: ${err.message || err}`;
                 statusEl.style.color = 'var(--error-color)';
@@ -2246,6 +2420,7 @@ const GlobalSettingsModal = {
     },
 
     ensureLocalProvisionPolling() {
+        // Choose the correct browser state branch before continuing.
         if (this.localProvisionPollInterval) return;
 
         // Adaptive cadence: poll fast right after the request was submitted so
@@ -2258,11 +2433,13 @@ const GlobalSettingsModal = {
         const SLOW_INTERVAL_MS = 60000;    // after that
         const FAST_WINDOW_MS = 5 * 60 * 1000;
         const startedAt = Date.now();
+        // Prepare current interval ms for the next UI or data step.
         let currentIntervalMs = FAST_INTERVAL_MS;
 
         const scheduleNext = () => {
             const elapsed = Date.now() - startedAt;
             const desired = elapsed > FAST_WINDOW_MS ? SLOW_INTERVAL_MS : FAST_INTERVAL_MS;
+            // Choose the correct browser state branch before continuing.
             if (desired !== currentIntervalMs) {
                 clearInterval(this.localProvisionPollInterval);
                 currentIntervalMs = desired;
@@ -2270,6 +2447,7 @@ const GlobalSettingsModal = {
             }
         };
 
+        // Prepare tick for the next UI or data step.
         const tick = async () => {
             // Stop polling entirely if the modal was closed — don't resume
             // until ensureLocalProvisionPolling() is called again on next open.
@@ -2279,7 +2457,9 @@ const GlobalSettingsModal = {
             }
 
             const status = this.normalizeLocalProvisionStatus(this.localProvisionState.status || 'idle');
+            // Choose the correct browser state branch before continuing.
             if (status !== 'pending_approval') {
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -2292,8 +2472,10 @@ const GlobalSettingsModal = {
                     : await API.autoProvisionLocalModeCredentials();
                 this.syncLocalProvisionStateFromPayload(pollResult || {});
                 const pollStatus = this.normalizeLocalProvisionStatus((pollResult && pollResult.status) || 'idle');
+                // Choose the correct browser state branch before continuing.
                 if (pollStatus === 'approved' || pollStatus === 'provisioned' || pollStatus === 'active' || pollStatus === 'credentials_present' || pollStatus === 'validation_required' || pollStatus === 'rejected') {
                     this.stopLocalProvisionPolling();
+                    // Return the prepared value to the caller.
                     return;
                 }
             } catch (error) {
@@ -2307,6 +2489,7 @@ const GlobalSettingsModal = {
     },
 
     stopLocalProvisionPolling() {
+        // Choose the correct browser state branch before continuing.
         if (!this.localProvisionPollInterval) return;
         clearInterval(this.localProvisionPollInterval);
         this.localProvisionPollInterval = null;
@@ -2327,6 +2510,7 @@ const GlobalSettingsModal = {
         this.activateTab('Psettings');
         const btn = this.getEl('globalRunLocalModeCheckupBtn');
         const status = this.getEl('globalLocalModeCheckupStatus');
+        // Choose the correct browser state branch before continuing.
         if (!btn) return;
 
         try {
@@ -2342,12 +2526,14 @@ const GlobalSettingsModal = {
         }
 
         btn.style.boxShadow = '0 0 0 3px rgba(224, 156, 46, 0.42)';
+        // Choose the correct browser state branch before continuing.
         if (status) {
             status.style.boxShadow = '0 0 0 2px rgba(66, 133, 244, 0.24)';
         }
 
         setTimeout(() => {
             btn.style.boxShadow = '';
+            // Choose the correct browser state branch before continuing.
             if (status) status.style.boxShadow = '';
         }, 1400);
     },
@@ -2356,6 +2542,7 @@ const GlobalSettingsModal = {
         this.init();
 
         const modal = this.getEl('globalSettingsModal');
+        // Choose the correct browser state branch before continuing.
         if (!modal) return;
 
         this.isOpen = true;
@@ -2368,6 +2555,7 @@ const GlobalSettingsModal = {
             Router.updateActiveNav('settings');
         }
 
+        // Choose the correct browser state branch before continuing.
         if (options && options.focusLocalCheckup) {
             this.activateTab('Psettings');
         } else {
@@ -2380,6 +2568,7 @@ const GlobalSettingsModal = {
             this.refreshProvisioningState()
         ]);
         this.updateHeartbeatBadge();
+        // Choose the correct browser state branch before continuing.
         if (this.heartbeatNeedsRemoteRefresh()) {
             this.ensureHeartbeatRefreshPolling();
         }
@@ -2391,6 +2580,7 @@ const GlobalSettingsModal = {
 
     close() {
         const modal = this.getEl('globalSettingsModal');
+        // Choose the correct browser state branch before continuing.
         if (!modal) return;
 
         this.isOpen = false;
@@ -2406,10 +2596,12 @@ const GlobalSettingsModal = {
     },
 
     sanitizeInstallerDownloadError(rawText, fallback = 'Installer download failed') {
+        // Prepare text for the next UI or data step.
         let text = String(rawText || '').trim();
         if (!text) return fallback;
 
         if (/<(?:!doctype|html|head|body|style|script)\b/i.test(text) && typeof DOMParser !== 'undefined') {
+            // Keep this browser operation recoverable if it fails.
             try {
                 const doc = new DOMParser().parseFromString(text, 'text/html');
                 const title = String((doc.querySelector('title') || {}).textContent || '').trim();
@@ -2432,7 +2624,9 @@ const GlobalSettingsModal = {
             .replace(/\s+/g, ' ')
             .trim();
 
+        // Choose the correct browser state branch before continuing.
         if (!text || /^(?:body|html)\s*\{|font-family|background-color/i.test(text)) {
+            // Return the prepared value to the caller.
             return fallback;
         }
         return text.slice(0, 240);
@@ -2444,9 +2638,11 @@ const GlobalSettingsModal = {
             const contentType = String(response.headers.get('content-type') || '').toLowerCase();
             if (contentType.includes('application/json')) {
                 const payload = await response.json();
+                // Return the prepared value to the caller.
                 return this.sanitizeInstallerDownloadError(payload.error || payload.message || fallback, fallback);
             }
             const text = await response.text();
+            // Return the prepared value to the caller.
             return this.sanitizeInstallerDownloadError(text, fallback);
         } catch (error) {
             return fallback;
@@ -2454,10 +2650,13 @@ const GlobalSettingsModal = {
     },
 
     resolveDownloadFilename(response, fallbackName = 'CASM_LocalInstaller.bat') {
+        // Keep this browser operation recoverable if it fails.
         try {
             const disposition = String(response.headers.get('content-disposition') || '');
             const match = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+            // Choose the correct browser state branch before continuing.
             if (match && match[1]) {
+                // Return the prepared value to the caller.
                 return decodeURIComponent(match[1].replace(/"/g, '').trim()) || fallbackName;
             }
         } catch (error) { }
@@ -2466,8 +2665,10 @@ const GlobalSettingsModal = {
 
     async downloadInstallerFromUrl(url, contextLabel = 'installer') {
         const targetUrl = String(url || '').trim();
+        // Choose the correct browser state branch before continuing.
         if (!targetUrl) {
             this.showNotification('Installer download URL is unavailable.', 'error');
+            // Return the prepared value to the caller.
             return false;
         }
 
@@ -2479,10 +2680,12 @@ const GlobalSettingsModal = {
                 redirect: 'follow'
             });
 
+            // Choose the correct browser state branch before continuing.
             if (!response.ok) {
                 const message = await this.getDownloadErrorMessage(response);
                 this.setProviderStatus(message, 'error');
                 this.showNotification(message, 'warning');
+                // Return the prepared value to the caller.
                 return false;
             }
 
@@ -2509,6 +2712,7 @@ const GlobalSettingsModal = {
 
             this.setProviderStatus('Installer download started.', 'success');
             this.showNotification('Installer download started.', 'success');
+            // Return the prepared value to the caller.
             return true;
         } catch (error) {
             const message = (
@@ -2523,6 +2727,7 @@ const GlobalSettingsModal = {
 
     async redownloadInstaller() {
         const storedBefore = this.loadRemoteProvisionState() || {};
+        // Choose the correct browser state branch before continuing.
         if (
             storedBefore.machineId
             && (storedBefore.status === 'approved' || storedBefore.status === 'provisioned' || storedBefore.status === 'active')
@@ -2537,12 +2742,15 @@ const GlobalSettingsModal = {
             });
         }
 
+        // Prepare status for the next UI or data step.
         let status = this.normalizeLocalProvisionStatus(this.localProvisionState.status);
         let machineId = String(this.localProvisionState.machineId || '').trim();
 
         if (!this.canIssueInstallerRedownload(status, machineId)) {
+            // Choose the correct browser state branch before continuing.
             if (!machineId) {
                 this.showNotification('Run Local Mode Checkup first so this device can obtain machine ID.', 'warning');
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -2551,8 +2759,10 @@ const GlobalSettingsModal = {
                 return;
             }
 
+            // Choose the correct browser state branch before continuing.
             if (status === 'rejected') {
                 this.showNotification('Provision request was rejected. Contact admin and rerun Local Mode Checkup.', 'error');
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -2562,10 +2772,12 @@ const GlobalSettingsModal = {
             }
 
             this.showNotification('Installer re-download is available after this device is approved.', 'warning');
+            // Return the prepared value to the caller.
             return;
         }
 
         const currentProtocol = String(window.location.protocol || '').toLowerCase();
+        // Choose the correct browser state branch before continuing.
         if (currentProtocol === 'chrome-error:' || currentProtocol === 'about:' || currentProtocol === 'data:') {
             this.showNotification(
                 'This page is in an error state. Refresh the tab from the backend URL and try again.',
@@ -2577,13 +2789,16 @@ const GlobalSettingsModal = {
         const apiBase = String(API_CONFIG.BASE_URL || '').replace(/\/+$/, '');
         const isRemoteBackend = this.isLikelyRemoteBackend();
 
+        // Choose the correct browser state branch before continuing.
         if (isRemoteBackend) {
+            // Keep this browser operation recoverable if it fails.
             try {
                 this.setProviderStatus('Validating installer access for this approved device...', 'info');
                 const refreshedState = await this.refreshRemoteProvisioningStatus({
                     allowRequest: true,
                     machineIdHint: machineId
                 });
+                // Choose the correct browser state branch before continuing.
                 if (refreshedState && typeof refreshedState === 'object') {
                     this.syncLocalProvisionStateFromPayload(refreshedState);
                 }
@@ -2597,12 +2812,15 @@ const GlobalSettingsModal = {
             }
         }
 
+        // Prepare try direct cloud download for the next UI or data step.
         const tryDirectCloudDownload = async () => {
             const stored = this.loadRemoteProvisionState() || {};
             const machineIdStored = String(stored.machineId || this.localProvisionState.machineId || machineId || '').trim();
             const provisionSecretStored = String(stored.provisionSecret || '').trim();
 
+            // Choose the correct browser state branch before continuing.
             if (!machineIdStored || !provisionSecretStored) {
+                // Return the prepared value to the caller.
                 return false;
             }
 
@@ -2613,7 +2831,9 @@ const GlobalSettingsModal = {
                 cloudBase = String(stored.cloudUrl || window.CLOUD_URL || '').replace(/\/+$/, '');
             }
 
+            // Choose the correct browser state branch before continuing.
             if (!cloudBase) {
+                // Return the prepared value to the caller.
                 return false;
             }
 
@@ -2628,8 +2848,10 @@ const GlobalSettingsModal = {
             );
         };
 
+        // Choose the correct browser state branch before continuing.
         if (!isRemoteBackend) {
             const proxyUrl = `${apiBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`;
+            // Keep this browser operation recoverable if it fails.
             try {
                 const probeController = new AbortController();
                 const probeTimer = setTimeout(() => probeController.abort(), 4000);
@@ -2637,8 +2859,10 @@ const GlobalSettingsModal = {
                     cache: 'no-store',
                     signal: probeController.signal
                 }).finally(() => clearTimeout(probeTimer));
+                // Choose the correct browser state branch before continuing.
                 if (probeResp && (probeResp.status < 500 || probeResp.status === 503)) {
                     await this.downloadInstallerFromUrl(proxyUrl, 'installer via local backend');
+                    // Return the prepared value to the caller.
                     return;
                 }
             } catch (probeErr) {
@@ -2646,7 +2870,9 @@ const GlobalSettingsModal = {
             }
         }
 
+        // Choose the correct browser state branch before continuing.
         if (await tryDirectCloudDownload()) {
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2664,6 +2890,7 @@ const GlobalSettingsModal = {
                     signal: probeController.signal,
                     mode: 'no-cors'
                 }).finally(() => clearTimeout(probeTimer));
+                // Choose the correct browser state branch before continuing.
                 if (probeResp) {
                     localBackendUp = true;
                 }
@@ -2671,11 +2898,13 @@ const GlobalSettingsModal = {
                 localBackendUp = false;
             }
 
+            // Choose the correct browser state branch before continuing.
             if (localBackendUp) {
                 await this.downloadInstallerFromUrl(
                     `${localBase}/api/local-mode/installer/redirect?_ts=${Date.now()}`,
                     'installer via local backend'
                 );
+                // Return the prepared value to the caller.
                 return;
             }
 
@@ -2685,6 +2914,7 @@ const GlobalSettingsModal = {
                 + 'Local Mode Checkup from the host PC.',
                 'error'
             );
+            // Return the prepared value to the caller.
             return;
         }
 
@@ -2718,6 +2948,7 @@ const GlobalSettingsModal = {
             });
         });
 
+        // Choose the correct browser state branch before continuing.
         if (closeBtn) {
             this.closeHandler = () => this.close();
             closeBtn.addEventListener('click', this.closeHandler);
@@ -2730,6 +2961,7 @@ const GlobalSettingsModal = {
         if (envToggle) {
             envToggle.addEventListener('change', async () => {
                 const enabled = !!envToggle.checked;
+                // Keep this browser operation recoverable if it fails.
                 try {
                     await this.setEnvironmentValidation(enabled);
                     this.updateEnvValidationStatus(enabled);
@@ -2741,6 +2973,7 @@ const GlobalSettingsModal = {
             });
         }
 
+        // Choose the correct browser state branch before continuing.
         if (cooldownSlider && cooldownValue) {
             cooldownSlider.addEventListener('input', () => {
                 cooldownValue.textContent = `${cooldownSlider.value}s`;
@@ -2749,6 +2982,7 @@ const GlobalSettingsModal = {
 
         if (applyCooldownBtn && cooldownSlider) {
             applyCooldownBtn.addEventListener('click', async () => {
+                // Keep this browser operation recoverable if it fails.
                 try {
                     applyCooldownBtn.disabled = true;
                     applyCooldownBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying...';
@@ -2763,6 +2997,7 @@ const GlobalSettingsModal = {
             });
         }
 
+        // Choose the correct browser state branch before continuing.
         if (applyProviderBtn) {
             applyProviderBtn.addEventListener('click', () => this.applyProviderRoutingLocalProfile());
         }
@@ -2778,6 +3013,7 @@ const GlobalSettingsModal = {
             });
         }
 
+        // Choose the correct browser state branch before continuing.
         if (runCheckupBtn) {
             runCheckupBtn.addEventListener('click', () => this.runLocalModeCheckup());
         }
@@ -2790,6 +3026,7 @@ const GlobalSettingsModal = {
             pingGemmaBtn.addEventListener('click', () => this.pingGemma());
         }
 
+        // Choose the correct browser state branch before continuing.
         if (localSnapshotBtn) {
             localSnapshotBtn.addEventListener('click', () => this.fetchLocalModeSnapshot());
         }
@@ -2810,6 +3047,7 @@ const GlobalSettingsModal = {
         const muteToggle = this.getEl('globalMuteAllToggle');
         const chimeToggle = this.getEl('globalChimeToggle');
 
+        // Choose the correct browser state branch before continuing.
         if (volumeSlider && volumeValue) {
             volumeSlider.addEventListener('input', () => {
                 volumeValue.textContent = `${volumeSlider.value}%`;
@@ -2818,8 +3056,10 @@ const GlobalSettingsModal = {
 
         if (applyAudioBtn) {
             applyAudioBtn.addEventListener('click', () => {
+                // Keep this browser operation recoverable if it fails.
                 try {
                     const vol = Number(volumeSlider ? volumeSlider.value : 100);
+                    // Prepare voice choice for the next UI or data step.
                     const voiceChoice = (voiceSelect && voiceSelect.value) ? voiceSelect.value : (voiceCustom ? voiceCustom.value : '');
                     const muted = !!(muteToggle && muteToggle.checked);
                     const chimeEnabled = !(chimeToggle && !chimeToggle.checked);
@@ -2836,7 +3076,9 @@ const GlobalSettingsModal = {
                     }
                     this.showNotification('Audio settings saved', 'success');
                     // Propagate to runtime AudioAlert if available
+                    // Keep this browser operation recoverable if it fails.
                     try {
+                        // Choose the correct browser state branch before continuing.
                         if (window.AudioAlert && typeof window.AudioAlert.setVolume === 'function') {
                             window.AudioAlert.setVolume(normalizedVolume / 100);
                         }
@@ -2857,11 +3099,15 @@ const GlobalSettingsModal = {
             });
         }
 
+        // Choose the correct browser state branch before continuing.
         if (testVoiceBtn) {
             testVoiceBtn.addEventListener('click', () => {
+                // Keep this browser operation recoverable if it fails.
                 try {
+                    // Choose the correct browser state branch before continuing.
                     if (typeof window.speechSynthesis === 'undefined') {
                         this.showNotification('SpeechSynthesis not supported', 'error');
+                        // Return the prepared value to the caller.
                         return;
                     }
                     const utter = new SpeechSynthesisUtterance('This is a voice test.');
@@ -2873,8 +3119,10 @@ const GlobalSettingsModal = {
                         if (preferred) utter.voice = preferred;
                     }
                     const storedMuted = String(localStorage.getItem('casm_voice_muted') || 'false').toLowerCase() === 'true';
+                    // Choose the correct browser state branch before continuing.
                     if (storedMuted) {
                         this.showNotification('Voice alerts are muted', 'warning');
+                        // Return the prepared value to the caller.
                         return;
                     }
                     const storedVol = Number(localStorage.getItem('casm_voice_volume') ?? localStorage.getItem('luna_voice_volume'));
@@ -2892,8 +3140,10 @@ const GlobalSettingsModal = {
             });
         }
 
+        // Choose the correct browser state branch before continuing.
         if (modal) {
             modal.addEventListener('click', (event) => {
+                // Choose the correct browser state branch before continuing.
                 if (event.target === modal) {
                     this.close();
                 }
@@ -2905,6 +3155,7 @@ const GlobalSettingsModal = {
         }
 
         this.keydownHandler = (event) => {
+            // Choose the correct browser state branch before continuing.
             if (event.key === 'Escape' && this.isOpen) {
                 this.close();
             }
@@ -2929,6 +3180,7 @@ const GlobalSettingsModal = {
     },
 
     init() {
+        // Choose the correct browser state branch before continuing.
         if (this.initialized) return;
 
         this.ensureStyles();
@@ -2941,6 +3193,7 @@ const GlobalSettingsModal = {
 
 window.PPEGlobalSettingsModal = GlobalSettingsModal;
 
+// Choose the correct browser state branch before continuing.
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
         GlobalSettingsModal.init();

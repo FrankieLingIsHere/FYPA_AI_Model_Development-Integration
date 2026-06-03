@@ -1,3 +1,4 @@
+# Readability: Test setup: document the contract this file protects.
 import os
 import sys
 
@@ -5,6 +6,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 
+# Prepare vercel url for the next step.
 VERCEL_URL = os.environ.get(
     "CASM_VERCEL_URL",
     "https://fypa-ai-model-development-integrati.vercel.app",
@@ -14,57 +16,75 @@ STARTUP_WAIT_MS = int(os.environ.get("CASM_MOBILE_STARTUP_WAIT_MS", "120000"))
 NAV_WAIT_MS = int(os.environ.get("CASM_MOBILE_NAV_WAIT_MS", "20000"))
 
 
+# Section: run the fail workflow with clear inputs and outputs.
 def fail(message: str, code: int = 2) -> int:
+    # Trigger the side effect required for this stage.
     print(f"FAIL: frontend mobile usability issue: {message}")
     return code
 
 
+# Section: run the find visible nav workflow with clear inputs and outputs.
 def _find_visible_nav(page, nav_selector: str):
     locator = page.locator(nav_selector)
     for index in range(locator.count()):
+        # Prepare candidate for the next step.
         candidate = locator.nth(index)
         if candidate.is_visible():
+            # Return the prepared result to the caller.
             return candidate
+    # Return the prepared result to the caller.
     return None
 
 
+# Section: run the wait for visible nav workflow with clear inputs and outputs.
 def _wait_for_visible_nav(page, nav_selector: str, *, attempts: int = 10, pause_ms: int = 200):
     for _ in range(attempts):
         candidate = _find_visible_nav(page, nav_selector)
+        # Choose the correct branch before the workflow continues.
         if candidate:
             return candidate
         page.wait_for_timeout(pause_ms)
+    # Return the prepared result to the caller.
     return None
 
 
+# Section: run the ensure nav visible workflow with clear inputs and outputs.
 def ensure_nav_visible(page, page_name: str):
     nav_selector = f"[data-page='{page_name}']"
     if page.locator(nav_selector).count() == 0:
+        # Surface the failure with enough context for the caller.
         raise RuntimeError(f"Navigation link not found in DOM for page={page_name}")
 
     if _wait_for_visible_nav(page, nav_selector):
         return
 
+    # Prepare toggle for the next step.
     toggle = None
     for selector in ("#navToggle", ".nav-toggle", "button[aria-label*='Toggle navigation']"):
         probe = page.locator(selector)
         if probe.count() > 0 and probe.first.is_visible():
+            # Prepare toggle for the next step.
             toggle = probe.first
             break
 
     if toggle:
+        # Trigger the side effect required for this stage.
         toggle.click()
         page.wait_for_timeout(220)
         if _wait_for_visible_nav(page, nav_selector, attempts=6, pause_ms=220):
             return
 
+    # Choose the correct branch before the workflow continues.
     if not _find_visible_nav(page, nav_selector):
         raise RuntimeError(f"Navigation link exists but is not visible for page={page_name}")
 
 
+# Section: run the main workflow with clear inputs and outputs.
 def main() -> int:
     try:
+        # Open the managed resource only for the block that needs it.
         with sync_playwright() as p:
+            # Prepare browser for the next step.
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
                 viewport={"width": 390, "height": 844},
@@ -76,13 +96,16 @@ def main() -> int:
                     "Mobile/15E148 Safari/604.1"
                 ),
             )
+            # Prepare page for the next step.
             page = context.new_page()
 
             # App may alert when portrait lock engages on phones.
             page.on("dialog", lambda dialog: dialog.accept())
 
             for attempt in (1, 2):
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Trigger the side effect required for this stage.
                     page.goto(f"{VERCEL_URL}/", wait_until="domcontentloaded", timeout=90000)
                     page.wait_for_selector("[data-page='home']", state="attached", timeout=STARTUP_WAIT_MS)
                     page.wait_for_function(
@@ -92,12 +115,16 @@ def main() -> int:
                     break
                 except PlaywrightTimeoutError:
                     if attempt == 2:
+                        # Surface the failure with enough context for the caller.
                         raise
+                    # Trigger the side effect required for this stage.
                     print("INFO: mobile startup timed out on first attempt, retrying once")
 
+            # Trigger the side effect required for this stage.
             page.wait_for_timeout(900)
             body_classes = page.get_attribute("body", "class") or ""
             if "is-phone-device" not in body_classes:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Mobile detection class is-phone-device was not applied")
             if "mobile-portrait-locked" in body_classes:
                 raise RuntimeError("Portrait lock class mobile-portrait-locked should not be applied in the latest responsive mobile UI")
@@ -107,9 +134,12 @@ def main() -> int:
                 overlay_hidden = overlay.get_attribute("aria-hidden")
                 overlay_visible = overlay.first.is_visible()
                 if overlay_hidden == "false" or overlay_visible:
+                    # Surface the failure with enough context for the caller.
                     raise RuntimeError("Portrait orientation overlay should remain hidden in the latest responsive mobile UI")
             else:
+                # Trigger the side effect required for this stage.
                 print("INFO: mobile orientation overlay not present in this deployed variant")
+            # Trigger the side effect required for this stage.
             print("PASS: mobile portrait responsive behavior")
 
             # Rotate to landscape to unlock app usage.
@@ -118,54 +148,68 @@ def main() -> int:
 
             body_classes = page.get_attribute("body", "class") or ""
             if "mobile-portrait-locked" in body_classes:
+                # Surface the failure with enough context for the caller.
                 raise RuntimeError("Portrait lock class persisted after landscape rotation")
 
+            # Choose the correct branch before the workflow continues.
             if overlay.count() > 0:
                 overlay_hidden = overlay.get_attribute("aria-hidden")
                 if overlay_hidden != "true":
+                    # Surface the failure with enough context for the caller.
                     raise RuntimeError("Orientation overlay remained active after landscape rotation")
             print("PASS: mobile landscape unlock behavior")
 
             nav_toggle = None
             for selector in ("#navToggle", ".nav-toggle", "button[aria-label*='Toggle navigation']"):
+                # Prepare probe for the next step.
                 probe = page.locator(selector)
                 if probe.count() > 0 and probe.first.is_visible():
                     nav_toggle = probe.first
                     break
 
+            # Choose the correct branch before the workflow continues.
             if nav_toggle:
                 nav_toggle.click()
                 page.wait_for_timeout(250)
                 body_classes = page.get_attribute("body", "class") or ""
+                # Choose the correct branch before the workflow continues.
                 if "nav-open" not in body_classes:
+                    # Surface the failure with enough context for the caller.
                     raise RuntimeError("Mobile nav drawer did not open")
             else:
                 print("INFO: mobile nav drawer toggle not present in this deployed variant")
 
+            # Trigger the side effect required for this stage.
             ensure_nav_visible(page, "reports")
             visible_reports = _find_visible_nav(page, "[data-page='reports']")
             if visible_reports:
                 visible_reports.click()
             else:
+                # Trigger the side effect required for this stage.
                 page.click("[data-page='reports']")
             page.wait_for_selector("#reports-list", timeout=NAV_WAIT_MS)
             page.wait_for_timeout(250)
             body_classes = page.get_attribute("body", "class") or ""
+            # Choose the correct branch before the workflow continues.
             if "nav-open" in body_classes:
                 raise RuntimeError("Mobile nav drawer did not close after navigation")
             print("PASS: mobile nav drawer interaction")
 
             nav_more = None
             for selector in ("#navMoreToggle", ".nav-more-toggle", "button[aria-label*='quick settings']"):
+                # Prepare probe for the next step.
                 probe = page.locator(selector)
                 if probe.count() > 0 and probe.first.is_visible():
+                    # Prepare nav more for the next step.
                     nav_more = probe.first
                     break
 
+            # Choose the correct branch before the workflow continues.
             if nav_more:
                 nav_more.click()
                 page.wait_for_timeout(300)
                 body_classes = page.get_attribute("body", "class") or ""
+                # Choose the correct branch before the workflow continues.
                 if "nav-more-open" not in body_classes:
                     raise RuntimeError("Mobile nav-more panel did not open")
 
@@ -173,11 +217,14 @@ def main() -> int:
                 page.wait_for_timeout(300)
                 body_classes = page.get_attribute("body", "class") or ""
                 if "nav-more-open" in body_classes:
+                    # Surface the failure with enough context for the caller.
                     raise RuntimeError("Mobile nav-more panel did not close on outside click")
                 print("PASS: mobile nav-more panel interaction")
             else:
+                # Trigger the side effect required for this stage.
                 print("INFO: mobile nav-more toggle not present in this deployed variant")
 
+            # Trigger the side effect required for this stage.
             ensure_nav_visible(page, "analytics")
             visible_analytics = _find_visible_nav(page, "[data-page='analytics']")
             if visible_analytics:
@@ -187,8 +234,10 @@ def main() -> int:
             page.wait_for_selector("#trendChart", timeout=NAV_WAIT_MS)
             print("PASS: mobile analytics navigation")
 
+            # Trigger the side effect required for this stage.
             browser.close()
 
+        # Trigger the side effect required for this stage.
         print("PASS: frontend mobile usability checks")
         return 0
     except PlaywrightTimeoutError as exc:
@@ -197,5 +246,7 @@ def main() -> int:
         return fail(f"frontend mobile usability unhandled error: {exc}", 41)
 
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
+    # Trigger the side effect required for this stage.
     sys.exit(main())

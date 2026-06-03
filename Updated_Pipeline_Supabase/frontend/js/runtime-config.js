@@ -1,3 +1,4 @@
+// Readability: Frontend module: keep browser state, API calls, and UI updates easy to follow.
 // Runtime frontend configuration for separate deployments.
 // Set API_BASE_URL to your Railway backend URL, e.g.:
 // API_BASE_URL: 'https://your-backend.up.railway.app'

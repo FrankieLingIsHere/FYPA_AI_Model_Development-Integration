@@ -16,6 +16,7 @@ State Machine:
 
 Thread-safe with queues to handle multiple violations.
 """
+# Readability: Backend core: coordinate detection, persistence, and report workflow concerns.
 
 import logging
 import threading
@@ -29,6 +30,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 
+# Prepare logger for the next step.
 logger = logging.getLogger(__name__)
 
 
@@ -38,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 class PipelineState(Enum):
     """Pipeline state machine states."""
+    # Prepare idle for the next step.
     IDLE = "idle"
     DETECTING = "detecting"
     VIOLATION_DETECTED = "violation_detected"
@@ -48,6 +51,7 @@ class PipelineState(Enum):
     STOPPED = "stopped"
 
 
+# Section: group violation event state and behaviour in one readable unit.
 @dataclass
 class ViolationEvent:
     """Container for violation event data."""
@@ -73,6 +77,7 @@ class PipelineOrchestrator:
     Manages the entire detection -> processing -> reporting flow.
     """
     
+    # Section: run the init workflow with clear inputs and outputs.
     def __init__(self, config: Dict[str, Any]):
         """
         Initialize the pipeline orchestrator.
@@ -80,6 +85,7 @@ class PipelineOrchestrator:
         Args:
             config: Configuration dictionary from config.py
         """
+        # Prepare config for the next step.
         self.config = config
         self.state = PipelineState.IDLE
         self.state_lock = threading.Lock()
@@ -101,6 +107,7 @@ class PipelineOrchestrator:
         self.db_manager = None
         
         # Event callbacks for WebSocket notifications
+        # Prepare callbacks for the next step.
         self.callbacks = {
             'on_violation_detected': [],
             'on_processing_start': [],
@@ -122,6 +129,7 @@ class PipelineOrchestrator:
             'errors': 0
         }
         
+        # Trigger the side effect required for this stage.
         logger.info("Pipeline Orchestrator initialized")
     
     # =========================================================================
@@ -131,8 +139,10 @@ class PipelineOrchestrator:
     def get_state(self) -> PipelineState:
         """Get current pipeline state (thread-safe)."""
         with self.state_lock:
+            # Return the prepared result to the caller.
             return self.state
     
+    # Section: run the set state workflow with clear inputs and outputs.
     def set_state(self, new_state: PipelineState):
         """
         Set pipeline state and notify callbacks (thread-safe).
@@ -140,7 +150,9 @@ class PipelineOrchestrator:
         Args:
             new_state: New state to transition to
         """
+        # Open the managed resource only for the block that needs it.
         with self.state_lock:
+            # Prepare old state for the next step.
             old_state = self.state
             self.state = new_state
             logger.info(f"State transition: {old_state.value} -> {new_state.value}")
@@ -152,9 +164,12 @@ class PipelineOrchestrator:
                 'timestamp': datetime.now().isoformat()
             })
     
+    # Section: run the is in cooldown workflow with clear inputs and outputs.
     def is_in_cooldown(self) -> bool:
         """Check if we're still in violation cooldown period."""
+        # Choose the correct branch before the workflow continues.
         if self.last_violation_time is None:
+            # Return the prepared result to the caller.
             return False
         
         elapsed = (datetime.now() - self.last_violation_time).total_seconds()
@@ -166,29 +181,37 @@ class PipelineOrchestrator:
     
     def set_yolo_stream(self, yolo_stream):
         """Inject YOLO stream manager."""
+        # Prepare yolo stream for the next step.
         self.yolo_stream = yolo_stream
         logger.debug("YOLO stream manager injected")
     
+    # Section: run the set violation detector workflow with clear inputs and outputs.
     def set_violation_detector(self, violation_detector):
         """Inject violation detector."""
         self.violation_detector = violation_detector
         logger.debug("Violation detector injected")
     
+    # Section: run the set image processor workflow with clear inputs and outputs.
     def set_image_processor(self, image_processor):
         """Inject image processor."""
+        # Prepare image processor for the next step.
         self.image_processor = image_processor
         logger.debug("Image processor injected")
     
+    # Section: run the set caption generator workflow with clear inputs and outputs.
     def set_caption_generator(self, caption_generator):
         """Inject caption generator."""
         self.caption_generator = caption_generator
         logger.debug("Caption generator injected")
     
+    # Section: run the set report generator workflow with clear inputs and outputs.
     def set_report_generator(self, report_generator):
         """Inject report generator."""
+        # Prepare report generator for the next step.
         self.report_generator = report_generator
         logger.debug("Report generator injected")
     
+    # Section: run the set db manager workflow with clear inputs and outputs.
     def set_db_manager(self, db_manager):
         """Inject database manager."""
         self.db_manager = db_manager
@@ -206,22 +229,28 @@ class PipelineOrchestrator:
             event_type: Type of event ('on_violation_detected', etc.)
             callback: Function to call when event occurs
         """
+        # Choose the correct branch before the workflow continues.
         if event_type in self.callbacks:
+            # Trigger the side effect required for this stage.
             self.callbacks[event_type].append(callback)
             logger.debug(f"Registered callback for {event_type}")
         else:
             logger.warning(f"Unknown event type: {event_type}")
     
+    # Section: run the trigger callbacks workflow with clear inputs and outputs.
     def _trigger_callbacks(self, event_type: str, data: Dict[str, Any]):
         """Trigger all callbacks for an event type."""
         if event_type in self.callbacks:
             for callback in self.callbacks[event_type]:
+                # Protect this step so expected failures can fall back cleanly.
                 try:
+                    # Trigger the side effect required for this stage.
                     callback(data)
                 except Exception as e:
                     logger.error(f"Callback error for {event_type}: {e}")
     
     
+    # Section: run the save metadata workflow with clear inputs and outputs.
     def _save_metadata(self, report_id: str, data: Dict[str, Any]):
         """
         Save metadata to JSON for recovery/debugging.
@@ -230,7 +259,9 @@ class PipelineOrchestrator:
             report_id: Report identifier
             data: Metadata dictionary to save/update
         """
+        # Protect this step so expected failures can fall back cleanly.
         try:
+            # Prepare violation dir for the next step.
             violation_dir = self.config['VIOLATIONS_DIR'] / report_id
             violation_dir.mkdir(parents=True, exist_ok=True)
             meta_path = violation_dir / "metadata.json"
@@ -239,15 +270,19 @@ class PipelineOrchestrator:
             current_data = {}
             if meta_path.exists():
                 try:
+                    # Open the managed resource only for the block that needs it.
                     with open(meta_path, 'r') as f:
+                        # Prepare current data for the next step.
                         current_data = json.load(f)
                 except Exception as e:
                     logger.warning(f"Could not read existing metadata: {e}")
             
             # Update
+            # Trigger the side effect required for this stage.
             current_data.update(data)
             
             # Serialize datetime objects
+            # Section: run the json serial workflow with clear inputs and outputs.
             def json_serial(obj):
                 if isinstance(obj, (datetime, datetime.date)):
                     return obj.isoformat()
@@ -259,6 +294,7 @@ class PipelineOrchestrator:
             logger.debug(f"Saved metadata to {meta_path}")
             
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.error(f"Failed to save metadata for {report_id}: {e}")
 
     # =========================================================================
@@ -267,7 +303,9 @@ class PipelineOrchestrator:
     
     def start(self):
         """Start the pipeline."""
+        # Choose the correct branch before the workflow continues.
         if self.state != PipelineState.IDLE and self.state != PipelineState.STOPPED:
+            # Trigger the side effect required for this stage.
             logger.warning(f"Cannot start pipeline in state: {self.state.value}")
             return False
         
@@ -276,6 +314,7 @@ class PipelineOrchestrator:
         self.stats['start_time'] = datetime.now()
         
         # Start processing thread
+        # Prepare processing thread for the next step.
         self.processing_thread = threading.Thread(
             target=self._processing_loop,
             name="PipelineProcessingThread",
@@ -287,16 +326,19 @@ class PipelineOrchestrator:
         if self.yolo_stream:
             self.yolo_stream.start(on_frame_callback=self._on_frame_processed)
         
+        # Trigger the side effect required for this stage.
         self.set_state(PipelineState.DETECTING)
         logger.info("[OK] Pipeline started")
         return True
     
+    # Section: run the stop workflow with clear inputs and outputs.
     def stop(self):
         """Stop the pipeline."""
         logger.info("Stopping pipeline...")
         self.should_stop.set()
         
         # Stop YOLO stream
+        # Choose the correct branch before the workflow continues.
         if self.yolo_stream:
             self.yolo_stream.stop()
         
@@ -307,17 +349,22 @@ class PipelineOrchestrator:
         self.set_state(PipelineState.STOPPED)
         logger.info("[OK] Pipeline stopped")
     
+    # Section: run the pause workflow with clear inputs and outputs.
     def pause(self):
         """Pause detection (but continue processing queue)."""
+        # Choose the correct branch before the workflow continues.
         if self.yolo_stream:
+            # Trigger the side effect required for this stage.
             self.yolo_stream.pause()
         self.set_state(PipelineState.PAUSED)
         logger.info("Pipeline paused")
     
+    # Section: run the resume workflow with clear inputs and outputs.
     def resume(self):
         """Resume detection."""
         if self.yolo_stream:
             self.yolo_stream.resume()
+        # Trigger the side effect required for this stage.
         self.set_state(PipelineState.DETECTING)
         logger.info("Pipeline resumed")
     
@@ -334,7 +381,9 @@ class PipelineOrchestrator:
             detections: List of YOLO detections
         """
         # Check if we're in cooldown
+        # Choose the correct branch before the workflow continues.
         if self.is_in_cooldown():
+            # Return the prepared result to the caller.
             return
         
         # Check for violations
@@ -343,6 +392,7 @@ class PipelineOrchestrator:
             
             if violation_results['has_violation']:
                 # VIOLATION DETECTED!
+                # Trigger the side effect required for this stage.
                 self._handle_violation_detected(frame, detections, violation_results)
     
     def _handle_violation_detected(
@@ -360,6 +410,7 @@ class PipelineOrchestrator:
             violation_results: Violation detection results
         """
         # Update cooldown
+        # Prepare last violation time for the next step.
         self.last_violation_time = datetime.now()
         
         # Generate report ID in MYT timezone for consistency
@@ -369,6 +420,7 @@ class PipelineOrchestrator:
         report_id = now_myt.strftime('%Y%m%d_%H%M%S')
         
         # Create annotated frame (if image processor available)
+        # Prepare frame annotated for the next step.
         frame_annotated = frame.copy()
         if self.image_processor:
             frame_annotated = self.image_processor.annotate_frame(frame, detections)
@@ -387,6 +439,7 @@ class PipelineOrchestrator:
         )
         
         # Add to queue
+        # Protect this step so expected failures can fall back cleanly.
         try:
             self.violation_queue.put_nowait(event)
             self.stats['total_violations'] += 1
@@ -404,6 +457,7 @@ class PipelineOrchestrator:
             })
             
             # Pause YOLO stream (user requirement: pause on violation)
+            # Choose the correct branch before the workflow continues.
             if self.yolo_stream:
                 self.yolo_stream.pause()
             
@@ -422,11 +476,14 @@ class PipelineOrchestrator:
     
     def _processing_loop(self):
         """Main processing loop for handling violation events."""
+        # Trigger the side effect required for this stage.
         logger.info("Processing loop started")
         
         while not self.should_stop.is_set():
+            # Protect this step so expected failures can fall back cleanly.
             try:
                 # Wait for violation event (timeout to check should_stop)
+                # Prepare event for the next step.
                 event = self.violation_queue.get(timeout=1)
                 
                 # Process the violation
@@ -445,8 +502,10 @@ class PipelineOrchestrator:
                     'context': 'processing_loop'
                 })
         
+        # Trigger the side effect required for this stage.
         logger.info("Processing loop stopped")
     
+    # Section: run the process violation event workflow with clear inputs and outputs.
     def _process_violation_event(self, event: ViolationEvent):
         """
         Process a violation event through the entire pipeline.
@@ -462,6 +521,7 @@ class PipelineOrchestrator:
         Args:
             event: ViolationEvent to process
         """
+        # Trigger the side effect required for this stage.
         self.set_state(PipelineState.PROCESSING)
         
         logger.info(f"Processing violation: {event.report_id}")
@@ -471,8 +531,10 @@ class PipelineOrchestrator:
             'report_id': event.report_id
         })
         
+        # Protect this step so expected failures can fall back cleanly.
         try:
             # Step 1: Save images
+            # Prepare violation dir for the next step.
             violation_dir = self.config['VIOLATIONS_DIR'] / event.report_id
             violation_dir.mkdir(parents=True, exist_ok=True)
             
@@ -482,6 +544,7 @@ class PipelineOrchestrator:
             cv2.imwrite(str(original_path), event.frame_original)
             cv2.imwrite(str(annotated_path), event.frame_annotated)
             
+            # Trigger the side effect required for this stage.
             logger.debug(f"Images saved: {violation_dir}")
             
             # Save initial metadata
@@ -499,6 +562,7 @@ class PipelineOrchestrator:
             })
             
             # Step 2: Generate caption
+            # Prepare caption for the next step.
             caption = ""
             if self.caption_generator:
                 self.set_state(PipelineState.GENERATING_REPORT)
@@ -512,11 +576,13 @@ class PipelineOrchestrator:
                 })
             
             # Step 3: Generate NLP report
+            # Prepare nlp analysis for the next step.
             nlp_analysis = {}
             report_html_path = None
             report_pdf_path = None
             
             if self.report_generator:
+                # Prepare report data for the next step.
                 report_data = {
                     'report_id': event.report_id,
                     'timestamp': event.timestamp,
@@ -531,6 +597,7 @@ class PipelineOrchestrator:
                 }
                 
                 # Generate reports (HTML + PDF)
+                # Prepare report paths for the next step.
                 report_paths = self.report_generator.generate_report(report_data)
                 report_html_path = report_paths.get('html')
                 report_pdf_path = report_paths.get('pdf')
@@ -547,6 +614,7 @@ class PipelineOrchestrator:
                 })
             
             # Step 4: Save to database
+            # Choose the correct branch before the workflow continues.
             if self.db_manager:
                 violation_data = {
                     'report_id': event.report_id,
@@ -563,12 +631,14 @@ class PipelineOrchestrator:
                     'detection_data': event.detections
                 }
                 
+                # Trigger the side effect required for this stage.
                 self.db_manager.save_violation(violation_data)
                 logger.info(f"Saved to database: {event.report_id}")
             
             self.stats['total_reports'] += 1
             
             # Notify frontend: report ready!
+            # Trigger the side effect required for this stage.
             self._trigger_callbacks('on_report_ready', {
                 'report_id': event.report_id,
                 'html_path': str(report_html_path) if report_html_path else None,
@@ -580,6 +650,7 @@ class PipelineOrchestrator:
             logger.info(f"[OK] Violation processed successfully: {event.report_id}")
             
         except Exception as e:
+            # Trigger the side effect required for this stage.
             logger.error(f"[X] Error processing violation {event.report_id}: {e}", exc_info=True)
             self.stats['errors'] += 1
             self._trigger_callbacks('on_error', {
@@ -590,7 +661,9 @@ class PipelineOrchestrator:
         
         finally:
             # Step 5: Resume YOLO detection (user requirement: resume after processing)
+            # Choose the correct branch before the workflow continues.
             if self.yolo_stream and self.state != PipelineState.STOPPED:
+                # Trigger the side effect required for this stage.
                 self.yolo_stream.resume()
                 self.set_state(PipelineState.DETECTING)
             
@@ -604,8 +677,10 @@ class PipelineOrchestrator:
     
     def get_status(self) -> Dict[str, Any]:
         """Get current pipeline status."""
+        # Prepare uptime for the next step.
         uptime = None
         if self.stats['start_time']:
+            # Prepare uptime for the next step.
             uptime = (datetime.now() - self.stats['start_time']).total_seconds()
         
         return {
@@ -632,6 +707,7 @@ class PipelineOrchestrator:
 if __name__ == '__main__':
     import sys
     from pathlib import Path
+    # Trigger the side effect required for this stage.
     sys.path.insert(0, str(Path(__file__).parent.parent.parent.absolute()))
     from config import *
     
@@ -643,6 +719,7 @@ if __name__ == '__main__':
         'VIOLATIONS_DIR': VIOLATIONS_DIR
     }
     
+    # Prepare orchestrator for the next step.
     orchestrator = PipelineOrchestrator(config)
     
     print("=" * 70)
@@ -652,5 +729,6 @@ if __name__ == '__main__':
     print(f"Cooldown seconds: {orchestrator.cooldown_seconds}")
     print(f"Queue max size: {orchestrator.violation_queue.maxsize}")
     print(f"In cooldown: {orchestrator.is_in_cooldown()}")
+    # Trigger the side effect required for this stage.
     print("\n[OK] Pipeline Orchestrator initialized successfully")
     print("=" * 70)

@@ -1,3 +1,4 @@
+# Readability: Utility script: keep operational maintenance steps visible and repeatable.
 
 import os
 import sys
@@ -5,6 +6,7 @@ import logging
 from dotenv import load_dotenv
 
 # Load env vars first
+# Trigger the side effect required for this stage.
 load_dotenv()
 
 # Setup logging
@@ -19,12 +21,15 @@ from pipeline.backend.core.supabase_db import SupabaseDatabaseManager
 from pipeline.backend.core.supabase_db import SupabaseDatabaseManager
 from pipeline.config import SUPABASE_CONFIG
 
+# Section: run the cancel pending reports workflow with clear inputs and outputs.
 def cancel_pending_reports():
     """
     Cancel all reports that are currently pending, generating, or stuck.
     """
+    # Prepare db url for the next step.
     db_url = SUPABASE_CONFIG.get('db_url')
     if not db_url:
+        # Trigger the side effect required for this stage.
         logger.error("SUPABASE_DB_URL not found in environment or config")
         return
 
@@ -43,9 +48,11 @@ def cancel_pending_reports():
             pending_reports = cur.fetchall()
             
             if not pending_reports:
+                # Trigger the side effect required for this stage.
                 logger.info("No pending reports found to cancel.")
                 return
 
+            # Trigger the side effect required for this stage.
             logger.info(f"Found {len(pending_reports)} pending/stuck reports. Cancelling...")
             
             count = 0
@@ -54,6 +61,7 @@ def cancel_pending_reports():
                 old_status = row['status']
                 
                 # Update to failed
+                # Prepare success for the next step.
                 success = db.update_detection_status(
                     report_id, 
                     'failed', 
@@ -61,18 +69,23 @@ def cancel_pending_reports():
                 )
                 
                 if success:
+                    # Trigger the side effect required for this stage.
                     logger.info(f"Cancelled {report_id} (was {old_status})")
                     count += 1
                 else:
                     logger.error(f"Failed to cancel {report_id}")
             
+            # Trigger the side effect required for this stage.
             logger.info(f"Successfully cancelled {count} reports.")
             
     except Exception as e:
+        # Trigger the side effect required for this stage.
         logger.error(f"An error occurred: {e}")
     finally:
         if 'db' in locals():
             db.close()
 
+# Choose the correct branch before the workflow continues.
 if __name__ == "__main__":
+    # Trigger the side effect required for this stage.
     cancel_pending_reports()

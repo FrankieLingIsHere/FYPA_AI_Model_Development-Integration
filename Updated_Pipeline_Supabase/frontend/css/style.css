@@ -2769,7 +2769,7 @@ body.is-phone-device .handbook-content {
 }
 
 /* =====================================================================
-/* Section: keep these visual rules grouped for easier scanning. */
+   Section: keep these visual rules grouped for easier scanning.
    MOBILE-FIRST RESPONSIVE OVERHAUL (portrait-friendly)
    - Removes the forced-landscape orientation lock
    - Hides the fixed sidebar on phones (slides in as drawer instead)
@@ -3345,7 +3345,7 @@ body.is-phone-device .footer {
 }
 
 /* =====================================================================
-/* Section: keep these visual rules grouped for easier scanning. */
+   Section: keep these visual rules grouped for easier scanning.
    CONSTRUCTION OPS MAKEOVER v15
    ===================================================================== */
 
@@ -4109,7 +4109,7 @@ body.mobile-portrait-locked .main-content {
 .ops-hero, .home-grid, .page-command-bar { min-width: 0; width: 100%; box-sizing: border-box; }
 
 /* =====================================================================
-/* Section: keep these visual rules grouped for easier scanning. */
+   Section: keep these visual rules grouped for easier scanning.
    CASM FIELD COMMAND CENTER â€” v20 FULL MAKEOVER
    Dark-charcoal sidebar Â· Orange accents Â· Premium card layout
    Construction-grade design language. Overrides all previous rules.
@@ -9801,7 +9801,7 @@ body.assistant-open #notification-container {
 }
 
 /* =====================================================================
-/* Section: keep these visual rules grouped for easier scanning. */
+   Section: keep these visual rules grouped for easier scanning.
    Assistant comfort pass: larger readable chat surface + response feedback
    ===================================================================== */
 body.assistant-open .assistant-dock {
